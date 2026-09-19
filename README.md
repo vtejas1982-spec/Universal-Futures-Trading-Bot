@@ -27,6 +27,12 @@ The current V8 build combines configurable directional strategies with advanced 
 - Telegram alerts
 - Dashboard and CSV trade logging
 
+## 🖥️ V8 GUI Preview
+
+The screenshots below show the actual V8 desktop interface, including connection, market, strategy/indicator, Grid, risk/SL-TP, and alerts/dashboard configuration.
+
+![Universal Futures Trading Bot V8 GUI](docs/screenshots/V8_GUI_Screenshots_Overview.jpg)
+
 ## 📖 User Manual
 
 **[Read the Universal Futures Bot V8 User Manual (PDF)](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
@@ -244,7 +250,9 @@ Universal-Futures-Trading-Bot/
 ├── LICENSE
 ├── SECURITY.md
 └── docs/
-    └── UniversalFuturesBot_V8_User_Manual.pdf
+    ├── UniversalFuturesBot_V8_User_Manual.pdf
+    └── screenshots/
+        └── V8_GUI_Screenshots_Overview.jpg
 ```
 
 ## 📜 License
