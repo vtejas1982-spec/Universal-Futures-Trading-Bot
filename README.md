@@ -216,6 +216,8 @@ Useful areas for future testing include:
 
 Contributions, bug reports, documentation improvements and testing feedback are welcome.
 
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the contributor workflow and **[Launch Kit](docs/LAUNCH_KIT.md)** for ready-to-use project descriptions and technical-post ideas.
+
 Before opening an issue:
 
 1. Confirm the problem on the latest `main` version.
@@ -240,6 +242,18 @@ Do not publish:
 
 See [SECURITY.md](SECURITY.md) for the project's security guidance.
 
+## 🌍 Help the project grow
+
+The most useful support is real technical feedback, demo/testnet testing, reproducible bug reports, documentation improvements and pull requests. If you use the project, consider sharing what you tested and what you learned rather than only leaving a star.
+
+Current contributor-friendly areas include:
+
+- Backtesting engine
+- Exchange integration tests
+- Strategy-module modularization
+
+See the open **Issues** tab for current work.
+
 ## 📁 Repository structure
 
 ```text
@@ -249,8 +263,10 @@ Universal-Futures-Trading-Bot/
 ├── requirements.txt
 ├── LICENSE
 ├── SECURITY.md
+├── CONTRIBUTING.md
 └── docs/
     ├── UniversalFuturesBot_V8_User_Manual.pdf
+    ├── LAUNCH_KIT.md
     └── screenshots/
         └── V8_GUI_Screenshots_Overview.jpg
 ```
