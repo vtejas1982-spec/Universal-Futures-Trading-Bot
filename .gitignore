@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Trading bot credentials/config — NEVER commit secrets
+config_universal_fixed.json
+config.json
+*.secret
+*.key
+*.pem
+
+# Logs and local trading data
+*.log
+*.csv
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
