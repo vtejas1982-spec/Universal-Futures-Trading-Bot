@@ -25,6 +25,12 @@ This build includes the audited Grid duplicate-order synchronization fix.
 - Grid order synchronization and individual order-status verification
 - Telegram alerts, dashboard and CSV trade logging
 
+## User Manual
+
+📖 **[Universal Futures Bot V8 User Manual (PDF)](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
+
+The manual covers the V8 architecture, connection and API setup, market settings, all 17 directional indicators and parameters, signal modes, Grid modes, NEUTRAL_GRID automatic direction, Grid TP/SL, exposure and drawdown controls, normal strategy risk settings, alerts, dashboard, logging, testing and troubleshooting.
+
 ## Grid duplicate-order fix
 
 The V8 Grid engine verifies tracked order IDs individually instead of trusting an incomplete open-order snapshot. Bybit open-order retrieval uses an explicit page size, and Grid cancellation/protection checks verify individual order status. This is intended to prevent repeated recreation of Grid levels when an exchange response does not contain every open order.
