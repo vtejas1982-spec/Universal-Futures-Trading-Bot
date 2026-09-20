@@ -7388,7 +7388,7 @@ class UniversalFuturesBotGUI:
         sl_pct = float(self.e_grid_sl.get())
         max_exp = float(self.e_grid_max_exposure.get())
         max_dd_pct = float(self.e_grid_max_dd.get())
-        grid_score_min = int(self.e_grid_score_min.get())
+        grid_score_min = float(self.e_grid_score_min.get())
         rec_pct = float(self.e_grid_recenter.get())
         cooldown = float(self.e_grid_cooldown.get())
         filt = self.v_grid_trend_filter.get().strip().upper()
@@ -7463,7 +7463,18 @@ class UniversalFuturesBotGUI:
                     "Grid Trend Filter = SCORE requires at least one enabled "
                     "Strategy indicator in Section 3."
                 )
-            if grid_score_min > enabled_strategy_count:
+            if str(self.v_signal_mode.get()).strip().upper() == "ADAPTIVE_SCORE":
+                enabled_names = [
+                    "ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE",
+                    "LIQ_SWING","TRENDLINE","MTF","DIVERGENCE","VOL_SR","VOL","ADX","ATR"
+                ]
+                enabled_flags = [
+                    self.v_use_st.get(),self.v_use_ema.get(),self.v_use_ema_cross.get(),self.v_use_macd.get(),self.v_use_rsi.get(),self.v_use_bb.get(),self.v_use_stoch.get(),self.v_use_vwap.get(),self.v_use_vwap_delta.get(),self.v_use_vidya.get(),self.v_use_nwe.get(),self.v_use_liq_swings.get(),self.v_use_trendline.get(),self.v_use_mtf.get(),self.v_use_divergence.get(),self.v_use_vol_sr.get(),self.v_use_vol.get(),self.v_use_adx.get(),self.v_use_atr.get()
+                ]
+                adaptive_max = sum(ADAPTIVE_MODULE_WEIGHTS.get(n,1.0) for n,e in zip(enabled_names,enabled_flags) if bool(e) and n not in ("VOL","ATR"))
+                if grid_score_min > adaptive_max:
+                    raise ValueError(f"Grid Score Min cannot be greater than adaptive weighted module capacity ({adaptive_max:.2f}).")
+            elif grid_score_min > enabled_strategy_count:
                 raise ValueError(
                     f"Grid Score Min cannot be greater than the number of enabled "
                     f"Section 3 Strategy indicators ({enabled_strategy_count})."
@@ -7496,7 +7507,11 @@ class UniversalFuturesBotGUI:
                         "NEUTRAL_GRID requires at least one enabled Section 3 Strategy indicator "
                         "when Trend Filter is OFF/SCORE."
                     )
-                if grid_score_min > enabled_strategy_count:
+                if str(self.v_signal_mode.get()).strip().upper() == "ADAPTIVE_SCORE":
+                    adaptive_min = float(self.e_adaptive_min_weight.get())
+                    if grid_score_min < adaptive_min:
+                        grid_score_min = adaptive_min
+                elif grid_score_min > enabled_strategy_count:
                     raise ValueError(
                         f"Grid Score Min cannot be greater than the number of enabled "
                         f"Section 3 Strategy indicators ({enabled_strategy_count}) for NEUTRAL_GRID."
@@ -7508,6 +7523,8 @@ class UniversalFuturesBotGUI:
             "tp_pct": tp_pct / 100.0, "sl_pct": sl_pct / 100.0,
             "max_exposure": max_exp, "max_dd": max_dd_pct / 100.0,
             "score_min": grid_score_min,
+            "adaptive_score": str(self.v_signal_mode.get()).strip().upper() == "ADAPTIVE_SCORE",
+            "adaptive_min_weight": float(self.e_adaptive_min_weight.get()),
             "trend_filter": filt, "recenter": bool(self.v_grid_recenter.get()),
             "recenter_distance": rec_pct / 100.0, "cooldown": cooldown * 60.0,
         }
@@ -7527,7 +7544,9 @@ class UniversalFuturesBotGUI:
             return True, True
         if cfg["trend_filter"] == "SUPERTREND":
             return bool(st_bull), bool(st_bear)
-        score_min = int(cfg["score_min"])
+        score_min = float(cfg["score_min"])
+        if cfg.get("adaptive_score"):
+            score_min = max(score_min, float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
         return (
             buy_score >= score_min and buy_score > sell_score,
             sell_score >= score_min and sell_score > buy_score,
@@ -7874,7 +7893,9 @@ class UniversalFuturesBotGUI:
                 return "SHORT"
             return None
 
-        score_min = int(cfg["score_min"])
+        score_min = float(cfg["score_min"])
+        if cfg.get("adaptive_score"):
+            score_min = max(score_min, float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
         if buy_score >= score_min and buy_score > sell_score:
             return "LONG"
         if sell_score >= score_min and sell_score > buy_score:
@@ -7969,8 +7990,7 @@ class UniversalFuturesBotGUI:
         self.grid_state["sl_order_id"] = None
         self.grid_state["last_position_qty"] = 0.0
         self.grid_state["last_position_entry"] = 0.0
-        self.grid_state["center"] = self._current_market_price(symbol)
-        self.grid_state["auto_direction"] = new_direction
+        self.grid_state["center"] = self._current_market_price(symbol)        self.grid_state["auto_direction"] = new_direction
 
         self.log(
             f"NEUTRAL GRID NOW FOLLOWING {new_direction} | "
@@ -7990,7 +8010,8 @@ class UniversalFuturesBotGUI:
             return True
 
         self.grid_state["peak_equity"] = max(
-            self.grid_state.get("peak_equity", equity), equity        )
+            self.grid_state.get("peak_equity", equity), equity
+        )
         start = max(
             self.grid_state.get("session_start_balance", balance), 1e-12
         )
@@ -8968,8 +8989,7 @@ class UniversalFuturesBotGUI:
                     text_value = (
                         f"{hours} hr" if hours == 1
                         else f"{hours} hrs"
-                    )
-                else:
+                    )                else:
                     hours = total_minutes / 60.0
                     text_value = f"{total_minutes} min ({hours:.2f} hrs)"
 
@@ -8989,7 +9009,8 @@ class UniversalFuturesBotGUI:
         """
         if self.v_hold_until_all_reverse.get():
             return
-        if not self.v_tp1_be.get():            return
+        if not self.v_tp1_be.get():
+            return
         if self.tp1_be_done:
             return
         if not position:
@@ -9967,8 +9988,7 @@ class UniversalFuturesBotGUI:
                             df,
                             length=trendline_length,
                             min_pivot_distance=trendline_min_distance,
-                            breakout_buffer_pct=trendline_buffer,
-                            retest_candles=trendline_retest_candles,
+                            breakout_buffer_pct=trendline_buffer,                            retest_candles=trendline_retest_candles,
                         )
 
                     df["vol_ma"] = (
@@ -9988,7 +10008,8 @@ class UniversalFuturesBotGUI:
                         df["div_bear_signal"] = False
                         df["divergence_state"] = 0
 
-                    sr_state = {"bull":False,"bear":False,"fresh_bull":False,"fresh_bear":False,"states":[]}                    if use_vol_sr:
+                    sr_state = {"bull":False,"bear":False,"fresh_bull":False,"fresh_bear":False,"states":[]}
+                    if use_vol_sr:
                         sr_frames = self._refresh_volume_sr_cache(
                             df, sr_tfs
                         )
@@ -10607,13 +10628,23 @@ class UniversalFuturesBotGUI:
                     # Min is independent from the normal Strategy Signal Mode.
                     grid_directional_modules = list(directional_modules)
 
-                    grid_buy_score = sum(
-                        1 for _, bull, _ in grid_directional_modules if bull
-                    )
-                    grid_sell_score = sum(
-                        1 for _, _, bear in grid_directional_modules if bear
-                    )
-                    grid_score_count = len(grid_directional_modules)
+                    if signal_mode == "ADAPTIVE_SCORE":
+                        grid_buy_score = sum(
+                            ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0)
+                            for name, bull, bear in grid_directional_modules if bull and not bear
+                        )
+                        grid_sell_score = sum(
+                            ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0)
+                            for name, bull, bear in grid_directional_modules if bear and not bull
+                        )
+                        grid_score_count = sum(
+                            ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0)
+                            for name, _, _ in grid_directional_modules
+                        )
+                    else:
+                        grid_buy_score = sum(1 for _, bull, _ in grid_directional_modules if bull)
+                        grid_sell_score = sum(1 for _, _, bear in grid_directional_modules if bear)
+                        grid_score_count = len(grid_directional_modules)
 
                     # Centralized, pure signal decision.  Keeping the voting
                     # rules in one helper makes V8.1 regression-testable without
@@ -10956,8 +10987,7 @@ class UniversalFuturesBotGUI:
                         and desired_side != pos_type
                         and reversal_allowed
                     ):
-                        # Cancel old protection BEFORE changing side.
-                        if pos_type != "NONE":
+                        # Cancel old protection BEFORE changing side.                        if pos_type != "NONE":
                             self.log(
                                 "Reversal detected. "
                                 "Cancelling old protection..."
@@ -10987,7 +11017,8 @@ class UniversalFuturesBotGUI:
                                     "REVERSAL ABORTED: previous position is still open "
                                     "after close request; no opposite entry will be submitted."
                                 )
-                                cycle_elapsed = time.time() - cycle_start                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
                                 continue
                             try:
                                 reversal_balance = self.fetch_balance_total()
