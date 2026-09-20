@@ -24,6 +24,9 @@
 - Strict open-order page guard: PASS.
 - Runtime checkpoint serialization: PASS.
 
+- Added V8.3.3 strategy-parity backtester updates: explicit Adaptive per-profile parameters, synchronized causal Volume S/R logic, and pandas nullable-Boolean aggregation compatibility.
+- Added backtester parity regression coverage: 8/8 tests passed, including a deterministic synthetic full-module run.
+
 ---
 
 ## V8.3.1 — Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
