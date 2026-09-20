@@ -8,6 +8,7 @@
 - Added stale-market-data detection and a three-consecutive-cycle-error fail-closed halt.
 - Added emergency-stop scope with safe `BOT_SYMBOL` default and explicit `ALL_ACCOUNT` option.
 - Added managed-order cleanup for normal/Grid shutdown and strategy reversal paths.
+- Added Adaptive Grid parity: Grid SCORE/NEUTRAL_GRID now uses the same weighted evidence model when ADAPTIVE_SCORE is active.
 - Added V8.3 hardened strategy-parity backtester and 5/5 regression tests.
 
 ### Fixed / Hardened
@@ -21,6 +22,7 @@
 ### Modified
 - New profiles default to `ADAPTIVE_SCORE`; existing saved profiles retain their saved strategy mode.
 - Backtester defaults to the same Adaptive strategy family and exposes Adaptive Edge / Minimum Weight.
+- Grid score validation now understands weighted Adaptive capacity.
 - Release documentation now records the exact strategy/risk hardening contract.
 
 ### Validation
