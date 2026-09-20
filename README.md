@@ -488,6 +488,8 @@ Universal-Futures-Trading-Bot/
 │   └── ISSUE_TEMPLATE/
 │       ├── bug_report.md
 │       └── feature_request.md
+├── tests/
+│   └── test_v81_static_audit.py
 └── docs/
     ├── UniversalFuturesBot_V8_User_Manual.pdf
     ├── V8_RECOVERY_MULTI_BOT_AUDIT.md
