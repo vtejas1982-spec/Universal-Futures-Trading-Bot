@@ -1,13 +1,13 @@
 """
-V8.3.0 UNIVERSAL FUTURES BACKTESTER — HARDENED ADAPTIVE STRATEGY-PARITY EDITION
+V8.3.1 UNIVERSAL FUTURES BACKTESTER — HARDENED ADAPTIVE STRATEGY-PARITY EDITION
 ===============================================================
 
-Historical simulator for Universal Futures Trading Bot V8.3.0.
+Historical simulator for Universal Futures Trading Bot V8.3.1.
 
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
     modules, signal modes, normal risk/SL/TP logic, Hold-All-Reverse logic,
-    post-SL opposite-signal lock, and Grid modes used by the live V8.3.0 bot.
+    post-SL opposite-signal lock, and Grid modes used by the live V8.3.1 bot.
 
 Included:
     * 19 V8 directional modules
@@ -60,8 +60,8 @@ try:
 except Exception:
     HAS_MPL = False
 
-APP_VERSION = "V8.3.0-BT-PARITY"
-APP_TITLE = "Universal Futures Bot V8.3.0 — Strategy-Parity Backtester"
+APP_VERSION = "V8.3.1-BT-PARITY"
+APP_TITLE = "Universal Futures Bot V8.3.1 — Strategy-Parity Backtester"
 APP_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = APP_DIR / "backtest_results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -90,7 +90,7 @@ DEFAULTS.update({
 
 
 # ============================================================
-# V8.3.0 ADVANCED STRATEGY MODULES
+# V8.3.1 ADVANCED STRATEGY MODULES
 # ------------------------------------------------------------
 # Divergence source: "Divergence for Many Indicators v4"
 # © LonesomeTheBlue — Mozilla Public License 2.0.
@@ -1452,7 +1452,8 @@ class StrategyEngine:
     @staticmethod
     def decide_signal(directional_modules, signal_mode, min_score,
                       atr_pass=True, vol_pass=True, adx_pass=True,
-                      mtf_pass_bull=True, mtf_pass_bear=True):
+                      mtf_pass_bull=True, mtf_pass_bear=True,
+                      adaptive_edge=None, adaptive_min_weight=None):
         signal_mode = str(signal_mode).strip().upper()
         min_score = int(min_score)
         if min_score < 1:
@@ -1489,8 +1490,13 @@ class StrategyEngine:
             wb=sum(float(ADAPTIVE_MODULE_WEIGHTS.get(n,1.0)) for n,b,be in modules if bool(b) and not bool(be))
             ws=sum(float(ADAPTIVE_MODULE_WEIGHTS.get(n,1.0)) for n,b,be in modules if bool(be) and not bool(b))
             total=wb+ws; edge=abs(wb-ws)/total if total else 0.0
-            min_weight=max(float(globals().get("cfg_adaptive_min_weight",ADAPTIVE_DEFAULT_MIN_WEIGHT)),float(min_score))
-            edge_threshold=float(globals().get("cfg_adaptive_edge",ADAPTIVE_DEFAULT_EDGE))
+            min_weight=max(
+                float(ADAPTIVE_DEFAULT_MIN_WEIGHT if adaptive_min_weight is None else adaptive_min_weight),
+                float(min_score),
+            )
+            edge_threshold=float(
+                ADAPTIVE_DEFAULT_EDGE if adaptive_edge is None else adaptive_edge
+            )
             buy=wb>=min_weight and wb>ws and edge>=edge_threshold and atr_pass and vol_pass and adx_pass and mtf_pass_bull
             sell=ws>=min_weight and ws>wb and edge>=edge_threshold and atr_pass and vol_pass and adx_pass and mtf_pass_bear
             return buy,sell,wb,ws
@@ -2499,7 +2505,7 @@ class BacktesterGUI:
         ttk.Button(f,text="Save Backtest Config JSON",command=self.export_config).grid(row=4,column=2,columnspan=2,sticky="w",padx=4,pady=4)
     def _build_strategy(self):
         p=self.tabs["Strategy"]; top=ttk.Frame(p); top.pack(fill="x",padx=8,pady=6)
-        lf=ttk.LabelFrame(top,text="19 Directional Modules — V8.3.0 participation"); lf.pack(fill="x")
+        lf=ttk.LabelFrame(top,text="19 Directional Modules — V8.3.1 participation"); lf.pack(fill="x")
         for i,m in enumerate(MODULES):
             self.check(lf,"use_"+m,m,i//6,(i%6)*2)
         sf=ttk.LabelFrame(p,text="Signal Engine"); sf.pack(fill="x",padx=8,pady=6)
