@@ -573,10 +573,10 @@ def _volume_sr_base_series(df, cfg):
     fbcols=[c for c in z.columns if c.startswith("sr_fresh_bull_")]
     fscols=[c for c in z.columns if c.startswith("sr_fresh_bear_")]
     mode=str(cfg.get("sr_vote_mode","MAJORITY")).upper()
-    bv=z[bcols].fillna(False).sum(axis=1) if bcols else pd.Series(0,index=z.index)
-    sv=z[scols].fillna(False).sum(axis=1) if scols else pd.Series(0,index=z.index)
-    fb=z[fbcols].fillna(False).sum(axis=1) if fbcols else pd.Series(0,index=z.index)
-    fs=z[fscols].fillna(False).sum(axis=1) if fscols else pd.Series(0,index=z.index)
+    bv=z[bcols].astype("boolean").fillna(False).sum(axis=1) if bcols else pd.Series(0,index=z.index)
+    sv=z[scols].astype("boolean").fillna(False).sum(axis=1) if scols else pd.Series(0,index=z.index)
+    fb=z[fbcols].astype("boolean").fillna(False).sum(axis=1) if fbcols else pd.Series(0,index=z.index)
+    fs=z[fscols].astype("boolean").fillna(False).sum(axis=1) if fscols else pd.Series(0,index=z.index)
     n=max(len(bcols),len(scols),1)
     if mode=="ALL":
         bull=(bv==n)&(sv==0); bear=(sv==n)&(bv==0)
