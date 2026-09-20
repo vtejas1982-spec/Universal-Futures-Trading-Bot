@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import requests
 import sys
+import shutil
 from pathlib import Path
 
 
@@ -43,8 +44,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.2"
-APP_TITLE = "Universal Futures Trading Bot V8.2 - Multi-Exchange (No KuCoin)"
+APP_VERSION = "V8.2.1"
+APP_TITLE = "Universal Futures Trading Bot V8.2.1 - Multi-Exchange (No KuCoin)"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,6 +62,7 @@ RUNTIME_SCHEMA_VERSION = 3
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "STRICT_ALL_FILTERS")
 SUPPORTED_EXCHANGES = ("bybit", "binance", "gate", "bitget", "weex")
+PROFILE_OPERATION_SCHEMA_VERSION = 1
 
 
 class StrategyEngine:
@@ -2104,6 +2106,63 @@ class UniversalFuturesBotGUI:
             parent=self.root,
         )
 
+    def _delete_selected_or_current_profile(self):
+        """Safely delete saved profile config/recovery state; preserve trade history."""
+        if self.is_running:
+            messagebox.showwarning("Bot running", "Stop the bot before deleting a profile.", parent=self.root)
+            return
+        profile = self._sanitize_profile_id(self._selected_profile_id())
+        if self._profile_lock_is_active(profile):
+            messagebox.showerror("Delete Profile", f"Profile {profile} is active in another bot process. Stop it first.", parent=self.root)
+            return
+        profile_dir = PROFILE_DIR / profile
+        config_path = self._profile_config_path_only(profile)
+        runtime_path = profile_dir / "runtime_state.json"
+        runtime = self._read_json_file(runtime_path) or {}
+        status = str(runtime.get("status") or "").upper()
+        position_state = runtime.get("position_state") or {}
+        grid_state = runtime.get("grid_state") or {}
+        has_saved_position = bool(position_state.get("last_protected_position")) or bool(position_state.get("active_trade"))
+        has_grid_state = bool(grid_state.get("active")) or bool(grid_state.get("filled_levels")) or bool(grid_state.get("entry_orders")) or bool(grid_state.get("tp_order_id")) or bool(grid_state.get("sl_order_id"))
+        if status in {"RUNNING","CRASHED","STOPPING","PAUSED_WITH_POSITION"} or has_saved_position or has_grid_state:
+            messagebox.showerror("Delete Profile BLOCKED",
+                f"Profile {profile} has recovery/trading state that may represent an open or unverified exchange position/order.\n\n"
+                f"Runtime status: {status or 'UNKNOWN'}\n"
+                f"Saved position: {'YES' if has_saved_position else 'NO'}\n"
+                f"Grid state: {'YES' if has_grid_state else 'NO'}\n\n"
+                "Confirm the bot is flat and safely stopped before deleting.",
+                parent=self.root)
+            return
+        legacy_path = Path(CONFIG_FILE) if profile == "BOT-01" else None
+        if not (config_path.exists() or runtime_path.exists() or profile_dir.exists() or (legacy_path and legacy_path.exists())):
+            self._refresh_profile_list()
+            messagebox.showinfo("Delete Profile", f"No saved files were found for {profile}.", parent=self.root)
+            return
+        if not messagebox.askyesno("Delete Profile?",
+            f"Delete saved profile {profile}?\n\nThis removes saved configuration and recovery state. "
+            "Trade/session history in the master database will NOT be deleted.\n\nThis action cannot be undone.",
+            parent=self.root):
+            return
+        try:
+            if self._profile_lock_is_active(profile):
+                raise RuntimeError(f"Profile {profile} became active before deletion.")
+            removed = []
+            if profile_dir.exists():
+                shutil.rmtree(profile_dir)
+                removed.append(str(profile_dir))
+            if legacy_path and legacy_path.exists():
+                legacy_path.unlink()
+                removed.append(str(legacy_path))
+            if self._sanitize_profile_id(self.bot_profile_id) == profile:
+                self.bot_profile_id = "BOT-01"
+                self.v_bot_id.set("BOT-01")
+            self._refresh_profile_list(select_profile=self.bot_profile_id)
+            self.log(f"PROFILE DELETED: {profile} | Removed {len(removed)} profile location(s); master trade history preserved.")
+            messagebox.showinfo("Profile Deleted", f"Profile {profile} was deleted.\n\nMaster trade/session history was preserved.", parent=self.root)
+        except Exception as e:
+            self.log(f"PROFILE DELETE ERROR: {e}")
+            messagebox.showerror("Delete Profile", f"Could not delete profile {profile}:\n\n{e}", parent=self.root)
+
     # -------------------- MASTER TRADE DATABASE ---------------
 
     def _init_master_db(self):
@@ -2653,6 +2712,11 @@ class UniversalFuturesBotGUI:
             text="Save Profile",
             command=self.save_settings,
         ).grid(row=4, column=3, padx=4, pady=2, sticky="w")
+        ttk.Button(
+            f_api,
+            text="Delete Profile",
+            command=self._delete_selected_or_current_profile,
+        ).grid(row=4, column=4, padx=4, pady=2, sticky="w")
 
         tk.Label(
             f_api,
@@ -2697,6 +2761,11 @@ class UniversalFuturesBotGUI:
             profile_buttons,
             text="Copy Selected Profile",
             command=self._copy_selected_profile,
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            profile_buttons,
+            text="Delete Selected",
+            command=self._delete_selected_or_current_profile,
         ).pack(side="left", padx=2)
 
         tk.Label(
