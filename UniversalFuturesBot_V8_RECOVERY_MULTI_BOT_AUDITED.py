@@ -43,7 +43,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_TITLE = "Universal Futures Trading Bot V8 - Multi-Exchange (No KuCoin)"
+APP_VERSION = "V8.1"
+APP_TITLE = "Universal Futures Trading Bot V8.1 - Multi-Exchange (No KuCoin)"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -1516,14 +1517,26 @@ class UniversalFuturesBotGUI:
         # Normal strategy engine.
         if saved_active_trade or saved_position:
             if current_position:
-                if saved_position and not self._position_matches_saved(current_position, saved_position):
+                saved_identity = saved_position
+                if not saved_identity and isinstance(saved_active_trade, dict):
+                    saved_identity = saved_active_trade
+                if not saved_identity:
+                    raise RuntimeError(
+                        "RESUME BLOCKED: exchange position exists but the checkpoint "
+                        "does not contain a verifiable saved position identity."
+                    )
+                if not self._position_matches_saved(current_position, saved_identity):
                     raise RuntimeError(
                         "RESUME BLOCKED: exchange position does not match the saved bot position "
                         "(side/quantity/entry mismatch)."
                     )
-                if self.last_protected_position:
-                    self.last_protected_position["qty"] = current_position["qty"]
-                    self.last_protected_position["entry"] = current_position["entry"]
+                if not self.last_protected_position:
+                    raise RuntimeError(
+                        "RESUME BLOCKED: live position has no saved protection state. "
+                        "The bot will not resume an open position without a protection checkpoint."
+                    )
+                self.last_protected_position["qty"] = current_position["qty"]
+                self.last_protected_position["entry"] = current_position["entry"]
                 expected_protection_ids = {
                     str(self.last_protected_position.get(key))
                     for key in ("sl_id", "tp1_id", "tp2_id")
@@ -1537,6 +1550,14 @@ class UniversalFuturesBotGUI:
                         + ",".join(sorted(list(unknown_protection_orders))[:20])
                         + (" ..." if len(unknown_protection_orders) > 20 else "")
                     )
+                self.last_protection_reconcile = 0.0
+                try:
+                    self._reconcile_protection_orders(current_position)
+                except Exception as protection_error:
+                    raise RuntimeError(
+                        f"RESUME BLOCKED: saved position protection could not be "
+                        f"verified/rebuilt safely: {protection_error}"
+                    ) from protection_error
             else:
                 # The trade ended while the process was down. Treat it as an
                 # external/protection close and conservatively block same-side
@@ -3629,6 +3650,7 @@ class UniversalFuturesBotGUI:
         self.bot_profile_id = requested_profile
         self.v_bot_id.set(self.bot_profile_id)
         cfg = {
+            "config_schema_version": 3,
             "bot_id": self.bot_profile_id,
             "exchange": self.v_exchange.get(),
             "api_key": self.e_api_key.get().strip(),
@@ -3811,9 +3833,14 @@ class UniversalFuturesBotGUI:
                 except Exception:
                     pass
 
-            self.bot_profile_id = self._sanitize_profile_id(
-                cfg.get("bot_id", self.bot_profile_id)
-            )
+            selected_profile = self._sanitize_profile_id(self.bot_profile_id)
+            stored_profile = self._sanitize_profile_id(cfg.get("bot_id", selected_profile))
+            if stored_profile != selected_profile:
+                self.log(
+                    f"PROFILE ID MISMATCH: folder={selected_profile} "
+                    f"config.bot_id={stored_profile}; keeping folder identity."
+                )
+            self.bot_profile_id = selected_profile
             self.v_bot_id.set(self.bot_profile_id)
 
             self.v_exchange.set(
@@ -4759,6 +4786,7 @@ class UniversalFuturesBotGUI:
             [symbol]
         )
 
+        active_positions = []
         for pos in positions:
             contracts = pos.get("contracts")
 
@@ -4779,7 +4807,25 @@ class UniversalFuturesBotGUI:
             if side not in ("long", "short"):
                 continue
 
-            entry = (
+            active_positions.append((pos, contracts))
+
+        if len(active_positions) > 1:
+            sides = ",".join(
+                str(item[0].get("side") or "").upper()
+                for item in active_positions
+            )
+            raise RuntimeError(
+                f"MULTIPLE ACTIVE POSITIONS DETECTED for {symbol}: {sides}. "
+                "This bot requires one-way/single-position mode; refusing to guess."
+            )
+
+        if not active_positions:
+            return None
+
+        pos, contracts = active_positions[0]
+        side = str(pos.get("side") or "").lower()
+
+        entry = (
                 pos.get("entryPrice")
                 or pos.get("average")
                 or pos.get("avgPrice")
@@ -5495,7 +5541,31 @@ class UniversalFuturesBotGUI:
         trigger_price,
         label,
     ):
-        """Best-effort CCXT unified reduce-only trigger for V8 exchanges."""
+        """CCXT unified reduce-only trigger with capability fail-closed checks."""
+        try:
+            if hasattr(self.exchange, "featureValue"):
+                trigger_supported = self.exchange.featureValue(
+                    symbol, "createOrder", "triggerPrice"
+                )
+                reduce_only_supported = self.exchange.featureValue(
+                    symbol, "createOrder", "reduceOnly"
+                )
+                if trigger_supported is False:
+                    raise RuntimeError(
+                        f"{self.exchange_id.upper()} does not report triggerPrice support for {symbol}."
+                    )
+                if reduce_only_supported is False:
+                    raise RuntimeError(
+                        f"{self.exchange_id.upper()} does not report reduceOnly support for {symbol}."
+                    )
+        except RuntimeError:
+            raise
+        except Exception as capability_error:
+            self.log(
+                f"TRIGGER CAPABILITY CHECK NOTICE | {self.exchange_id.upper()} "
+                f"{symbol} | {capability_error}"
+            )
+
         params = {
             "triggerPrice": trigger_price,
             "reduceOnly": True,
@@ -5934,15 +6004,17 @@ class UniversalFuturesBotGUI:
             "EMERGENCY: Closing unprotected position."
         )
 
+        close_params = {"reduceOnly": True}
+        if self.exchange_id == "bybit":
+            close_params["positionIdx"] = 0
+
         self.exchange.create_order(
             symbol,
             "market",
             side,
             qty,
             None,
-            {
-                "reduceOnly": True,
-            },
+            close_params,
         )
 
     # -------------------- GRID TRADING ENGINE ----------------
@@ -6809,13 +6881,17 @@ class UniversalFuturesBotGUI:
             else "sell"
         )
 
+        order_params = {}
+        if self.exchange_id == "bybit":
+            order_params["positionIdx"] = 0
+
         order = self.exchange.create_order(
             symbol,
             "market",
             side,
             qty,
             None,
-            {},
+            order_params,
         )
 
         actual_order_price = (
@@ -7856,6 +7932,56 @@ class UniversalFuturesBotGUI:
 
         return agg[["time", "open", "high", "low", "close", "vol"]].values.tolist()
 
+    # -------------------- SIGNAL DECISION -------------------
+
+    def _decide_signal(
+        self,
+        directional_modules,
+        signal_mode,
+        min_score,
+        atr_pass=True,
+        vol_pass=True,
+        adx_pass=True,
+        mtf_pass_bull=True,
+        mtf_pass_bear=True,
+    ):
+        """Pure V8.1 signal-voting decision; no GUI/exchange state is accessed."""
+        signal_mode = str(signal_mode).strip().upper()
+        min_score = int(min_score)
+        modules = list(directional_modules or [])
+        buy_score = sum(1 for _, bull, _ in modules if bool(bull))
+        sell_score = sum(1 for _, _, bear in modules if bool(bear))
+        directional_count = len(modules)
+
+        if signal_mode == "SINGLE_SIGNAL":
+            single_signal = "NONE"
+            for _, bull, bear in modules:
+                if bool(bull):
+                    single_signal = "BUY"
+                    break
+                if bool(bear):
+                    single_signal = "SELL"
+                    break
+            return single_signal == "BUY", single_signal == "SELL", buy_score, sell_score
+
+        if signal_mode in ("SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS"):
+            buy_signal = directional_count > 0 and buy_score >= min_score and buy_score > sell_score
+            sell_signal = directional_count > 0 and sell_score >= min_score and sell_score > buy_score
+            return buy_signal, sell_signal, buy_score, sell_score
+
+        if signal_mode != "STRICT_ALL_FILTERS":
+            raise ValueError(f"Unknown signal mode: {signal_mode}")
+
+        strict_buy_votes = bool(modules) and all(
+            bool(bull) and not bool(bear) for _, bull, bear in modules
+        )
+        strict_sell_votes = bool(modules) and all(
+            bool(bear) and not bool(bull) for _, bull, bear in modules
+        )
+        buy_signal = strict_buy_votes and bool(atr_pass) and bool(vol_pass) and bool(adx_pass) and bool(mtf_pass_bull)
+        sell_signal = strict_sell_votes and bool(atr_pass) and bool(vol_pass) and bool(adx_pass) and bool(mtf_pass_bear)
+        return buy_signal, sell_signal, buy_score, sell_score
+
     # -------------------- MAIN LOOP --------------------------
 
     def _run_bot_logic(self):
@@ -8030,8 +8156,10 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Trendline Pivot Lookback must be greater than 0.")
             if trendline_min_distance <= 0:
                 raise ValueError("Trendline Minimum Pivot Distance must be greater than 0.")
-            if trendline_buffer < 0:
-                raise ValueError("Trendline Breakout Buffer cannot be negative.")
+            if trendline_buffer < 0 or trendline_buffer >= 100:
+                raise ValueError(
+                    "Trendline Breakout Buffer must be >= 0% and less than 100%."
+                )
             if trendline_retest_candles <= 0:
                 raise ValueError("Trendline Retest Candles must be greater than 0.")
             if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
@@ -9055,69 +9183,16 @@ class UniversalFuturesBotGUI:
                     )
                     grid_score_count = len(grid_directional_modules)
 
-                    # SINGLE_SIGNAL is a pure single-signal mode:
-                    # ONE enabled signal is enough. No second indicator,
-                    # Volume, ADX, ATR, MTF, or agreement check is required.
-                    # If any enabled module produces BUY, BUY is allowed; if
-                    # any enabled module produces SELL, SELL is allowed.
-                    # When both directions appear simultaneously, the first
-                    # directional vote in the enabled-module order wins,
-                    # making the result deterministic without requiring a
-                    # second confirmation.
-                    if signal_mode == "SINGLE_SIGNAL":
-                        single_signal = "NONE"
-                        for name, bull, bear in directional_modules:
-                            if bull:
-                                single_signal = "BUY"
-                                break
-                            if bear:
-                                single_signal = "SELL"
-                                break
-
-                        buy_signal = single_signal == "BUY"
-                        sell_signal = single_signal == "SELL"
-
-                    elif signal_mode in (
-                        "SCORE",
-                        "2_SIGNALS",
-                        "3_SIGNALS",
-                        "4_SIGNALS",
-                    ):
-                        # Every enabled module that passes its own condition
-                        # contributes one vote. Volume/ADX/ATR are no longer
-                        # added a second time as hard confirmations in these
-                        # voting modes.
-                        #
-                        # If fewer modules pass than the requested vote count,
-                        # no trade is made.
-                        buy_signal = (
-                            directional_count > 0
-                            and buy_score >= min_score
-                            and buy_score > sell_score
-                        )
-
-                        sell_signal = (
-                            directional_count > 0
-                            and sell_score >= min_score
-                            and sell_score > buy_score
-                        )
-
-                    else:
-                        # STRICT_ALL_FILTERS: every enabled directional module
-                        # must explicitly vote in the same direction, plus all
-                        # enabled confirmation filters must pass. This prevents
-                        # disabled modules (whose neutral values are True) from
-                        # creating a false BUY/SELL when no directional module is enabled.
-                        strict_buy_votes = bool(directional_modules) and all(
-                            bool(bull) and not bool(bear)
-                            for _, bull, bear in directional_modules
-                        )
-                        strict_sell_votes = bool(directional_modules) and all(
-                            bool(bear) and not bool(bull)
-                            for _, bull, bear in directional_modules
-                        )
-                        buy_signal = strict_buy_votes and atr_pass and vol_pass and adx_pass and mtf_pass_bull
-                        sell_signal = strict_sell_votes and atr_pass and vol_pass and adx_pass and mtf_pass_bear
+                    buy_signal, sell_signal, buy_score, sell_score = self._decide_signal(
+                        directional_modules,
+                        signal_mode,
+                        min_score,
+                        atr_pass=atr_pass,
+                        vol_pass=vol_pass,
+                        adx_pass=adx_pass,
+                        mtf_pass_bull=mtf_pass_bull,
+                        mtf_pass_bear=mtf_pass_bear,
+                    )
 
                     if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT"):
                         # Grid mode owns execution while selected, including its
