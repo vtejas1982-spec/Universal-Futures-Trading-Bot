@@ -127,3 +127,51 @@ The current build retains the 17-module completed-candle strategy engine and the
 ### Validation
 
 Python syntax compilation and static GUI/configuration/callback review passed. No full live exchange lifecycle was performed during this audit.
+
+
+## V8.1 engine and strategy safety update — 2026-09-20
+
+### Additional checks
+
+- Rechecked all 115 GUI v_* / e_* setting attributes for assignment/use coverage.
+- Rechecked saved configuration coverage and dynamic Grid setting loading.
+- Rechecked callbacks and self method references.
+- Rechecked signal-mode decision logic for SINGLE_SIGNAL, SCORE/2/3/4_SIGNALS and STRICT_ALL_FILTERS.
+- Rechecked normal entry, reversal, SL/TP and TP1 break-even paths.
+- Rechecked Grid execution ownership, order synchronization and protection paths.
+- Rechecked recovery identity, profile identity and position-mode assumptions.
+
+### V8.1 fixes
+
+1. Credential validation precedes profile-lock acquisition.
+2. Recovery requires a saved position identity that matches the live exchange position.
+3. Recovery blocks open positions without saved protection state.
+4. Normal-position protection is reconciled immediately after recovery verification.
+5. Multiple active positions for one symbol are rejected because this build is designed for one-way/single-position operation.
+6. Bybit normal entry/close paths explicitly use positionIdx=0.
+7. Trendline breakout buffer is bounded to less than 100%.
+8. Generic CCXT trigger paths fail closed when the exchange explicitly reports unsupported trigger/reduce-only features.
+9. Profile folder identity is authoritative over a stale config.json bot ID.
+10. Configuration schema version 3 is written to saved profiles.
+11. Signal voting was extracted into pure, regression-testable _decide_signal() logic.
+
+### V8.1 automated validation
+
+The repository now contains tests/test_v81_static_audit.py.
+
+The V8.1 test suite passed 10/10 checks for:
+
+- Python compilation
+- GUI setting assignment
+- callback/self-method resolution
+- configuration save/load coverage
+- credential-before-lock ordering
+- recovery identity/protection guards
+- one-way position guard
+- trendline bounds
+- configuration schema
+- signal-voting behavior
+
+### Remaining limitation
+
+This is still a static/regression audit. It does not prove that every Bybit/Binance/Gate.io/Bitget/WEEX order lifecycle works on a live or demo account. Demo/testnet lifecycle testing remains the next validation stage.
