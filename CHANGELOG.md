@@ -1,3 +1,33 @@
+## V8.2.4 — Strategy Decision + Execution Safety Audit — 2026-09-20
+
+### Added
+- Added `ANY_NON_CONFLICTING` signal mode: one or more enabled directional modules may trigger when all active votes point to one side; contradictory BUY/SELL votes are blocked.
+- Added `StrategyEngine.decision_reason()` and per-module state diagnostics.
+- Bumped configuration schema to version 5.
+
+### Fixed
+- `2_SIGNALS`, `3_SIGNALS` and `4_SIGNALS` now enforce 2/3/4 confirmations in the central StrategyEngine, preventing caller/default drift.
+- Unknown saved signal modes are rejected safely during load and fall back to `SINGLE_SIGNAL`.
+- Removed worker-thread calls to `stop_bot()` from max-drawdown and trade-limit shutdown paths because `stop_bot()` accesses Tkinter widgets.
+- Persisted config/runtime schema values use the central schema constants.
+
+### Modified
+- Execution logs now report directional states, effective required confirmations and a deterministic decision reason.
+- Existing Grid, recovery, profile deletion, SL/TP and exchange protection behavior remains preserved.
+- V8.2.3 symbol/checkpoint normalization remains included.
+
+### Validation
+- Python compilation: PASS.
+- GUI attribute/callback audit: PASS.
+- Save/load coverage audit: PASS.
+- V8.2.4 regression suite: 12/12 PASS locally.
+- Full live exchange order lifecycle: not claimed by this audit.
+
+### User-visible signal behavior
+- With `2_SIGNALS`, EMA_CROSS=BULL + VWAP_DELTA=BEAR produces no trade because the score is B1/S1 and two same-direction confirmations are required.
+- `ANY_NON_CONFLICTING` is available when the intended rule is that any enabled module may trigger, while contradictory directions must remain blocked.
+
+---
 ## V8.2.2 — Profile Manager Selection/Identity Fix — 2026-09-20
 
 ### Fixed
