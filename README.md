@@ -363,7 +363,7 @@ Keep credentials outside Git. See [SECURITY.md](SECURITY.md).
 ### 4. Run the current build
 
 ```powershell
-py UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py
+py UniversalFuturesBot_V8_2_MODULAR_ENGINE.py
 ```
 
 ### 5. Test recovery safely
