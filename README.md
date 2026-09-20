@@ -5,9 +5,9 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
 
-## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
+## 🚀 V8.3.3 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.3.1**
+**Current build — V8.3.3**
 
 `V8_3_HARDENED_ADAPTIVE_BOT.py` — hardened adaptive live engine
 
