@@ -1930,9 +1930,17 @@ def validate_config(cfg):
     if float(c["grid_max_exposure"])<=0 or float(c["grid_max_dd"])<=0 or float(c["grid_max_dd"])>=100: raise ValueError("Grid risk settings invalid")
     if c["grid_trend_filter"] not in ("OFF","SUPERTREND","SCORE"): raise ValueError("Invalid Grid Trend Filter")
     enabled=sum(bool(c[k]) for k in ("use_st","use_ema","use_ema_cross","use_macd","use_rsi","use_bb","use_stoch","use_vwap","use_vwap_delta","use_vidya","use_nwe","use_liq_swings","use_trendline","use_mtf","use_vol","use_adx","use_atr","use_divergence","use_vol_sr"))
-    if c["grid_trend_filter"]=="SCORE" and (enabled==0 or int(c["grid_score_min"])>enabled): raise ValueError("Grid Score Min exceeds enabled strategy modules")
+    if c["grid_trend_filter"]=="SCORE":
+        if enabled==0: raise ValueError("Grid Score Min exceeds enabled strategy modules")
+        if c["signal_mode"]=="ADAPTIVE_SCORE":
+            names=["ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE","LIQ_SWING","TRENDLINE","MTF","DIVERGENCE","VOL_SR","VOL","ADX","ATR"]
+            flags=[c[k] for k in ("use_st","use_ema","use_ema_cross","use_macd","use_rsi","use_bb","use_stoch","use_vwap","use_vwap_delta","use_vidya","use_nwe","use_liq_swings","use_trendline","use_mtf","use_divergence","use_vol_sr","use_vol","use_adx","use_atr")]
+            cap=sum(ADAPTIVE_MODULE_WEIGHTS.get(n,1.0) for n,e in zip(names,flags) if e and n not in ("VOL","ATR"))
+            if float(c["grid_score_min"])>cap: raise ValueError("Grid Score Min exceeds adaptive weighted capacity")
+        elif float(c["grid_score_min"])>enabled: raise ValueError("Grid Score Min exceeds enabled strategy modules")
     if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"]=="SUPERTREND" and not c["use_st"]: raise ValueError("NEUTRAL_GRID + SUPERTREND requires Supertrend")
-    if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"] in ("OFF","SCORE") and (enabled==0 or int(c["grid_score_min"])>enabled): raise ValueError("NEUTRAL_GRID requires valid strategy score")
+    if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"] in ("OFF","SCORE") and enabled==0: raise ValueError("NEUTRAL_GRID requires valid strategy score")
+    if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"] in ("OFF","SCORE") and c["signal_mode"]!="ADAPTIVE_SCORE" and float(c["grid_score_min"])>enabled: raise ValueError("NEUTRAL_GRID requires valid strategy score")
     if int(c["div_pivot"])<1 or int(c["div_pivot"])>50: raise ValueError("Divergence Pivot must be 1-50")
     if c["div_source"] not in ("Close","High/Low"): raise ValueError("Invalid Divergence Source")
     if c["div_type"] not in ("Regular","Hidden","Regular/Hidden"): raise ValueError("Invalid Divergence Type")
@@ -1988,15 +1996,15 @@ def calc_metrics(trades,initial,equity_curve=None):
     peak=np.maximum.accumulate(np.r_[initial,eq]); dd=np.maximum(0,peak[1:]-eq)
     wins=pnl[pnl>0]; losses=pnl[pnl<0]; gw=wins.sum() if len(wins) else 0; gl=abs(losses.sum()) if len(losses) else 0
     seq=mx=0
-    for v in pnl:
-        if v<=0: seq+=1; mx=max(mx,seq)
+    for v in pnl:        if v<=0: seq+=1; mx=max(mx,seq)
         else: seq=0
     longs=[t for t in trades if t["side"]=="LONG"]; shorts=[t for t in trades if t["side"]=="SHORT"]
     fees=sum(float(t.get("fees",0)) for t in trades)
     return {"trades":int(len(pnl)),"wins":int((pnl>0).sum()),"losses":int((pnl<=0).sum()),
             "win_rate":float((pnl>0).mean()*100),"net_pnl":float(pnl.sum()),
             "return_pct":float(pnl.sum()/initial*100 if initial else 0),
-            "profit_factor":float(gw/gl) if gl else (999.0 if gw else 0.0),            "max_drawdown":float(dd.max()) if len(dd) else 0,"avg_trade":float(pnl.mean()),
+            "profit_factor":float(gw/gl) if gl else (999.0 if gw else 0.0),
+            "max_drawdown":float(dd.max()) if len(dd) else 0,"avg_trade":float(pnl.mean()),
             "avg_win":float(wins.mean()) if len(wins) else 0,"avg_loss":float(losses.mean()) if len(losses) else 0,
             "expectancy":float(pnl.mean()),"long_trades":len(longs),"short_trades":len(shorts),
             "long_pnl":float(sum(t["net_pnl"] for t in longs)),"short_pnl":float(sum(t["net_pnl"] for t in shorts)),
@@ -2104,7 +2112,7 @@ def _grid_direction(cfg,votes,st_bull,st_bear):
     bs=sum(1 for _,b,_ in votes if b); ss=sum(1 for _,_,s in votes if s)
     if filt=="SUPERTREND":
         return "LONG" if st_bull and not st_bear else "SHORT" if st_bear and not st_bull else None
-    need=int(cfg["grid_score_min"])
+    need=float(cfg["grid_score_min"])
     return "LONG" if bs>=need and bs>ss else "SHORT" if ss>=need and ss>bs else None
 
 @dataclass
@@ -2349,7 +2357,7 @@ def run_backtest(df,cfg,logger=None):
             if cfg["grid_trend_filter"]=="SUPERTREND":
                 allow_long,allow_short=st_bull,st_bear
             elif cfg["grid_trend_filter"]=="SCORE":
-                need=int(cfg["grid_score_min"]); allow_long=bs>=need and bs>ss; allow_short=ss>=need and ss>bs
+                need=float(cfg["grid_score_min"]); need=max(need,float(cfg.get("adaptive_min_weight",ADAPTIVE_DEFAULT_MIN_WEIGHT))) if cfg.get("signal_mode")=="ADAPTIVE_SCORE" else need; allow_long=bs>=need and bs>ss; allow_short=ss>=need and ss>bs
 
             if cfg["grid_mode"]=="NEUTRAL_GRID":
                 if direction!=grid.direction:
@@ -2593,7 +2601,7 @@ class BacktesterGUI:
             if isinstance(v,tk.BooleanVar): c[k]=bool(v.get())
             else:
                 val=v.get()
-                if k in {"st_len","ema_len","ema_fast","ema_slow","macd_fast","macd_slow","macd_signal","rsi_len","rsi_ob","rsi_os","rsi_ma_len","bb_len","stoch_k","stoch_smooth","stoch_d","vwap_len","vwap_delta_smooth_len","vwap_delta_baseline","vidya_len","vidya_momentum","nwe_lookback","nwe_mae","liq_length","trendline_length","trendline_min_distance","trendline_retest_candles","vol_len","leverage","warmup","max_trades","grid_levels","grid_score_min","min_score",
+                if k in {"st_len","ema_len","ema_fast","ema_slow","macd_fast","macd_slow","macd_signal","rsi_len","rsi_ob","rsi_os","rsi_ma_len","bb_len","stoch_k","stoch_smooth","stoch_d","vwap_len","vwap_delta_smooth_len","vwap_delta_baseline","vidya_len","vidya_momentum","nwe_lookback","nwe_mae","liq_length","trendline_length","trendline_min_distance","trendline_retest_candles","vol_len","leverage","warmup","max_trades","grid_levels","min_score",
                      "div_pivot","div_min_count","div_max_pivots","div_max_bars","div_cci_len","div_mom_len","sr_volume_ma","sr_history_bars"}:
                     try:c[k]=int(val)
                     except: pass
