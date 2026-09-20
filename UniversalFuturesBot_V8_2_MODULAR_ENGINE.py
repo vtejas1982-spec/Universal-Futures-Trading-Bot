@@ -44,8 +44,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.2.2"
-APP_TITLE = "Universal Futures Trading Bot V8.2.2 - Multi-Exchange (No KuCoin)"
+APP_VERSION = "V8.2.3"
+APP_TITLE = "Universal Futures Trading Bot V8.2.3 - Multi-Exchange (No KuCoin)"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -3925,15 +3925,37 @@ class UniversalFuturesBotGUI:
                     "Stop the bot first, then load/copy another profile."
                 )
             current_symbol = str(self.symbol or "").strip().upper()
-            requested_symbol = str(self.e_symbol.get()).strip().upper()
+            raw_requested_symbol = str(self.e_symbol.get()).strip().upper()
             current_exchange = str(self.exchange_id or "").strip().lower()
             requested_exchange = str(self.v_exchange.get()).strip().lower()
             current_account = str(self.runtime_account_mode or "").strip().upper()
             requested_account = str(self.v_account_mode.get()).strip().upper()
+
+            # CCXT uses canonical contract symbols such as OP/USDT:USDT,
+            # while the GUI commonly displays/accepts OP/USDT. Comparing the
+            # raw GUI text with the canonical running symbol caused a false
+            # "Symbol cannot be changed" error during every live checkpoint.
+            # Normalize the requested symbol against the already-connected
+            # exchange before deciding whether the symbol actually changed.
+            requested_symbol = raw_requested_symbol
+            if current_symbol and self.exchange is not None and current_exchange:
+                try:
+                    requested_symbol = self.normalize_symbol(
+                        self.exchange,
+                        current_exchange,
+                        raw_requested_symbol,
+                    )
+                except Exception as symbol_error:
+                    raise RuntimeError(
+                        f"Cannot validate the live symbol '{raw_requested_symbol}': "
+                        f"{symbol_error}"
+                    ) from symbol_error
+
             if current_symbol and requested_symbol != current_symbol:
                 raise RuntimeError(
                     f"Symbol cannot be changed while the bot is running "
-                    f"({current_symbol} is active). Stop the bot first."
+                    f"({current_symbol} is active; requested {requested_symbol}). "
+                    f"Stop the bot first."
                 )
             if current_exchange and requested_exchange != current_exchange:
                 raise RuntimeError(
