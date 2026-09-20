@@ -44,8 +44,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.3.0"
-APP_TITLE = "Universal Futures Trading Bot V8.3.0 - Hardened Adaptive Engine"
+APP_VERSION = "V8.3.1"
+APP_TITLE = "Universal Futures Trading Bot V8.3.1 - Hardened Adaptive Engine"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -587,13 +587,15 @@ class StrategyEngine:
     only the final directional vote contract. It is GUI/exchange independent.
     """
 
-    adaptive_edge = ADAPTIVE_DEFAULT_EDGE
-    adaptive_min_weight = ADAPTIVE_DEFAULT_MIN_WEIGHT
+    # Adaptive thresholds are supplied explicitly to each decision call.
+    # They must not be mutable class state because multiple bot profiles/workers
+    # may run concurrently in the same Python process.
 
     @staticmethod
     def decide_signal(directional_modules, signal_mode, min_score,
                       atr_pass=True, vol_pass=True, adx_pass=True,
-                      mtf_pass_bull=True, mtf_pass_bear=True):
+                      mtf_pass_bull=True, mtf_pass_bear=True,
+                      adaptive_edge=None, adaptive_min_weight=None):
         signal_mode = str(signal_mode).strip().upper()
         min_score = int(min_score)
         if min_score < 1:
@@ -632,8 +634,13 @@ class StrategyEngine:
             ws = sum(float(weights.get(name, 1.0)) for name, bull, bear in modules if bool(bear) and not bool(bull))
             total = wb + ws
             edge = abs(wb - ws) / total if total > 0 else 0.0
-            min_weight = max(float(min_score), float(getattr(StrategyEngine, "adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
-            edge_threshold = float(getattr(StrategyEngine, "adaptive_edge", ADAPTIVE_DEFAULT_EDGE))
+            min_weight = max(
+                float(min_score),
+                float(ADAPTIVE_DEFAULT_MIN_WEIGHT if adaptive_min_weight is None else adaptive_min_weight),
+            )
+            edge_threshold = float(
+                ADAPTIVE_DEFAULT_EDGE if adaptive_edge is None else adaptive_edge
+            )
             buy_ok = wb >= min_weight and wb > ws and edge >= edge_threshold
             sell_ok = ws >= min_weight and ws > wb and edge >= edge_threshold
             # VOL/ATR/ADX/MTF are gates in adaptive mode; they are not double-counted.
@@ -662,7 +669,8 @@ class StrategyEngine:
     @staticmethod
     def decision_reason(directional_modules, signal_mode, min_score,
                         atr_pass=True, vol_pass=True, adx_pass=True,
-                        mtf_pass_bull=True, mtf_pass_bear=True):
+                        mtf_pass_bull=True, mtf_pass_bear=True,
+                        adaptive_edge=None, adaptive_min_weight=None):
         """Explain why the centralized strategy engine did or did not emit a side."""
         mode = str(signal_mode).strip().upper()
         modules = list(directional_modules or [])
@@ -691,8 +699,13 @@ class StrategyEngine:
             ws = sum(float(weights.get(name, 1.0)) for name, bull, bear in modules if bool(bear) and not bool(bull))
             total = wb + ws
             edge = abs(wb - ws) / total if total > 0 else 0.0
-            min_weight = max(float(min_score), float(getattr(StrategyEngine, "adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
-            edge_threshold = float(getattr(StrategyEngine, "adaptive_edge", ADAPTIVE_DEFAULT_EDGE))
+            min_weight = max(
+                float(min_score),
+                float(ADAPTIVE_DEFAULT_MIN_WEIGHT if adaptive_min_weight is None else adaptive_min_weight),
+            )
+            edge_threshold = float(
+                ADAPTIVE_DEFAULT_EDGE if adaptive_edge is None else adaptive_edge
+            )
             if wb >= min_weight and wb > ws and edge >= edge_threshold and atr_pass and vol_pass and adx_pass and mtf_pass_bull:
                 return f"ADAPTIVE_BUY_W{wb:.2f}_EDGE{edge:.2f}"
             if ws >= min_weight and ws > wb and edge >= edge_threshold and atr_pass and vol_pass and adx_pass and mtf_pass_bear:
@@ -8646,6 +8659,16 @@ class UniversalFuturesBotGUI:
             if min_score <= 0:
                 raise ValueError("Minimum score must be greater than 0.")
 
+            # V8.3.1 FIX: start_bot() logs Adaptive Score before the worker
+            # thread starts. Read/validate these values in this scope so the
+            # startup path cannot reference _run_bot_logic() locals.
+            adaptive_edge = float(self.e_adaptive_edge.get().strip())
+            adaptive_min_weight = float(self.e_adaptive_min_weight.get().strip())
+            if not 0.0 < adaptive_edge < 1.0:
+                raise ValueError("Adaptive Edge must be between 0 and 1.")
+            if adaptive_min_weight <= 0:
+                raise ValueError("Adaptive Min Weight must be greater than 0.")
+
             # Startup/configuration logging must not depend on _run_bot_logic()
             # locals, because those are parsed later in the worker thread.
             # Read the GUI values directly here; _run_bot_logic() performs the
@@ -9280,8 +9303,10 @@ class UniversalFuturesBotGUI:
         adx_pass=True,
         mtf_pass_bull=True,
         mtf_pass_bear=True,
+        adaptive_edge=None,
+        adaptive_min_weight=None,
     ):
-        """Compatibility wrapper around the V8.2 modular strategy engine."""
+        """Compatibility wrapper around the modular strategy engine."""
         return StrategyEngine.decide_signal(
             directional_modules,
             signal_mode,
@@ -9291,6 +9316,8 @@ class UniversalFuturesBotGUI:
             adx_pass,
             mtf_pass_bull,
             mtf_pass_bear,
+            adaptive_edge,
+            adaptive_min_weight,
         )
 
     # -------------------- MAIN LOOP --------------------------
@@ -10646,11 +10673,9 @@ class UniversalFuturesBotGUI:
                         grid_sell_score = sum(1 for _, _, bear in grid_directional_modules if bear)
                         grid_score_count = len(grid_directional_modules)
 
-                    # Centralized, pure signal decision.  Keeping the voting
-                    # rules in one helper makes V8.1 regression-testable without
-                    # importing CCXT/Tkinter or connecting to an exchange.
-                    StrategyEngine.adaptive_edge = adaptive_edge
-                    StrategyEngine.adaptive_min_weight = adaptive_min_weight
+                    # Centralized, pure signal decision. Adaptive thresholds
+                    # are explicit per-call parameters, preventing cross-profile
+                    # races when multiple bots run concurrently.
                     buy_signal, sell_signal, buy_score, sell_score = self._decide_signal(
                         directional_modules,
                         signal_mode,
@@ -10660,6 +10685,8 @@ class UniversalFuturesBotGUI:
                         adx_pass=adx_pass,
                         mtf_pass_bull=mtf_pass_bull,
                         mtf_pass_bear=mtf_pass_bear,
+                        adaptive_edge=adaptive_edge,
+                        adaptive_min_weight=adaptive_min_weight,
                     )
 
                     if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT"):
@@ -10689,6 +10716,7 @@ class UniversalFuturesBotGUI:
                         directional_modules, signal_mode, min_score,
                         atr_pass=atr_pass, vol_pass=vol_pass, adx_pass=adx_pass,
                         mtf_pass_bull=mtf_pass_bull, mtf_pass_bear=mtf_pass_bear,
+                        adaptive_edge=adaptive_edge, adaptive_min_weight=adaptive_min_weight,
                     )
 
                     signal = "NONE"
