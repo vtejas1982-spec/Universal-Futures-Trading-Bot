@@ -4,13 +4,13 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
 
-## 🚀 V8 at a glance
+## 🚀 V8 Recovery + Multi-Bot Build
 
 **Current build**
 
-`UniversalFuturesBot_V8_NEUTRAL_GRID_AUTO_DIRECTION_ALL_STRATEGIES_FINAL_AUDITED_GRID_DUPLICATE_FIXED.py`
+`UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py`
 
-The current V8 build combines configurable directional strategies with advanced Grid execution, including the audited Grid duplicate-order synchronization fix.
+This build keeps the existing V8 strategy/Grid architecture and adds a persistent recovery layer, exchange-side reconciliation, isolated bot profiles, and a shared multi-bot trade/session ledger.
 
 ### Highlights
 
@@ -24,20 +24,122 @@ The current V8 build combines configurable directional strategies with advanced 
 - Grid exposure and drawdown controls
 - Global daily drawdown and emergency capital-loss protection
 - Individual Grid order-status verification
+- **Crash/restart recovery with Resume or Start New prompt**
+- **Per-bot profile configuration and runtime state**
+- **Exchange-side position/order reconciliation before recovery**
+- **Profile locking to prevent duplicate instances of the same bot profile**
+- **Shared SQLite master database for multiple bots**
+- **Excel-compatible master CSV trade/session export**
 - Telegram alerts
 - Dashboard and CSV trade logging
 
-## 🖥️ V8 GUI Preview
+## 🆕 What was fixed / added / modified
 
-The screenshots below show the actual V8 desktop interface, including connection, market, strategy/indicator, Grid, risk/SL-TP, and alerts/dashboard configuration.
+### 1. Crash / restart recovery
 
-![Universal Futures Trading Bot V8 GUI](docs/screenshots/V8_GUI_Screenshots_Overview.jpg)
+The previous V8 runtime state was primarily in memory. The new build persists a per-profile runtime checkpoint.
 
-## 📖 User Manual
+When the application detects a previous running/crashed/stopping session, it asks:
 
-**[Read the Universal Futures Bot V8 User Manual (PDF)](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
+> **Resume the last saved bot stage?**
 
-The manual covers architecture, connection/API setup, market settings, all 17 directional indicators and parameters, signal modes, Grid modes, NEUTRAL_GRID automatic direction, Grid TP/SL, exposure and drawdown controls, normal strategy risk settings, alerts, dashboard, logging, testing and troubleshooting.
+You can choose:
+
+- **YES — Resume:** restore saved configuration/runtime state and verify it against the exchange.
+- **NO — Start New Bot:** start a new session without silently adopting an existing exchange position/order.
+
+The recovery state includes strategy mode, timeframe, module summary, session statistics, normal-position state, protection IDs, TP1/BE state, re-entry locks and Grid state.
+
+### 2. Exchange-side recovery verification
+
+Resume does not blindly trust the local state file.
+
+Before continuing, the bot verifies the exchange-side position and open-order state and uses the saved bot state to determine whether the inventory can safely be associated with the profile.
+
+Unknown/unverifiable states are handled conservatively instead of being silently treated as safe.
+
+### 3. Full configuration recovery
+
+The running configuration is checkpointed so recovery can restore the settings that were active for the session, including strategy, risk, execution and Grid parameters.
+
+API keys, API secrets and Telegram credentials are deliberately excluded from the crash-recovery snapshot.
+
+### 4. Multi-bot profiles
+
+Each bot can have a unique **Bot Profile ID**, for example:
+
+```text
+BOT-01 → BTC/USDT → 15m
+BOT-02 → ETH/USDT → 5m
+BOT-03 → SOL/USDT → 1h
+```
+
+Each profile has isolated configuration and runtime-state files under:
+
+```text
+bot_profiles/
+    BOT-01/
+        config.json
+        runtime_state.json
+    BOT-02/
+        config.json
+        runtime_state.json
+```
+
+A profile lock prevents two processes from accidentally running the same profile simultaneously.
+
+### 5. Master multi-bot trade/session database
+
+All profiles can write to:
+
+```text
+universal_bot_master.db
+```
+
+The master ledger records bot/session context such as:
+
+- Bot Profile ID
+- Session ID
+- Exchange
+- Account mode
+- Symbol
+- Timeframe
+- Strategy mode
+- Grid mode
+- Signal mode
+- Enabled strategy modules
+- Side
+- Entry/exit information
+- Quantity
+- Leverage
+- SL / TP1 / TP2
+- TP1 state
+- PnL/session result
+- Duration
+- Exit reason
+- Configuration hash
+
+### 6. Excel-compatible master log
+
+The database is accompanied by:
+
+```text
+universal_bot_master_log.csv
+```
+
+The CSV can be opened directly in Microsoft Excel for comparing multiple bot profiles, pairs, timeframes and strategy configurations.
+
+### 7. Protection reconciliation safety improvement
+
+Protection reconciliation now distinguishes verified exchange states from uncertain states. If protection cannot be safely verified, the recovery/execution path fails closed rather than guessing.
+
+### 8. Existing Grid duplicate-order protection retained
+
+The previous V8 Grid fix remains in this build. The Grid engine tracks managed order IDs and individually verifies missing orders rather than recreating levels from an incomplete open-order snapshot.
+
+### 9. Bug fixed during audit
+
+The previous protection reconciliation implementation contained an undefined `open_ids` reference in a branch that could be reached during reconciliation. The audited build removes that undefined-variable dependency and uses the existing specific-order verification path.
 
 ## 🧠 17 directional modules
 
@@ -106,11 +208,20 @@ The engine does not rely only on an incomplete open-order snapshot to decide whe
 
 This is intended to prevent repeated recreation of Grid levels when an exchange response does not contain every open order.
 
+## 🖥️ V8 GUI Preview
+
+![Universal Futures Trading Bot V8 GUI](docs/screenshots/V8_GUI_Screenshots_Overview.jpg)
+
+## 📖 Documentation
+
+- **[User Manual](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
+- **[Change Log](CHANGELOG.md)**
+- **[Recovery / Multi-Bot Audit](docs/V8_RECOVERY_MULTI_BOT_AUDIT.md)**
+- **[Launch Kit](docs/LAUNCH_KIT.md)**
+- **[Contributing Guide](CONTRIBUTING.md)**
+- **[Security Policy](SECURITY.md)**
+
 ## 🏗️ Architecture
-
-The project is organized around a desktop GUI and a multi-exchange execution engine.
-
-High-level flow:
 
 ```text
 Tkinter GUI
@@ -123,16 +234,23 @@ Tkinter GUI
             ▼
      Strategy Engine
             │
-            ├── Directional Modules
-            ├── SCORE / DIRECT_SHOT
+            ├── 17 Directional Modules
+            ├── DIRECT_SHOT / SCORE
             └── Grid Engine
                     │
                     ▼
-                 CCXT
+              Recovery Layer
                     │
-        ┌───────────┼───────────┐
-        ▼           ▼           ▼
-      Bybit      Binance      Other supported exchanges
+          ┌─────────┴─────────┐
+          ▼                   ▼
+   Profile Runtime       Master Ledger
+          │                   │
+          ▼                   ▼
+       CCXT              SQLite + CSV
+          │
+   ┌──────┼───────────┬───────────┐
+   ▼      ▼           ▼           ▼
+ Bybit  Binance    Gate.io     Bitget / WEEX
 ```
 
 The current design supports Bybit, Binance, Gate.io, Bitget and WEEX. KuCoin is not included in this V8 build.
@@ -158,35 +276,49 @@ py -m pip install -r requirements.txt
 
 Never commit exchange API keys, API secrets, Telegram tokens, passwords or private configuration files.
 
-Keep credentials outside Git. See:
+Keep credentials outside Git. See [SECURITY.md](SECURITY.md).
 
-- [SECURITY.md](SECURITY.md)
-- [.gitignore](.gitignore)
-
-### 4. Run the bot
+### 4. Run the current build
 
 ```powershell
-py UniversalFuturesBot_V8_NEUTRAL_GRID_AUTO_DIRECTION_ALL_STRATEGIES_FINAL_AUDITED_GRID_DUPLICATE_FIXED.py
+py UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py
 ```
 
-### 5. Test safely first
+### 5. Test recovery safely
 
-Use demo/testnet credentials before live trading. Verify exchange account mode, position mode, leverage, symbol rules, order types and permissions before using real funds.
+Start with **one profile and demo/testnet credentials**.
+
+Recommended first recovery test:
+
+1. Start BOT-01.
+2. Allow it to create its normal/Grid state in the controlled environment.
+3. Stop/terminate the process in a controlled test.
+4. Reopen the application.
+5. Confirm the **Resume / Start New** prompt.
+6. Choose Resume.
+7. Confirm exchange-side reconciliation before execution continues.
+8. Verify that no duplicate Grid orders are created.
 
 ## 🔬 Development and testing
 
-The current published V8 Grid duplicate-order synchronization fix was syntax-checked before publication.
+The published recovery build was syntax-compiled and statically audited for configuration coverage, callbacks, persistence paths and the existing strategy modules.
 
-Exchange-side behavior should still be tested in a controlled environment because exchange APIs, account modes, order modes, permissions and exchange-side limits can vary.
+The local audit also checked:
 
-Useful areas for future testing include:
+- GUI setting save/load coverage
+- strategy-module configuration coverage
+- runtime persistence
+- profile locking
+- master SQLite logging
+- master CSV export
+- recovery serialization
+- protection reconciliation paths
 
-- Exchange integration tests
-- Grid order lifecycle tests
-- Protection-order reconciliation tests
-- Backtesting
-- Strategy performance reporting
-- Configuration import/export
+### Not live-tested
+
+This release has **not** been fully live-tested against Bybit Demo or every supported exchange. Exchange-side recovery, order-mode behavior, account modes and permissions can vary.
+
+Do not interpret static validation as proof of safe live trading.
 
 ## 🗺️ Roadmap
 
@@ -199,24 +331,31 @@ Useful areas for future testing include:
 - [x] Grid TP / global Grid SL
 - [x] Grid exposure and drawdown controls
 - [x] Grid duplicate-order synchronization fix
+- [x] Crash/restart recovery prompt
+- [x] Exchange-side recovery reconciliation
+- [x] Multi-bot profile isolation
+- [x] Profile lock
+- [x] Shared SQLite master ledger
+- [x] Excel-compatible master CSV
 - [x] User manual
 - [x] Security guidance
 
 ### Future work
 
-- [ ] Expanded automated exchange integration tests
+- [ ] Automated exchange integration test suite
 - [ ] Dedicated Grid-engine unit-test suite
-- [ ] Backtesting engine
+- [ ] Exchange-fill-based realized PnL per bot/order
+- [ ] Dedicated backtesting engine
 - [ ] Strategy performance reports
-- [ ] Configuration profiles/import-export
-- [ ] Additional documentation and examples
-- [ ] More contributor-friendly modularization
+- [ ] Configuration import/export UI
+- [ ] More contributor-friendly strategy modularization
+- [ ] Recovery fault-injection test suite
 
 ## 🤝 Contributing
 
 Contributions, bug reports, documentation improvements and testing feedback are welcome.
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the contributor workflow and **[Launch Kit](docs/LAUNCH_KIT.md)** for ready-to-use project descriptions and technical-post ideas.
+See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the contributor workflow.
 
 Before opening an issue:
 
@@ -244,28 +383,35 @@ See [SECURITY.md](SECURITY.md) for the project's security guidance.
 
 ## 🌍 Help the project grow
 
-The most useful support is real technical feedback, demo/testnet testing, reproducible bug reports, documentation improvements and pull requests. If you use the project, consider sharing what you tested and what you learned rather than only leaving a star.
+The most useful support is real technical feedback, demo/testnet testing, reproducible bug reports, documentation improvements and pull requests.
 
 Current contributor-friendly areas include:
 
 - Backtesting engine
 - Exchange integration tests
+- Recovery fault-injection tests
 - Strategy-module modularization
-
-See the open **Issues** tab for current work.
+- Exchange-fill-based PnL reporting
 
 ## 📁 Repository structure
 
 ```text
 Universal-Futures-Trading-Bot/
-├── UniversalFuturesBot_V8_NEUTRAL_GRID_AUTO_DIRECTION_ALL_STRATEGIES_FINAL_AUDITED_GRID_DUPLICATE_FIXED.py
+├── UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py
 ├── README.md
+├── CHANGELOG.md
 ├── requirements.txt
 ├── LICENSE
 ├── SECURITY.md
 ├── CONTRIBUTING.md
+├── .gitignore
+├── .github/
+│   └── ISSUE_TEMPLATE/
+│       ├── bug_report.md
+│       └── feature_request.md
 └── docs/
     ├── UniversalFuturesBot_V8_User_Manual.pdf
+    ├── V8_RECOVERY_MULTI_BOT_AUDIT.md
     ├── LAUNCH_KIT.md
     └── screenshots/
         └── V8_GUI_Screenshots_Overview.jpg
