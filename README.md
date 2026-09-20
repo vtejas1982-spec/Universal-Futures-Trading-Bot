@@ -450,7 +450,7 @@ Keep credentials outside Git. See [SECURITY.md](SECURITY.md).
 ### 4. Run the current build
 
 ```powershell
-py UniversalFuturesBot_V8_2_4_AUDITED_STRATEGY_ENGINE.py
+py V8_2_6_ADVANCED_STRATEGY_BOT.py
 ```
 
 ### 5. Test recovery safely
