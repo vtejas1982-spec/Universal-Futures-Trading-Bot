@@ -589,6 +589,871 @@ def _volume_sr_base_series(df, cfg):
     return base.reset_index()
 
 
+def calculate_rma(series, length):
+    """TradingView-style Wilder RMA with SMA seed."""
+    length = int(length)
+    if length <= 0:
+        raise ValueError("RMA length must be greater than 0.")
+
+    x = pd.Series(series, dtype="float64")
+    out = pd.Series(np.nan, index=x.index, dtype="float64")
+
+    valid_positions = np.flatnonzero(np.isfinite(x.to_numpy(dtype=float)))
+    if len(valid_positions) < length:
+        return out
+
+    # TradingView RMA seeds from the SMA of the first `length` valid values.
+    seed_positions = valid_positions[:length]
+    seed = float(x.iloc[seed_positions].mean())
+    seed_pos = int(seed_positions[-1])
+    out.iloc[seed_pos] = seed
+
+    alpha = 1.0 / length
+    prev = seed
+    for pos in valid_positions[length:]:
+        value = float(x.iloc[pos])
+        prev = alpha * value + (1.0 - alpha) * prev
+        out.iloc[pos] = prev
+
+    return out
+
+def calculate_supertrend(
+    df,
+    length=10,
+    multiplier=3.0,
+    source="CLOSE",
+    change_atr=True,
+):
+    """TradingView/Kivanc-style Supertrend.
+
+    Matches the TradingView Supertrend inputs:
+      - ATR Period
+      - Source (Close or HL2)
+      - ATR Multiplier
+      - Change ATR Calculation Method
+        ON  -> Wilder/RMA ATR (TradingView ta.atr)
+        OFF -> SMA(True Range, Period)
+    """
+    df = df.copy()
+    length = int(length)
+    multiplier = float(multiplier)
+    source = str(source).strip().upper()
+    change_atr = bool(change_atr)
+
+    if length <= 0:
+        raise ValueError("Supertrend ATR Period must be greater than 0.")
+    if multiplier <= 0:
+        raise ValueError("Supertrend ATR Multiplier must be greater than 0.")
+    if source not in ("CLOSE", "HL2"):
+        raise ValueError("Supertrend Source must be CLOSE or HL2.")
+
+    df["tr0"] = (df["high"] - df["low"]).abs()
+    df["tr1"] = (df["high"] - df["close"].shift(1)).abs()
+    df["tr2"] = (df["low"] - df["close"].shift(1)).abs()
+    df["tr"] = df[["tr0", "tr1", "tr2"]].max(axis=1)
+
+    # TradingView/Kivanc Supertrend:
+    # changeATR=True  -> ta.atr(length), i.e. Wilder/RMA ATR
+    # changeATR=False -> sma(tr, length)
+    if change_atr:
+        # TradingView ta.atr() = Wilder RMA of true range.
+        df["atr"] = calculate_rma(df["tr"], length)
+    else:
+        df["atr"] = df["tr"].rolling(length).mean()
+
+    if source == "CLOSE":
+        src = df["close"]
+    else:
+        src = (df["high"] + df["low"]) / 2.0
+
+    # Pine:
+    # up = src - Multiplier * atr
+    # dn = src + Multiplier * atr
+    df["basic_lb"] = src - multiplier * df["atr"]
+    df["basic_ub"] = src + multiplier * df["atr"]
+
+    final_ub = [np.nan] * len(df)
+    final_lb = [np.nan] * len(df)
+    trend = [True] * len(df)
+    supertrend = [np.nan] * len(df)
+
+    for i in range(len(df)):
+        # Pine has na values until ATR becomes available. Keep those bars
+        # neutral rather than manufacturing an early Supertrend state.
+        if not np.isfinite(df["atr"].iloc[i]):
+            continue
+
+        basic_ub = float(df["basic_ub"].iloc[i])
+        basic_lb = float(df["basic_lb"].iloc[i])
+
+        if i == 0 or not np.isfinite(final_ub[i - 1]):
+            up1 = basic_lb
+            dn1 = basic_ub
+        else:
+            up1 = final_lb[i - 1]
+            dn1 = final_ub[i - 1]
+
+        if i == 0 or not np.isfinite(final_lb[i - 1]):
+            final_lb[i] = basic_lb
+            final_ub[i] = basic_ub
+            trend[i] = True
+            supertrend[i] = final_lb[i]
+            continue
+
+        # Exact Kivanc/Pine recurrence:
+        # up := close[1] > up1 ? max(up, up1) : up
+        # dn := close[1] < dn1 ? min(dn, dn1) : dn
+        final_lb[i] = (
+            max(basic_lb, up1)
+            if float(df["close"].iloc[i - 1]) > up1
+            else basic_lb
+        )
+        final_ub[i] = (
+            min(basic_ub, dn1)
+            if float(df["close"].iloc[i - 1]) < dn1
+            else basic_ub
+        )
+
+        prev_trend = trend[i - 1]
+        if prev_trend is False and float(df["close"].iloc[i]) > dn1:
+            trend[i] = True
+        elif prev_trend is True and float(df["close"].iloc[i]) < up1:
+            trend[i] = False
+        else:
+            trend[i] = prev_trend
+
+        supertrend[i] = final_lb[i] if trend[i] else final_ub[i]
+
+    df["supertrend"] = supertrend
+    df["trend"] = trend
+    return df
+
+def calculate_adx(df, length=14):
+    df = df.copy()
+
+    df["up_move"] = df["high"] - df["high"].shift(1)
+    df["down_move"] = df["low"].shift(1) - df["low"]
+
+    df["plus_dm"] = df.apply(
+        lambda r: (
+            r["up_move"]
+            if r["up_move"] > r["down_move"] and r["up_move"] > 0
+            else 0
+        ),
+        axis=1,
+    )
+
+    df["minus_dm"] = df.apply(
+        lambda r: (
+            r["down_move"]
+            if r["down_move"] > r["up_move"] and r["down_move"] > 0
+            else 0
+        ),
+        axis=1,
+    )
+
+    tr_max = df[["tr0", "tr1", "tr2"]].max(axis=1)
+    df["atr_adx"] = calculate_rma(tr_max, length)
+    plus_rma = calculate_rma(df["plus_dm"], length)
+    minus_rma = calculate_rma(df["minus_dm"], length)
+
+    df["plus_di"] = 100 * (plus_rma / df["atr_adx"])
+    df["minus_di"] = 100 * (minus_rma / df["atr_adx"])
+
+    denominator = (df["plus_di"] + df["minus_di"]).replace(0, float("nan"))
+    df["dx"] = 100 * abs(df["plus_di"] - df["minus_di"]) / denominator
+    df["adx"] = calculate_rma(df["dx"], length)
+
+    return df
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """Calculate MACD line, signal line and histogram."""
+    df = df.copy()
+
+    fast = int(fast)
+    slow = int(slow)
+    signal = int(signal)
+
+    if fast <= 0 or slow <= 0 or signal <= 0:
+        raise ValueError("MACD periods must be greater than 0.")
+    if fast >= slow:
+        raise ValueError("MACD Fast period must be smaller than Slow period.")
+
+    ema_fast = df["close"].ewm(
+        span=fast,
+        adjust=False,
+    ).mean()
+
+    ema_slow = df["close"].ewm(
+        span=slow,
+        adjust=False,
+    ).mean()
+
+    df["macd"] = ema_fast - ema_slow
+    df["macd_signal"] = df["macd"].ewm(
+        span=signal,
+        adjust=False,
+    ).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    return df
+
+def calculate_rsi(df, length=14):
+    """Wilder-style RSI using exponentially smoothed gains/losses."""
+    df = df.copy()
+
+    length = int(length)
+    if length <= 0:
+        raise ValueError("RSI period must be greater than 0.")
+
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = calculate_rma(gain, length)
+    avg_loss = calculate_rma(loss, length)
+
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    # Handle the zero-loss case as RSI 100 rather than NaN.
+    df.loc[
+        (avg_loss == 0) & (avg_gain > 0),
+        "rsi",
+    ] = 100.0
+
+    # Flat markets have neutral RSI.
+    df.loc[
+        (avg_gain == 0) & (avg_loss == 0),
+        "rsi",
+    ] = 50.0
+
+    return df
+
+def calculate_wma(series, length):
+    """Linear weighted moving average."""
+    length = int(length)
+    if length <= 0:
+        raise ValueError("WMA period must be greater than 0.")
+    weights = list(range(1, length + 1))
+    weight_sum = float(sum(weights))
+
+    def _wma(values):
+        if len(values) < length:
+            return float("nan")
+        return float(sum(v * w for v, w in zip(values, weights)) / weight_sum)
+
+    return series.rolling(length).apply(_wma, raw=True)
+
+def calculate_rsi_ma(df, rsi_ma_type="EMA", length=9):
+    """Calculate selectable SMA/EMA/WMA on RSI."""
+    df = df.copy()
+    length = int(length)
+    ma_type = str(rsi_ma_type).strip().upper()
+    if length <= 0:
+        raise ValueError("RSI MA period must be greater than 0.")
+    if ma_type == "SMA":
+        df["rsi_ma"] = df["rsi"].rolling(length).mean()
+    elif ma_type == "EMA":
+        df["rsi_ma"] = df["rsi"].ewm(span=length, adjust=False).mean()
+    elif ma_type == "WMA":
+        df["rsi_ma"] = calculate_wma(df["rsi"], length)
+    else:
+        raise ValueError("RSI MA type must be SMA, EMA, or WMA.")
+    return df
+
+def calculate_hma(series, length):
+    length = int(length)
+    if length <= 0:
+        raise ValueError("HMA length must be greater than 0.")
+    half = max(1, length // 2)
+    sqrt_len = max(1, int(length ** 0.5))
+    return calculate_wma(
+        2.0 * calculate_wma(series, half) - calculate_wma(series, length),
+        sqrt_len,
+    )
+
+def calculate_vwap_delta(df, smoothing=False, smoothing_length=21, baseline_length=50):
+    df = df.copy()
+    smoothing_length = int(smoothing_length)
+    baseline_length = int(baseline_length)
+    if smoothing_length <= 0 or baseline_length <= 0:
+        raise ValueError("VWAP Delta lengths must be greater than 0.")
+
+    # Session VWAP, reset daily for crypto UTC data.
+    session = pd.to_datetime(df["time"], unit="ms", utc=True).dt.floor("D")
+    typical = (df["high"] + df["low"] + df["close"]) / 3.0
+    pv = typical * df["vol"]
+    vwap = pv.groupby(session).cumsum() / df["vol"].groupby(session).cumsum().replace(0, float("nan"))
+
+    raw_o = df["open"] - vwap
+    raw_h = df["high"] - vwap
+    raw_l = df["low"] - vwap
+    raw_c = df["close"] - vwap
+
+    if smoothing:
+        d_o = calculate_hma(raw_o, smoothing_length)
+        d_h = calculate_hma(raw_h, smoothing_length)
+        d_l = calculate_hma(raw_l, smoothing_length)
+        d_c = calculate_hma(raw_c, smoothing_length)
+    else:
+        d_o, d_h, d_l, d_c = raw_o, raw_h, raw_l, raw_c
+
+    df["vwap_delta"] = d_c
+    df["vwap_delta_open"] = d_o
+    df["vwap_delta_high"] = pd.concat([d_h, d_o, d_c], axis=1).max(axis=1)
+    df["vwap_delta_low"] = pd.concat([d_l, d_o, d_c], axis=1).min(axis=1)
+    df["vwap_delta_baseline"] = d_c.ewm(span=baseline_length, adjust=False).mean()
+    df["vwap_delta_session_vwap"] = vwap
+    return df
+
+def calculate_vidya(df, vidya_length=10, vidya_momentum=20, band_distance=2.0,
+                    atr_length=200, smoothing_length=15):
+    df = df.copy()
+    vidya_length = int(vidya_length)
+    vidya_momentum = int(vidya_momentum)
+    band_distance = float(band_distance)
+    if vidya_length <= 0 or vidya_momentum <= 0 or band_distance <= 0:
+        raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
+
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = calculate_rma(tr, int(atr_length))
+
+    momentum = df["close"].diff()
+    pos = momentum.clip(lower=0.0)
+    neg = (-momentum).clip(lower=0.0)
+    sp = pos.rolling(vidya_momentum).sum()
+    sn = neg.rolling(vidya_momentum).sum()
+    denom = sp + sn
+    cmo = (100.0 * (sp - sn).abs() / denom.replace(0, float("nan"))).fillna(0.0)
+    alpha = 2.0 / (vidya_length + 1.0)
+
+    raw = []
+    previous = None
+    for price, c in zip(df["close"].to_numpy(), cmo.to_numpy()):
+        price = float(price)
+        if previous is None or not np.isfinite(previous):
+            previous = price
+        k = alpha * float(c) / 100.0
+        value = k * price + (1.0 - k) * previous
+        raw.append(value)
+        previous = value
+
+    vidya = pd.Series(raw, index=df.index, dtype="float64").rolling(int(smoothing_length)).mean()
+    upper = vidya + atr * band_distance
+    lower = vidya - atr * band_distance
+
+    trend = False
+    states = []
+    for i in range(len(df)):
+        if i > 0:
+            if (pd.notna(upper.iloc[i]) and pd.notna(upper.iloc[i-1])
+                    and df["close"].iloc[i-1] <= upper.iloc[i-1]
+                    and df["close"].iloc[i] > upper.iloc[i]):
+                trend = True
+            elif (pd.notna(lower.iloc[i]) and pd.notna(lower.iloc[i-1])
+                    and df["close"].iloc[i-1] >= lower.iloc[i-1]
+                    and df["close"].iloc[i] < lower.iloc[i]):
+                trend = False
+        states.append(trend)
+
+    trend_s = pd.Series(states, index=df.index, dtype=bool)
+    previous_trend = trend_s.shift(1, fill_value=False)
+    changed = trend_s.ne(previous_trend)
+    smoothed = lower.where(trend_s, upper).mask(changed)
+    cross_up = (~previous_trend) & trend_s
+    cross_down = previous_trend & (~trend_s)
+
+    up, down = [], []
+    uv = dv = 0.0
+    for i in range(len(df)):
+        if bool(cross_up.iloc[i] or cross_down.iloc[i]):
+            uv = dv = 0.0
+        else:
+            if df["close"].iloc[i] > df["open"].iloc[i]:
+                uv += float(df["vol"].iloc[i])
+            elif df["close"].iloc[i] < df["open"].iloc[i]:
+                dv += float(df["vol"].iloc[i])
+        up.append(uv)
+        down.append(dv)
+
+    up_s = pd.Series(up, index=df.index)
+    down_s = pd.Series(down, index=df.index)
+    avg = (up_s + down_s) / 2.0
+    delta_pct = ((up_s - down_s) / avg.replace(0, float("nan")) * 100.0).fillna(0.0)
+
+    df["vidya"] = vidya
+    df["vidya_atr"] = atr
+    df["vidya_upper"] = upper
+    df["vidya_lower"] = lower
+    df["vidya_smoothed"] = smoothed
+    df["vidya_trend_up"] = trend_s
+    df["vidya_cross_up"] = cross_up
+    df["vidya_cross_down"] = cross_down
+    df["vidya_up_volume"] = up_s
+    df["vidya_down_volume"] = down_s
+    df["vidya_delta_volume_pct"] = delta_pct
+    return df
+
+def calculate_nadaraya_watson_envelope(df, bandwidth=8.0, multiplier=3.0, lookback=500, mae_length=499):
+    """LuxAlgo Nadaraya-Watson Envelope, causal/end-point bot translation.
+
+    Source supplied by the user: Nadaraya-Watson Envelope [LuxAlgo],
+    CC BY-NC-SA 4.0. Visual drawing/repainting objects are omitted.
+    Trading calculations use completed candles and past data only.
+    """
+    df = df.copy()
+    bandwidth = float(bandwidth)
+    multiplier = float(multiplier)    lookback = int(lookback)
+    mae_length = int(mae_length)
+    if bandwidth <= 0:
+        raise ValueError("NWE Bandwidth must be greater than 0.")
+    if multiplier < 0:
+        raise ValueError("NWE Multiplier cannot be negative.")
+    if lookback <= 0 or mae_length <= 0:
+        raise ValueError("NWE Lookback and MAE length must be greater than 0.")
+    src = pd.to_numeric(df["close"], errors="coerce").astype(float)
+    values = src.to_numpy(dtype=float)
+    lags = np.arange(lookback, dtype=float)
+    weights = np.exp(-(lags ** 2) / (bandwidth * bandwidth * 2.0))
+    nwe_values = np.full(len(values), np.nan, dtype=float)
+    for i in range(len(values)):
+        length = min(lookback, i + 1)
+        window = values[i - length + 1:i + 1][::-1]
+        valid = np.isfinite(window)
+        if not valid.any():
+            continue
+        w = np.where(valid, weights[:length], 0.0)
+        den = float(w.sum())
+        if den > 0:
+            nwe_values[i] = float(np.nansum(window * w) / den)
+    out = pd.Series(nwe_values, index=df.index, dtype="float64")
+    mae = (src - out).abs().rolling(mae_length).mean() * multiplier
+    df["nwe_out"] = out
+    df["nwe_mae"] = mae
+    df["nwe_upper"] = out + mae
+    df["nwe_lower"] = out - mae
+    df["nwe_crossunder_lower"] = (
+        (src < df["nwe_lower"]) &
+        (src.shift(1) >= df["nwe_lower"].shift(1))
+    )
+    df["nwe_crossover_upper"] = (
+        (src > df["nwe_upper"]) &
+        (src.shift(1) <= df["nwe_upper"].shift(1))
+    )
+    df["nwe_trend_up"] = out > out.shift(1)
+    df["nwe_trend_down"] = out < out.shift(1)
+    return df
+
+def calculate_liquidity_swings(
+    df,
+    length=14,
+    area="Wick Extremity",
+    filter_options="Count",
+    filter_value=0.0,
+):
+    """LuxAlgo Liquidity Swings [LuxAlgo] calculation for the trading bot.
+
+    Source supplied by the user: Liquidity Swings [LuxAlgo], © LuxAlgo,
+    CC BY-NC-SA 4.0. Visual lines/boxes/labels and lower-timeframe
+    intrabar-precision drawing are omitted. The trading signal is based on
+    confirmed swing-high/swing-low liquidity levels and their price breaks.
+
+    A swing high/low is only known after `length` bars have closed to its
+    right, matching ta.pivothigh(length, length) / ta.pivotlow(length, length).
+    Break signals are evaluated only on completed candles.
+    """
+    df = df.copy()
+    length = int(length)
+    area = str(area).strip()
+    filter_options = str(filter_options).strip().title()
+    filter_value = float(filter_value)
+
+    if length <= 0:
+        raise ValueError("Liquidity Swing Pivot Lookback must be greater than 0.")
+    if area not in ("Wick Extremity", "Full Range"):
+        raise ValueError("Liquidity Swing Swing Area must be Wick Extremity or Full Range.")
+    if filter_options not in ("Count", "Volume"):
+        raise ValueError("Liquidity Swing Filter must be Count or Volume.")
+    if filter_value < 0:
+        raise ValueError("Liquidity Swing Filter Value cannot be negative.")
+
+    n = len(df)
+    highs = pd.to_numeric(df["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(df["low"], errors="coerce").to_numpy(dtype=float)
+    opens = pd.to_numeric(df["open"], errors="coerce").to_numpy(dtype=float)
+    closes = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float)
+    vols = pd.to_numeric(df["vol"], errors="coerce").to_numpy(dtype=float)
+
+    swing_high_event = np.zeros(n, dtype=bool)
+    swing_low_event = np.zeros(n, dtype=bool)
+    swing_high_level = np.full(n, np.nan, dtype=float)
+    swing_low_level = np.full(n, np.nan, dtype=float)
+    swing_high_area_bottom = np.full(n, np.nan, dtype=float)
+    swing_low_area_top = np.full(n, np.nan, dtype=float)
+    swing_high_count = np.zeros(n, dtype=float)
+    swing_low_count = np.zeros(n, dtype=float)
+    swing_high_volume = np.zeros(n, dtype=float)
+    swing_low_volume = np.zeros(n, dtype=float)
+    swing_high_break = np.zeros(n, dtype=bool)
+    swing_low_break = np.zeros(n, dtype=bool)
+
+    active_high = np.nan
+    active_high_bottom = np.nan
+    active_high_count = 0.0
+    active_high_volume = 0.0
+    active_low = np.nan
+    active_low_top = np.nan
+    active_low_count = 0.0
+    active_low_volume = 0.0
+
+    for i in range(n):
+        # IMPORTANT: detect breaks against the level that was already known
+        # before this candle. A newly confirmed pivot is not allowed to break
+        # on the same candle it becomes known.
+        prev_high = active_high
+        prev_low = active_low
+        prev_high_count = active_high_count
+        prev_high_volume = active_high_volume
+        prev_low_count = active_low_count
+        prev_low_volume = active_low_volume
+
+        if i >= 2 * length:
+            p = i - length
+            high_window = highs[p - length:p + length + 1]
+            low_window = lows[p - length:p + length + 1]
+            if (
+                np.isfinite(highs[p])
+                and np.isfinite(high_window).all()
+                and highs[p] >= np.max(high_window)
+            ):
+                swing_high_event[i] = True
+                active_high = highs[p]
+                active_high_bottom = (
+                    max(closes[p], opens[p])
+                    if area == "Wick Extremity"
+                    else lows[p]
+                )
+                active_high_count = 0.0
+                active_high_volume = 0.0
+
+            if (
+                np.isfinite(lows[p])
+                and np.isfinite(low_window).all()
+                and lows[p] <= np.min(low_window)
+            ):
+                swing_low_event[i] = True
+                active_low = lows[p]
+                active_low_top = (
+                    min(closes[p], opens[p])
+                    if area == "Wick Extremity"
+                    else highs[p]
+                )
+                active_low_count = 0.0
+                active_low_volume = 0.0
+
+        # Count/volume filtering follows the supplied LuxAlgo concept:
+        # measure candles whose range overlaps the swing area.
+        if not swing_high_event[i] and np.isfinite(prev_high) and np.isfinite(active_high_bottom):
+            if i >= length:
+                j = i - length
+                overlaps = lows[j] < prev_high and highs[j] > active_high_bottom
+                if overlaps:
+                    active_high_count += 1.0
+                    active_high_volume += vols[j] if np.isfinite(vols[j]) else 0.0
+
+        if not swing_low_event[i] and np.isfinite(prev_low) and np.isfinite(active_low_top):
+            if i >= length:
+                j = i - length
+                overlaps = lows[j] < active_low_top and highs[j] > prev_low
+                if overlaps:
+                    active_low_count += 1.0
+                    active_low_volume += vols[j] if np.isfinite(vols[j]) else 0.0
+
+        # A liquidity break is a close crossing the latest confirmed swing
+        # level. Filter value must also be passed, matching the indicator's
+        # Count/Volume filtering purpose.
+        high_target = prev_high_count if filter_options == "Count" else prev_high_volume
+        low_target = prev_low_count if filter_options == "Count" else prev_low_volume
+
+        if np.isfinite(prev_high) and np.isfinite(closes[i]) and i > 0:
+            swing_high_break[i] = (
+                closes[i] > prev_high
+                and closes[i - 1] <= prev_high
+                and high_target > filter_value
+            )
+
+        if np.isfinite(prev_low) and np.isfinite(closes[i]) and i > 0:
+            swing_low_break[i] = (
+                closes[i] < prev_low
+                and closes[i - 1] >= prev_low
+                and low_target > filter_value
+            )
+
+        # Store the current active levels/statistics after this candle.
+        swing_high_level[i] = active_high
+        swing_high_area_bottom[i] = active_high_bottom
+        swing_high_count[i] = active_high_count
+        swing_high_volume[i] = active_high_volume
+        swing_low_level[i] = active_low
+        swing_low_area_top[i] = active_low_top
+        swing_low_count[i] = active_low_count
+        swing_low_volume[i] = active_low_volume
+
+    # Current-trend interpretation: after a confirmed breakout, keep the
+    # directional state until the opposite liquidity level breaks.
+    liq_trend = 0
+    liq_trend_state = np.zeros(n, dtype=int)
+    for i in range(n):
+        if swing_high_break[i]:
+            liq_trend = 1
+        elif swing_low_break[i]:
+            liq_trend = -1
+        liq_trend_state[i] = liq_trend
+
+    df["liq_swing_high"] = swing_high_level
+    df["liq_swing_low"] = swing_low_level
+    df["liq_swing_high_area_bottom"] = swing_high_area_bottom
+    df["liq_swing_low_area_top"] = swing_low_area_top
+    df["liq_swing_high_count"] = swing_high_count
+    df["liq_swing_low_count"] = swing_low_count
+    df["liq_swing_high_volume"] = swing_high_volume
+    df["liq_swing_low_volume"] = swing_low_volume
+    df["liq_swing_high_break"] = swing_high_break
+    df["liq_swing_low_break"] = swing_low_break
+    df["liq_swing_trend"] = liq_trend_state
+    return df
+
+def calculate_trendline_breakout(
+    df,
+    length=14,
+    min_pivot_distance=5,
+    breakout_buffer_pct=0.0,
+    retest_candles=3,
+):
+    """Confirmed-pivot trendline breakout calculation.
+
+    Trendlines are built only from confirmed swing highs/lows. A pivot at p is
+    known only after `length` candles have closed to its right, so the current
+    candle never uses future information. Breakouts are evaluated on completed
+    candles by the caller (normally iloc[-2]).
+
+    Resistance uses the two latest confirmed swing highs; support uses the two
+    latest confirmed swing lows.  The latest two highs must slope downward for
+    resistance and the latest two lows must slope upward for support.
+
+    `FRESH_BREAK` is a one-candle crossing event. `CURRENT_TREND` is derived by
+    keeping the last breakout direction. `BREAK_RETEST` is represented by the
+    same fresh breakout event plus retest state, so the caller can require a
+    later candle to retest the broken line and close back in the breakout
+    direction.
+    """
+    df = df.copy()
+    length = int(length)
+    min_pivot_distance = int(min_pivot_distance)
+    breakout_buffer_pct = float(breakout_buffer_pct)
+    retest_candles = int(retest_candles)
+    if length <= 0:
+        raise ValueError("Trendline Pivot Lookback must be greater than 0.")
+    if min_pivot_distance <= 0:
+        raise ValueError("Trendline Minimum Pivot Distance must be greater than 0.")
+    if breakout_buffer_pct < 0:
+        raise ValueError("Trendline Breakout Buffer cannot be negative.")
+    if retest_candles <= 0:
+        raise ValueError("Trendline Retest Candles must be greater than 0.")
+
+    n = len(df)
+    highs = pd.to_numeric(df["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(df["low"], errors="coerce").to_numpy(dtype=float)
+    closes = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float)
+
+    resistance = np.full(n, np.nan, dtype=float)
+    support = np.full(n, np.nan, dtype=float)
+    resistance_prev = np.full(n, np.nan, dtype=float)
+    support_prev = np.full(n, np.nan, dtype=float)
+    pivot_high_event = np.zeros(n, dtype=bool)
+    pivot_low_event = np.zeros(n, dtype=bool)
+    break_up = np.zeros(n, dtype=bool)
+    break_down = np.zeros(n, dtype=bool)
+    trend_state = np.zeros(n, dtype=int)
+    retest_up = np.zeros(n, dtype=bool)
+    retest_down = np.zeros(n, dtype=bool)
+
+    high_pivots = []
+    low_pivots = []
+    state = 0
+    pending_retest = 0
+    pending_line = np.nan
+    pending_age = 0
+
+    def line_at(points, x, required_slope=None):
+        if len(points) < 2:
+            return np.nan
+        p1, p2 = points[-2], points[-1]
+        if p2[0] == p1[0]:
+            return np.nan
+        slope = (p2[1] - p1[1]) / float(p2[0] - p1[0])
+        # Resistance must be descending; support must be ascending.
+        if required_slope == "DOWN" and slope >= 0:
+            return np.nan
+        if required_slope == "UP" and slope <= 0:
+            return np.nan
+        return p1[1] + (p2[1] - p1[1]) * ((x - p1[0]) / (p2[0] - p1[0]))
+
+    for i in range(n):
+        # Use only trendlines that were already known before this candle.
+        r_prev = line_at(high_pivots, i, "DOWN")
+        s_prev = line_at(low_pivots, i, "UP")
+        resistance_prev[i] = r_prev
+        support_prev[i] = s_prev
+
+        close_prev = closes[i - 1] if i > 0 else np.nan
+        buffer_r = r_prev * (1.0 + breakout_buffer_pct / 100.0) if np.isfinite(r_prev) else np.nan
+        buffer_s = s_prev * (1.0 - breakout_buffer_pct / 100.0) if np.isfinite(s_prev) else np.nan
+
+        if np.isfinite(r_prev) and np.isfinite(closes[i]):
+            break_up[i] = bool(closes[i] > buffer_r and (not np.isfinite(close_prev) or close_prev <= buffer_r))
+        if np.isfinite(s_prev) and np.isfinite(closes[i]):
+            break_down[i] = bool(closes[i] < buffer_s and (not np.isfinite(close_prev) or close_prev >= buffer_s))
+
+        # Track a retest after a breakout. The broken line is frozen so a
+        # later pivot cannot silently move the retest target.
+        if pending_retest != 0:
+            pending_age += 1
+            if pending_age <= retest_candles and np.isfinite(pending_line):
+                if pending_retest > 0:
+                    touched = lows[i] <= pending_line <= highs[i]
+                    if touched and closes[i] > pending_line:
+                        retest_up[i] = True
+                        pending_retest = 0
+                else:
+                    touched = lows[i] <= pending_line <= highs[i]
+                    if touched and closes[i] < pending_line:
+                        retest_down[i] = True
+                        pending_retest = 0
+            if pending_age >= retest_candles and pending_retest != 0:
+                pending_retest = 0
+
+        if break_up[i]:
+            state = 1
+            pending_retest = 1
+            pending_line = r_prev
+            pending_age = 0
+        elif break_down[i]:
+            state = -1
+            pending_retest = -1
+            pending_line = s_prev
+            pending_age = 0
+
+        trend_state[i] = state
+
+        # Confirm a pivot only after `length` candles to its right have closed.
+        if i >= 2 * length:
+            p = i - length
+            hw = highs[p - length:p + length + 1]
+            lw = lows[p - length:p + length + 1]
+            if np.isfinite(hw).all() and np.isfinite(highs[p]) and highs[p] >= np.max(hw):
+                if not high_pivots or p - high_pivots[-1][0] >= min_pivot_distance:
+                    high_pivots.append((p, float(highs[p])))
+                    high_pivots = high_pivots[-4:]
+                    pivot_high_event[i] = True
+            if np.isfinite(lw).all() and np.isfinite(lows[p]) and lows[p] <= np.min(lw):
+                if not low_pivots or p - low_pivots[-1][0] >= min_pivot_distance:
+                    low_pivots.append((p, float(lows[p])))
+                    low_pivots = low_pivots[-4:]
+
+        resistance[i] = line_at(high_pivots, i, "DOWN")
+        support[i] = line_at(low_pivots, i, "UP")
+
+    # Recalculate the displayed line only after each pivot becomes known. The
+    # breakout arrays above intentionally remain based on pre-candle state.
+    df["trendline_resistance"] = resistance
+    df["trendline_support"] = support
+    df["trendline_resistance_prev"] = resistance_prev
+    df["trendline_support_prev"] = support_prev
+    df["trendline_pivot_high"] = pivot_high_event
+    df["trendline_pivot_low"] = pivot_low_event
+    df["trendline_break_up"] = break_up
+    df["trendline_break_down"] = break_down
+    df["trendline_retest_up"] = retest_up
+    df["trendline_retest_down"] = retest_down
+    df["trendline_state"] = trend_state
+    return df
+
+def calculate_bollinger(df, length=20, std_mult=2.0):
+    """Calculate Bollinger middle/upper/lower bands."""
+    df = df.copy()
+
+    length = int(length)
+    std_mult = float(std_mult)
+
+    if length <= 0:
+        raise ValueError("Bollinger period must be greater than 0.")
+    if std_mult <= 0:
+        raise ValueError("Bollinger standard deviation must be greater than 0.")
+
+    df["bb_mid"] = df["close"].rolling(length).mean()
+    df["bb_std"] = df["close"].rolling(length).std(ddof=0)
+    df["bb_upper"] = df["bb_mid"] + std_mult * df["bb_std"]
+    df["bb_lower"] = df["bb_mid"] - std_mult * df["bb_std"]
+
+    return df
+
+def calculate_stochastic(df, k_length=14, k_smooth=3, d_length=3):
+    """Calculate Stochastic %K and %D."""
+    df = df.copy()
+
+    k_length = int(k_length)
+    k_smooth = int(k_smooth)
+    d_length = int(d_length)
+
+    if k_length <= 0 or k_smooth <= 0 or d_length <= 0:
+        raise ValueError("Stochastic periods must be greater than 0.")
+
+    lowest_low = df["low"].rolling(k_length).min()
+    highest_high = df["high"].rolling(k_length).max()
+
+    denominator = (highest_high - lowest_low).replace(0, float("nan"))
+
+    raw_k = (
+        100
+        * (df["close"] - lowest_low)
+        / denominator
+    )
+
+    df["stoch_k"] = raw_k.rolling(k_smooth).mean()
+    df["stoch_d"] = df["stoch_k"].rolling(d_length).mean()
+
+    return df
+
+def calculate_vwap(df, length=50):
+    """Calculate a rolling volume-weighted average price."""
+    df = df.copy()
+
+    length = int(length)
+    if length <= 0:
+        raise ValueError("VWAP period must be greater than 0.")
+
+    typical_price = (
+        df["high"] + df["low"] + df["close"]
+    ) / 3.0
+
+    pv = typical_price * df["vol"]
+
+    volume_sum = df["vol"].rolling(length).sum()
+
+    df["vwap"] = (
+        pv.rolling(length).sum()
+        / volume_sum.replace(0, float("nan"))
+    )
+
+    return df
+
 class StrategyEngine:
     """V8.3 hardened adaptive, pure strategy-decision engine.
 
@@ -1071,6 +1936,74 @@ def decide(votes,cfg,atr_pass=True,vol_pass=True,adx_pass=True,mtf_pass_bull=Tru
     )
 
 
+
+def target_to_price_fraction(target_pct, mode, leverage):
+    target_pct=float(target_pct); leverage=float(leverage)
+    if target_pct<=0 or leverage<=0: raise ValueError("SL/TP target and leverage must be > 0.")
+    if str(mode).upper()=="PRICE_%": return target_pct/100.0
+    if str(mode).upper()=="ROI_%": return (target_pct/100.0)/leverage
+    raise ValueError(f"Unknown protection mode: {mode}")
+
+def _safe_float(v, default=0.0):
+    try:
+        z=float(v)
+        return z if np.isfinite(z) else default
+    except Exception:
+        return default
+
+def validate_config(cfg):
+    c={**DEFAULTS, **cfg}
+    if c["signal_mode"] not in SUPPORTED_SIGNAL_MODES: raise ValueError("Unsupported signal mode")
+    if not 0.0<float(c.get("adaptive_edge",ADAPTIVE_DEFAULT_EDGE))<1.0: raise ValueError("Adaptive edge must be between 0 and 1")
+    if float(c.get("adaptive_min_weight",ADAPTIVE_DEFAULT_MIN_WEIGHT))<=0: raise ValueError("Adaptive min weight must be >0")
+    if c["grid_mode"] not in SUPPORTED_GRID_MODES: raise ValueError("Unsupported Grid mode")
+    if int(c["leverage"])<=0: raise ValueError("Leverage must be > 0")
+    if float(c["risk_pct"])<=0 or float(c["risk_pct"])>=100: raise ValueError("Risk Per Trade must be >0 and <100")
+    if float(c["sl_pct"])<=0 or float(c["tp1_pct"])<=0 or float(c["tp2_pct"])<=0 or float(c["hold_sl_roi"])<=0: raise ValueError("SL/TP targets must be >0")
+    if c["tp_mode"] not in ("PRICE_%","ROI_%") or c["sl_mode"] not in ("PRICE_%","ROI_%"): raise ValueError("Invalid SL/TP mode")
+    if c["tp_qty_mode"] not in ("PERCENT_%","FIXED_QTY"): raise ValueError("Invalid TP quantity mode")
+    if c["tp_qty_mode"]=="PERCENT_%" and abs(float(c["tp1_close"])+float(c["tp2_close"])-100)>1e-9: raise ValueError("TP1 + TP2 percentages must equal 100")
+    if int(c["grid_levels"])<1 or int(c["grid_levels"])>50: raise ValueError("Grid levels must be 1-50")
+    if float(c["grid_spacing"])<=0 or float(c["grid_spacing"])>50: raise ValueError("Grid spacing invalid")
+    if float(c["grid_spacing"])*int(c["grid_levels"])>=100: raise ValueError("Grid spacing × levels must be <100%")
+    if float(c["grid_order_size"])<=0 or float(c["grid_tp"])<=0: raise ValueError("Grid order size/TP invalid")
+    if float(c["grid_sl"])<=float(c["grid_spacing"])*int(c["grid_levels"]) and c["grid_mode"] in ("LONG_GRID","SHORT_GRID","NEUTRAL_GRID"):
+        raise ValueError("Grid Global SL must exceed Grid Spacing × Levels")
+    if float(c["grid_max_exposure"])<=0 or float(c["grid_max_dd"])<=0 or float(c["grid_max_dd"])>=100: raise ValueError("Grid risk settings invalid")
+    if c["grid_trend_filter"] not in ("OFF","SUPERTREND","SCORE"): raise ValueError("Invalid Grid Trend Filter")
+    enabled=sum(bool(c[k]) for k in ("use_st","use_ema","use_ema_cross","use_macd","use_rsi","use_bb","use_stoch","use_vwap","use_vwap_delta","use_vidya","use_nwe","use_liq_swings","use_trendline","use_mtf","use_vol","use_adx","use_atr","use_divergence","use_vol_sr"))
+    if c["grid_trend_filter"]=="SCORE":
+        if enabled==0: raise ValueError("Grid Score Min exceeds enabled strategy modules")
+        if c["signal_mode"]=="ADAPTIVE_SCORE":
+            names=["ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE","LIQ_SWING","TRENDLINE","MTF","DIVERGENCE","VOL_SR","VOL","ADX","ATR"]
+            flags=[c[k] for k in ("use_st","use_ema","use_ema_cross","use_macd","use_rsi","use_bb","use_stoch","use_vwap","use_vwap_delta","use_vidya","use_nwe","use_liq_swings","use_trendline","use_mtf","use_divergence","use_vol_sr","use_vol","use_adx","use_atr")]
+            cap=sum(ADAPTIVE_MODULE_WEIGHTS.get(n,1.0) for n,e in zip(names,flags) if e and n not in ("VOL","ATR"))
+            if float(c["grid_score_min"])>cap: raise ValueError("Grid Score Min exceeds adaptive weighted capacity")
+        elif float(c["grid_score_min"])>enabled: raise ValueError("Grid Score Min exceeds enabled strategy modules")
+    if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"]=="SUPERTREND" and not c["use_st"]: raise ValueError("NEUTRAL_GRID + SUPERTREND requires Supertrend")
+    if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"] in ("OFF","SCORE") and enabled==0: raise ValueError("NEUTRAL_GRID requires valid strategy score")
+    if c["grid_mode"]=="NEUTRAL_GRID" and c["grid_trend_filter"] in ("OFF","SCORE") and c["signal_mode"]!="ADAPTIVE_SCORE" and float(c["grid_score_min"])>enabled: raise ValueError("NEUTRAL_GRID requires valid strategy score")
+    if int(c["div_pivot"])<1 or int(c["div_pivot"])>50: raise ValueError("Divergence Pivot must be 1-50")
+    if c["div_source"] not in ("Close","High/Low"): raise ValueError("Invalid Divergence Source")
+    if c["div_type"] not in ("Regular","Hidden","Regular/Hidden"): raise ValueError("Invalid Divergence Type")
+    if int(c["div_min_count"])<1 or int(c["div_min_count"])>10: raise ValueError("Divergence minimum count must be 1-10")
+    if int(c["div_max_pivots"])<1 or int(c["div_max_pivots"])>20: raise ValueError("Divergence max pivots must be 1-20")
+    if int(c["div_max_bars"])<30 or int(c["div_max_bars"])>200: raise ValueError("Divergence max bars must be 30-200")
+    if c["div_entry_mode"] not in ("FRESH","CURRENT_STATE"): raise ValueError("Invalid Divergence Entry")
+    if c["use_divergence"] and not any(bool(c[k]) for k in ("div_use_macd","div_use_macd_hist","div_use_rsi","div_use_stoch","div_use_cci","div_use_momentum","div_use_obv","div_use_vwmacd","div_use_cmf","div_use_mfi")):
+        raise ValueError("Divergence requires at least one source indicator")
+    if int(c["div_cci_len"])<=0 or int(c["div_mom_len"])<=0: raise ValueError("Divergence CCI/Momentum lengths must be >0")
+    if int(c["sr_volume_ma"])<=0: raise ValueError("Volume S/R MA threshold must be >0")
+    if int(c["sr_history_bars"])<10 or int(c["sr_history_bars"])>500: raise ValueError("SR History Bars must be 10-500")
+    if c["sr_vote_mode"] not in ("MAJORITY","ANY","ALL"): raise ValueError("Invalid Volume S/R vote mode")
+    if c["sr_entry_mode"] not in ("CURRENT_ZONE","FRESH_BREAK"): raise ValueError("Invalid Volume S/R entry mode")
+    if c["use_vol_sr"] and all(str(c[k])=="Disable" for k in ("sr_tf1","sr_tf2","sr_tf3","sr_tf4")): raise ValueError("Volume S/R requires a timeframe")
+    return c
+
+def build_strategy_columns(df,cfg):
+    x=df.copy()
+    x=build_indicators(x,cfg)
+    return x
 
 def signal_for_bar(df,i,cfg):
     votes=module_votes(df,i,cfg)
