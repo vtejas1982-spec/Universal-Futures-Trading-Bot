@@ -60,3 +60,12 @@ Profile switching now clears Tk Entry widgets before loading the selected config
 Copying a profile also copies its saved API credentials because the feature is designed for creating another bot from the same exchange account configuration. Review credentials and account permissions before starting the copied bot.
 
 Always test new profiles with demo/testnet credentials first.
+
+
+## V8.1 profile safety update
+
+- The profile directory is now the authoritative Profile ID namespace.
+- If a saved config.json contains a stale or mismatched bot_id, the loader keeps the selected profile identity and logs the mismatch.
+- Saved configurations now include config_schema_version=3.
+- Credential validation occurs before profile-lock acquisition.
+- Recovery cannot adopt an exchange position unless the checkpoint contains matching position identity and saved protection state.
