@@ -1,3 +1,25 @@
+## V8.2.1 — Profile Delete + Safety Hardening — 2026-09-20
+
+### Added
+- Delete Profile button in the Connection/Profile controls.
+- Delete Selected button in the Saved Bot Profiles manager.
+- Confirmation before destructive profile deletion.
+- Profile-operation safety contract (PROFILE_OPERATION_SCHEMA_VERSION = 1).
+
+### Fixed / Hardened
+- Profile deletion is blocked while the current GUI bot is running.
+- Profile deletion is blocked when another bot process owns the profile lock.
+- Recovery checkpoints with RUNNING, CRASHED, STOPPING or PAUSED_WITH_POSITION status cannot be deleted.
+- Saved protected positions, active trades, active Grid state, filled Grid levels and Grid protection order IDs block deletion.
+- Legacy BOT-01 root configuration is removed together with BOT-01 only after safety checks.
+- Master SQLite trade/session history is preserved.
+- After deleting the selected active profile, the GUI returns to BOT-01 as a clean identity.
+
+### Audit
+- Existing StrategyEngine, strategy modules, settings/defaults, save/load/copy callbacks and Grid/recovery execution paths were retained.
+- V8.2.1 Python AST parse and compilation passed.
+- Dedicated profile-delete static regression checks passed.
+
 ## V8.2 Modular Engine + Safety Hardening — 2026-09-20
 
 ### Added
