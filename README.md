@@ -6,7 +6,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.2.1**
+**Current build — V8.2.2**
 
 `UniversalFuturesBot_V8_2_MODULAR_ENGINE.py`
 
@@ -145,6 +145,18 @@ The Profile Manager also strengthens the existing profile loading and saving wor
 - Profile lock acquisition occurs only after API credential validation, preventing a failed credential check from leaving a stale profile lock.
 
 This section describes the configuration/profile changes made in the **V8 Profile Manager + Configuration Audit — 2026-09-20** update.
+
+### 6.2 V8.2.2 Profile Manager Selection Fix
+
+V8.2.2 fixes a UI state mismatch between the Connection-section Profile ID field and the Saved Bot Profiles tree:
+
+- **Load Profile ID** loads the exact Profile ID typed in the Connection section.
+- **Delete Profile ID** deletes the exact Profile ID typed in the Connection section.
+- **Load Selected** loads the profile selected in the Profile Manager table.
+- **Delete Selected** deletes the profile selected in the Profile Manager table.
+- After deleting the current profile, the GUI synchronizes to the first remaining saved profile so the visible selection and Profile ID field cannot silently refer to different profiles.
+
+This prevents the confusing situation where BOT-02 is visibly selected but a top-level action still attempts to load BOT-01.
 
 ### 7. Excel-compatible master log
 
@@ -418,124 +430,3 @@ V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be de
 
 - [x] 17 directional modules
 - [x] DIRECT_SHOT / SCORE execution
-- [x] LONG_GRID / SHORT_GRID / NEUTRAL_GRID
-- [x] NEUTRAL_GRID automatic direction
-- [x] Grid TP / global Grid SL
-- [x] Grid exposure and drawdown controls
-- [x] Grid duplicate-order synchronization fix
-- [x] Crash/restart recovery prompt
-- [x] Exchange-side recovery reconciliation
-- [x] Multi-bot profile isolation
-- [x] Saved profile manager
-- [x] Profile copy workflow
-- [x] Profile detail viewer
-- [x] Profile lock
-- [x] Shared SQLite master ledger
-- [x] Excel-compatible master CSV
-- [x] User manual
-- [x] Security guidance
-
-### V8.1 — previous audit layer
-
-- Automated static regression checks added.
-- Recovery, profile, position-mode and protection safety tightened.
-
-### V8.2 — current
-
-- [x] Modular StrategyEngine decision contract
-- [x] Configuration/runtime schema versioning
-- [x] Preflight validation before exchange mutation
-- [x] CCXT network timeout
-- [x] Static + unit + recovery contract tests
-- [ ] Real exchange demo/testnet lifecycle suite
-- [ ] Recovery fault-injection tests
-- [ ] Dedicated Grid-engine unit-test suite
-
-### Future work
-
-- [ ] Automated exchange integration test suite
-- [ ] Dedicated Grid-engine unit-test suite
-- [ ] Exchange-fill-based realized PnL per bot/order
-- [ ] Dedicated backtesting engine
-- [ ] Strategy performance reports
-- [ ] Configuration import/export UI
-- [ ] More contributor-friendly strategy modularization
-- [ ] Recovery fault-injection test suite
-- [ ] Automated multi-profile UI integration tests
-
-## 🤝 Contributing
-
-Contributions, bug reports, documentation improvements and testing feedback are welcome.
-
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the contributor workflow.
-
-Before opening an issue:
-
-1. Confirm the problem on the latest `main` version.
-2. Include the exchange, symbol, mode and relevant configuration.
-3. Remove API keys, secrets, Telegram tokens and other private information from logs.
-4. Include reproducible steps where possible.
-
-For code contributions, keep changes focused and explain the behavior being changed.
-
-## 🔐 Security
-
-**Never commit secrets.**
-
-Do not publish:
-
-- Exchange API keys
-- Exchange API secrets
-- Telegram bot tokens
-- Passwords
-- Private configuration files
-- Personal account information
-
-See [SECURITY.md](SECURITY.md) for the project's security guidance.
-
-## 🌍 Help the project grow
-
-The most useful support is real technical feedback, demo/testnet testing, reproducible bug reports, documentation improvements and pull requests.
-
-Current contributor-friendly areas include:
-
-- Backtesting engine
-- Exchange integration tests
-- Recovery fault-injection tests
-- Strategy-module modularization
-- Exchange-fill-based PnL reporting
-
-## 📁 Repository structure
-
-```text
-Universal-Futures-Trading-Bot/
-├── UniversalFuturesBot_V8_2_MODULAR_ENGINE.py
-├── README.md
-├── CHANGELOG.md
-├── requirements.txt
-├── LICENSE
-├── SECURITY.md
-├── CONTRIBUTING.md
-├── .gitignore
-├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.md
-│       └── feature_request.md
-├── tests/
-│   ├── test_v81_static_audit.py
-│   ├── test_v82_static_audit.py
-│   ├── test_v82_strategy_engine.py
-│   ├── test_v82_recovery_contract.py
-│   └── test_v82_exchange_demo.py
-└── docs/
-    ├── UniversalFuturesBot_V8_User_Manual.pdf
-    ├── V8_RECOVERY_MULTI_BOT_AUDIT.md
-    ├── PROFILE_MANAGER.md
-    ├── LAUNCH_KIT.md
-    └── screenshots/
-        └── V8_GUI_Screenshots_Overview.jpg
-```
-
-## 📜 License
-
-MIT. See [LICENSE](LICENSE).
