@@ -1,3 +1,29 @@
+## V8.3.1 — Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
+
+### Fixed
+
+- Fixed a real V8.3.0 startup failure in ADAPTIVE_SCORE: start_bot() referenced adaptive_edge before that worker-local variable existed.
+- Adaptive Edge and Adaptive Minimum Weight are now read and validated in the startup callback before Adaptive logging.
+- Removed mutable StrategyEngine.adaptive_edge and StrategyEngine.adaptive_min_weight class state.
+- Live Adaptive thresholds are passed explicitly to the decision engine and decision diagnostics.
+- Backtester Adaptive thresholds are passed explicitly instead of relying on global cfg_adaptive_edge / cfg_adaptive_min_weight values.
+
+### Hardened
+
+- Multiple bot profiles running concurrently can no longer overwrite each other's Adaptive thresholds through shared StrategyEngine class state.
+- Live and backtester decision contracts now use the same explicit Adaptive parameter interface.
+
+### Validation
+
+- Live source compilation: PASS.
+- Backtester source compilation: PASS.
+- Live/backtester Adaptive decision parity: PASS.
+- Startup NameError regression: PASS.
+- Per-profile Adaptive isolation: PASS.
+- Regression suite: **6/6 PASS**.
+
+---
+
 ## V8.3.0 — Hardened Adaptive Engine — 2026-09-20
 
 ### Added
