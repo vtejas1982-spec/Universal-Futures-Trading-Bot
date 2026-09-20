@@ -1,16 +1,16 @@
 """
-V8.2.5 UNIVERSAL FUTURES BACKTESTER — STRATEGY-PARITY EDITION
+V8.2.6 UNIVERSAL FUTURES BACKTESTER — ADVANCED STRATEGY-PARITY EDITION
 ===============================================================
 
-Historical simulator for Universal Futures Trading Bot V8.2.5.
+Historical simulator for Universal Futures Trading Bot V8.2.6.
 
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
     modules, signal modes, normal risk/SL/TP logic, Hold-All-Reverse logic,
-    post-SL opposite-signal lock, and Grid modes used by the live V8.2.4 bot.
+    post-SL opposite-signal lock, and Grid modes used by the live V8.2.6 bot.
 
 Included:
-    * 17 V8 directional modules
+    * 19 V8 directional modules
     * Every live indicator option and entry mode
     * SINGLE_SIGNAL / ANY_NON_CONFLICTING / SCORE / 2/3/4_SIGNALS /
       STRICT_ALL_FILTERS
