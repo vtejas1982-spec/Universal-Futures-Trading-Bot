@@ -7,13 +7,13 @@ Historical simulator for Universal Futures Trading Bot V8.3.0.
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
     modules, signal modes, normal risk/SL/TP logic, Hold-All-Reverse logic,
-    post-SL opposite-signal lock, and Grid modes used by the live V8.2.4 bot.
+    post-SL opposite-signal lock, and Grid modes used by the live V8.3.0 bot.
 
 Included:
-    * 17 V8 directional modules
+    * 19 V8 directional modules
     * Every live indicator option and entry mode
     * SINGLE_SIGNAL / ANY_NON_CONFLICTING / SCORE / 2/3/4_SIGNALS /
-      STRICT_ALL_FILTERS
+      ADAPTIVE_SCORE / STRICT_ALL_FILTERS
     * 4H MTF EMA200 filter
     * Normal strategy sizing, cooldown, same-candle protection, max trades,
       daily drawdown and emergency capital-loss stop
