@@ -22,3 +22,12 @@ config.json
 *.swp
 .DS_Store
 Thumbs.db
+
+
+# Multi-bot runtime state / local databases
+bot_profiles/
+universal_bot_master.db
+universal_bot_master_log.csv
+*.export.lock
+*.tmp
+bot.lock
