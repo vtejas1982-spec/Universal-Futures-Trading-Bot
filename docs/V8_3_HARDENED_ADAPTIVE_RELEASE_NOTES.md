@@ -1,78 +1,64 @@
-# V8.3.0 — Hardened Adaptive Trading Engine
+# V8.3.1 — Adaptive Startup + Multi-Bot Isolation Fix
 
-## Purpose
-V8.3.0 is a hardening release built from the V8.2.6 Advanced Strategy Bot. The goal is not to promise maximum profit; it is to improve the quality of entries, reduce correlated-indicator double counting, and make failure/recovery behavior more fail-closed.
+## Incident fixed
 
-## Added
+The first V8.3.0 live start with ADAPTIVE_SCORE could fail after exchange connection with:
 
-### 1. ADAPTIVE_SCORE strategy mode
-- Correlation-aware weighted voting across the 19 directional modules.
-- Trend/structure modules receive more weight than raw candle-direction proxies.
-- MTF receives the highest weight because it is a separate timeframe regime check.
-- Divergence and Volume S/R receive elevated weights because they provide information different from basic moving-average trend signals.
-- VOL and ATR are treated as regime gates in ADAPTIVE_SCORE instead of being counted as independent directional votes.
-- Configurable Adaptive Edge and Adaptive Minimum Weight.
-- Detailed decision reasons such as `ADAPTIVE_BUY_W..._EDGE...` and `ADAPTIVE_BLOCKED...`.
+START FAILED: name 'adaptive_edge' is not defined
 
-### 2. Adaptive Grid parity
-- When `ADAPTIVE_SCORE` is selected, Grid SCORE/NEUTRAL_GRID now uses the same weighted evidence model rather than silently reverting to raw vote counts.
-- Adaptive Grid thresholds are validated against weighted module capacity.
+### Root cause
 
-### 3. Peak-equity risk circuit
-- Daily drawdown is now measured from the intraday daily peak equity, not only closed balance.
-- Session peak equity is persisted for recovery/audit purposes.
-- Unrealized drawdown therefore cannot hide behind an unchanged wallet balance.
+start_bot() logged the Adaptive thresholds before the worker thread _run_bot_logic() had created its local adaptive_edge and adaptive_min_weight variables.
 
-### 4. Market-data stale-data guard
-- Strategy data is rejected when the newest exchange candle is older than the configured timeframe's safety multiple.
-- A stale-feed condition becomes a cycle error instead of allowing decisions from old market data.
+The GUI fields and saved configuration were present, but the startup callback referenced worker-local variables too early.
 
-### 5. Consecutive-cycle safety halt
-- Three consecutive execution-cycle errors halt the bot fail-closed.
-- The error is stored in runtime state for recovery diagnostics.
+## Fixed
 
-### 6. Safe emergency-stop scope
-- New default: `BOT_SYMBOL`.
-- Optional explicit `ALL_ACCOUNT` scope remains available.
-- An emergency loss in one bot therefore does not silently close unrelated positions by default.
+### 1. Startup NameError
+start_bot() now reads and validates Adaptive Edge and Adaptive Minimum Weight before Adaptive startup logging.
 
-### 7. Managed-order cleanup
-- Added a managed-order registry derived from active protection and Grid state.
-- Normal/Grid shutdown and reversal cleanup now prefer known bot-managed order IDs instead of blindly cancelling every symbol order.
+### 2. Per-profile Adaptive isolation
+The first V8.3 implementation stored Adaptive thresholds on mutable StrategyEngine class attributes. That can create cross-profile races when multiple bot workers run in the same process.
 
-## Modified
+V8.3.1 removes that shared mutable state. Adaptive thresholds are passed explicitly into:
 
-- Config schema: **6 → 7**.
-- Runtime schema: **3 → 4**.
-- New profiles default to `ADAPTIVE_SCORE`; existing saved profiles keep their saved strategy mode.
-- Adaptive strategy settings are persisted with normal save/load and recovery snapshots.
-- Backtester default strategy mode is also `ADAPTIVE_SCORE` so research starts from the same strategy family as the hardened live bot.
-- Backtester includes Adaptive Edge / Adaptive Minimum Weight controls.
-- Live/backtest adaptive decision logic was regression-tested for parity.
+- StrategyEngine.decide_signal()
+- StrategyEngine.decision_reason()
+- GUI _decide_signal()
 
-## Safety / execution philosophy
+Each bot/profile therefore uses its own thresholds.
 
-The bot remains one-way/single-position oriented. Actual exchange position entry price and quantity remain authoritative for protection. Confirmed-candle signals, confirmed divergence pivots, and higher-timeframe close alignment are retained from V8.2.6.
-
-## What was deliberately NOT added
-
-- No Martingale escalation.
-- No averaging-down multiplier intended to hide losses.
-- No look-ahead / unconfirmed-pivot execution.
-- No claim that a backtest guarantees future profit.
+### 3. Backtester parity
+The backtester no longer relies on global cfg_adaptive_edge / cfg_adaptive_min_weight values. It accepts the same explicit Adaptive parameters as the live decision engine.
 
 ## Validation
 
-`tests/test_v830_hardened.py`:
+- Live source compilation: PASS.
+- Backtester source compilation: PASS.
+- Live/backtester Adaptive decision parity: PASS.
+- Adaptive parameter isolation test: PASS.
+- Startup ordering / NameError regression test: PASS.
+- Mutable shared StrategyEngine state check: PASS.
+- Regression suite: 6/6 PASS.
 
-- source compilation: PASS
-- V8.3 contracts: PASS
-- live/backtester adaptive parity: PASS
-- synthetic OHLCV backtest smoke test: PASS
-- safety-contract static audit: PASS
+## Existing V8.3 hardening retained
 
-**6/6 PASS**.
+- 19 directional modules.
+- ADAPTIVE_SCORE weighting.
+- Daily peak-equity drawdown.
+- Stale-data protection.
+- Consecutive-cycle fail-closed halt.
+- BOT_SYMBOL emergency-stop default.
+- Managed-order cleanup.
+- Confirmed divergence.
+- Higher-timeframe S/R close alignment.
+- Actual-fill-based SL/TP.
+- Grid protection and recovery.
+
+## Important
+
+V8.3.1 is a correctness/hardening patch. It does not claim higher future profitability. The primary objective is to ensure the strategy selected in the GUI is the strategy actually executed, independently for every running bot profile.
 
 ## Backtester limitations
 
-The backtester remains an OHLC historical simulator. It cannot reproduce exchange queue position, latency, partial fills, funding, liquidation, order-book microstructure, or every exchange-specific conditional-order behavior. Results should be treated as research evidence, not a profit guarantee.
+The backtester remains an OHLC historical simulator. It cannot reproduce exchange queue position, latency, partial fills, funding, liquidation, order-book microstructure, or every exchange-specific conditional-order behavior.
