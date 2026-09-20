@@ -10,7 +10,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 `UniversalFuturesBot_V8_2_4_AUDITED_STRATEGY_ENGINE.py`
 
-`UniversalFuturesBot_V8_2_MODULAR_ENGINE.py`
+`UniversalFuturesBot_V8_2_MODULAR_ENGINE.py` remains available as the earlier V8.2 baseline.
 
 This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 safety/regression layer and adds a persistent recovery layer, exchange-side reconciliation, isolated bot profiles, and a shared multi-bot trade/session ledger.
 
