@@ -6,7 +6,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.2.5**
+**Current build — V8.2.6**
 
 `UniversalFuturesBot_V8_2_5_GRID_DEFAULT_FIX.py`
 
@@ -18,7 +18,7 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 
 - Multi-exchange futures execution through CCXT
 - Completed-candle strategy evaluation
-- **17 configurable directional modules**
+- **19 configurable directional modules**
 - DIRECT_SHOT and SCORE strategy execution
 - LONG_GRID / SHORT_GRID / NEUTRAL_GRID
 - NEUTRAL_GRID automatic direction changes
@@ -65,6 +65,30 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 - Full live exchange lifecycle: not claimed by this audit.
 
 See **[V8.2.4 Release Notes](docs/V8_2_4_RELEASE_NOTES.md)** and **[V8.2.4 Audit Tests](tests/test_v824_audit.py)**.
+
+## 🆕 V8.2.6 Advanced Strategy Modules — 2026-09-20
+
+V8.2.6 adds two new configurable directional modules to both the live strategy architecture and the strategy-parity backtester:
+
+- **Divergence** — causal/confirmed port of the supplied *Divergence for Many Indicators v4* logic.
+  - MACD, MACD Histogram, RSI, Stochastic, CCI, Momentum, OBV, VWMACD, CMF and MFI.
+  - Regular / Hidden / Regular+Hidden divergence.
+  - Pivot period, source, minimum divergence count, maximum pivots/bars and per-source enable switches.
+  - Unconfirmed/"Don't Wait for Confirmation" divergence is deliberately not used for trading because it would introduce look-ahead.
+
+- **Volume S/R Zones** — numerical strategy port of the supplied *Volume-based Support & Resistance Zones V2* fractal logic.
+  - Four configurable timeframes.
+  - Volume MA threshold.
+  - MAJORITY / ANY / ALL timeframe voting.
+  - CURRENT_ZONE / FRESH_BREAK entry logic.
+  - Trading uses numerical support/resistance states rather than TradingView chart line/fill/label objects.
+
+The directional strategy contract is now **19 modules**. Both modules participate in the central signal engine, Grid SCORE/NEUTRAL_GRID direction source, Hold-All-Reverse persistence and the backtester combination laboratory.
+
+The V8.2.6 backtester also aligns higher-timeframe S/R states at the higher-timeframe candle close and requests additional historical warmup when configured higher-timeframe S/R is enabled, reducing look-ahead risk.
+
+**Local V8.2.6 release artifacts:** the complete live bot, strategy-parity backtester, regression tests and release notes were generated as the V8.2.6 release package for this development session. The available GitHub connector can update repository text files, but does not provide a direct local-file upload operation for these generated Python source files; therefore the repository documentation is updated without falsely claiming the generated source files were committed.
+
 ## 🆕 V8.2.5 Strategy-Parity Backtester
 
 The V8.2.5 backtester was built from the uploaded V8.2.4 live engine plus the previously supplied V8 multi-strategy backtester reference.
@@ -283,7 +307,7 @@ Additional V8.2 hardening:
 - Configuration schema is version 4; runtime checkpoint schema is version 3.
 - V8.2 regression tests cover compilation, GUI attributes, callback resolution, strategy voting, recovery contracts and Grid fail-closed behavior.
 
-## 🧠 17 directional modules
+## 🧠 19 directional modules
 
 The V8 Section 3 strategy engine can use:
 
@@ -304,6 +328,8 @@ The V8 Section 3 strategy engine can use:
 15. Volume
 16. ADX
 17. ATR
+18. Divergence
+19. Volume S/R Zones
 
 The Grid SCORE logic uses the same enabled Section 3 directional modules and their configured parameters.
 
@@ -477,7 +503,7 @@ V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be de
 
 ### V8 — current
 
-- [x] 17 directional modules
+- [x] 19 directional modules
 - [x] DIRECT_SHOT / SCORE execution
 
 ### V8.2.4 audited strategy/execution build
