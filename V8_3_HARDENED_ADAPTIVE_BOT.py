@@ -44,9 +44,10 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.3.1"
-APP_TITLE = "Universal Futures Trading Bot V8.3.1 - Hardened Adaptive Engine"
+APP_VERSION = "V8.3.3"
+APP_TITLE = "Universal Futures Trading Bot V8.3.3 - Hardened Adaptive Defaults"
 
+# V8.3.3 full engine/strategy/configuration audit and orphan-order recovery hardening.
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -58,7 +59,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 
 # V8.2 configuration/runtime contracts.
 CONFIG_SCHEMA_VERSION = 7
-RUNTIME_SCHEMA_VERSION = 4
+RUNTIME_SCHEMA_VERSION = 5  # V8.3.3 runtime adds persistent retired managed-order IDs.
+OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "STRICT_ALL_FILTERS")
 SUPPORTED_EXCHANGES = ("bybit", "binance", "gate", "bitget", "weex")
@@ -76,6 +78,18 @@ ADAPTIVE_MODULE_WEIGHTS = {
 }
 ADAPTIVE_DEFAULT_EDGE = 0.18
 ADAPTIVE_DEFAULT_MIN_WEIGHT = 3.50
+DEFAULT_SIGNAL_MODE = "ADAPTIVE_SCORE"
+DEFAULT_ADAPTIVE_EDGE = "0.18"
+DEFAULT_ADAPTIVE_MIN_WEIGHT = "3.5"
+DEFAULT_USE_MTF = True
+DEFAULT_USE_ADX = True
+DEFAULT_USE_VOLUME = True
+DEFAULT_USE_ATR = False
+DEFAULT_GRID_MODE = "OFF"
+DEFAULT_RISK_MODE = "EQUITY_RISK_%"
+DEFAULT_RISK_PER_TRADE = "1.0"
+DEFAULT_POST_SL_OPPOSITE_LOCK = True
+DEFAULT_NO_SAME_CANDLE = True
 RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
@@ -1678,6 +1692,7 @@ class UniversalFuturesBotGUI:
         self.session_max_trades = 0
 
         self.last_protected_position = None
+        self.retired_managed_order_ids = set()
         self.tp1_be_enabled = True
         self.tp1_be_done = False
         # Exchange-side protection reconciliation.  A position must never
@@ -1875,6 +1890,7 @@ class UniversalFuturesBotGUI:
             },
             "position_state": {
                 "active_trade": self.active_trade,
+                "retired_managed_order_ids": sorted(str(x) for x in self.retired_managed_order_ids if x),
                 "last_protected_position": self._serializable_protected_position(),
                 "tp1_be_done": bool(self.tp1_be_done),
                 "hold_sl_wait_reversal": bool(self.hold_sl_wait_reversal),
@@ -2024,6 +2040,7 @@ class UniversalFuturesBotGUI:
         ps = state.get("position_state") or {}
         self.active_trade = ps.get("active_trade")
         self.last_protected_position = ps.get("last_protected_position")
+        self.retired_managed_order_ids = set(str(x) for x in (ps.get("retired_managed_order_ids") or []) if x)
         self.tp1_be_done = bool(ps.get("tp1_be_done", False))
         self.hold_sl_wait_reversal = bool(ps.get("hold_sl_wait_reversal", False))
         self.hold_sl_threshold_hit = bool(ps.get("hold_sl_threshold_hit", False))
@@ -4028,7 +4045,7 @@ class UniversalFuturesBotGUI:
 
         # Optional ATR volatility filter using the ATR already calculated
         # by the Supertrend engine. Requires ATR/close >= threshold.
-        self.v_use_atr = tk.BooleanVar(value=False)
+        self.v_use_atr = tk.BooleanVar(value=DEFAULT_USE_ATR)
         tk.Checkbutton(
             f_strat,
             text="ATR Volatility Filter",
@@ -4039,7 +4056,7 @@ class UniversalFuturesBotGUI:
         self.e_atr_min_pct.insert(0, "0.30")
         self.e_atr_min_pct.grid(row=14, column=2, padx=2)
 
-        self.v_use_vol = tk.BooleanVar(value=True)
+        self.v_use_vol = tk.BooleanVar(value=DEFAULT_USE_VOLUME)
         tk.Checkbutton(
             f_strat, text="Vol Filter", variable=self.v_use_vol
         ).grid(row=15, column=0, sticky="w")
@@ -4047,7 +4064,7 @@ class UniversalFuturesBotGUI:
         self.e_vol_len.insert(0, "20")
         self.e_vol_len.grid(row=15, column=1, padx=2)
 
-        self.v_use_adx = tk.BooleanVar(value=True)
+        self.v_use_adx = tk.BooleanVar(value=DEFAULT_USE_ADX)
         tk.Checkbutton(
             f_strat, text="ADX Filter", variable=self.v_use_adx
         ).grid(row=16, column=0, sticky="w")
@@ -4055,7 +4072,7 @@ class UniversalFuturesBotGUI:
         self.e_adx_thresh.insert(0, "20")
         self.e_adx_thresh.grid(row=16, column=1, padx=2)
 
-        self.v_use_mtf = tk.BooleanVar(value=True)
+        self.v_use_mtf = tk.BooleanVar(value=DEFAULT_USE_MTF)
         tk.Checkbutton(
             f_strat,
             text="Multi-TF (4h Confluence)",
@@ -4126,7 +4143,7 @@ class UniversalFuturesBotGUI:
         # Signal decision mode.
         # Kept below the Trendline Breakout block so the Strategy & Indicators
         # tab follows the requested visual order.
-        self.v_signal_mode = tk.StringVar(value="ADAPTIVE_SCORE")
+        self.v_signal_mode = tk.StringVar(value=DEFAULT_SIGNAL_MODE)
         tk.Label(f_strat, text="Signal Mode:").grid(row=31, column=0, sticky="w")
         ttk.OptionMenu(
             f_strat,
@@ -4149,15 +4166,15 @@ class UniversalFuturesBotGUI:
 
         tk.Label(f_strat, text="Score (SCORE mode):").grid(row=31, column=2, sticky="e")
         self.e_min_score = tk.Entry(f_strat, width=5)
-        self.e_min_score.insert(0, "4")
+        self.e_min_score.insert(0, "1")
         self.e_min_score.grid(row=31, column=3, padx=2)
         tk.Label(f_strat, text="Adaptive Edge:").grid(row=32, column=4, sticky="e")
         self.e_adaptive_edge = tk.Entry(f_strat, width=6)
-        self.e_adaptive_edge.insert(0, "0.18")
+        self.e_adaptive_edge.insert(0, DEFAULT_ADAPTIVE_EDGE)
         self.e_adaptive_edge.grid(row=32, column=5, padx=2)
         tk.Label(f_strat, text="Adaptive Min Weight:").grid(row=32, column=6, sticky="e")
         self.e_adaptive_min_weight = tk.Entry(f_strat, width=6)
-        self.e_adaptive_min_weight.insert(0, "3.5")
+        self.e_adaptive_min_weight.insert(0, DEFAULT_ADAPTIVE_MIN_WEIGHT)
         self.e_adaptive_min_weight.grid(row=32, column=7, padx=2)
 
         self.v_hold_until_all_reverse = tk.BooleanVar(value=True)
@@ -4302,7 +4319,7 @@ class UniversalFuturesBotGUI:
         f_grid.pack(fill="x", padx=10, pady=5)
 
         tk.Label(f_grid, text="Grid Mode:").grid(row=0, column=0, sticky="w")
-        self.v_grid_mode = tk.StringVar(value="OFF")
+        self.v_grid_mode = tk.StringVar(value=DEFAULT_GRID_MODE)
         ttk.OptionMenu(f_grid, self.v_grid_mode, "OFF", "OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID").grid(row=0, column=1, padx=5, sticky="w")
         tk.Label(f_grid, text="Grid Levels:").grid(row=0, column=2, sticky="e")
         self.e_grid_levels = tk.Entry(f_grid, width=6); self.e_grid_levels.insert(0, "5"); self.e_grid_levels.grid(row=0, column=3, padx=3)
@@ -4382,9 +4399,7 @@ class UniversalFuturesBotGUI:
             justify="left",
         ).grid(row=3, column=0, columnspan=6, sticky="w", pady=(3, 0))
 
-        self.v_size_mode = tk.StringVar(
-            value="EQUITY_RISK_%"
-        )
+        self.v_size_mode = tk.StringVar(value=DEFAULT_RISK_MODE)
 
         ttk.OptionMenu(
             f_risk,
@@ -4403,7 +4418,7 @@ class UniversalFuturesBotGUI:
             f_risk,
             width=8,
         )
-        self.e_risk_pct.insert(0, "1.0")
+        self.e_risk_pct.insert(0, DEFAULT_RISK_PER_TRADE)
         self.e_risk_pct.grid(row=0, column=3, padx=5)
 
         tk.Label(
@@ -5066,13 +5081,13 @@ class UniversalFuturesBotGUI:
                     "5",
                 ),
             )
-            self.v_no_same_candle.set(cfg.get("no_same_candle", True))
+            self.v_no_same_candle.set(cfg.get("no_same_candle", DEFAULT_NO_SAME_CANDLE))
             self.e_cooldown_min.delete(0, tk.END)
             self.e_cooldown_min.insert(0, cfg.get("cooldown_min", "0"))
             self.v_require_opposite_after_exit.set(
             cfg.get(
                 "require_opposite_after_sl",
-                cfg.get("require_opposite_after_exit", True),
+                cfg.get("require_opposite_after_exit", DEFAULT_POST_SL_OPPOSITE_LOCK),
             )
         )
 
@@ -5408,7 +5423,7 @@ class UniversalFuturesBotGUI:
             self.v_sr_vote_mode.set(cfg.get("sr_vote_mode", "MAJORITY"))
             self.v_sr_entry_mode.set(cfg.get("sr_entry_mode", "CURRENT_ZONE"))
 
-            self.v_grid_mode.set(cfg.get("grid_mode", "OFF"))
+            self.v_grid_mode.set(cfg.get("grid_mode", DEFAULT_GRID_MODE))
             for widget, key, default in ((self.e_grid_levels, "grid_levels", "5"), (self.e_grid_spacing, "grid_spacing", "1.0"), (self.e_grid_order_size, "grid_order_size", "10"), (self.e_grid_size_increase, "grid_size_increase", "0"), (self.e_grid_tp, "grid_tp", "1.0"), (self.e_grid_sl, "grid_sl", "6.0"), (self.e_grid_max_exposure, "grid_max_exposure", "100"), (self.e_grid_max_dd, "grid_max_dd", "3.0"), (self.e_grid_score_min, "grid_score_min", "1"), (self.e_grid_recenter, "grid_recenter_distance", "3.0"), (self.e_grid_cooldown, "grid_cooldown", "30")):
                 widget.delete(0, tk.END); widget.insert(0, cfg.get(key, default))
             self.v_grid_trend_filter.set(cfg.get("grid_trend_filter", "OFF"))
@@ -5417,7 +5432,7 @@ class UniversalFuturesBotGUI:
             self.v_use_atr.set(
                 cfg.get(
                     "use_atr",
-                    False,
+                    DEFAULT_USE_ATR,
                 )
             )
 
@@ -5433,7 +5448,7 @@ class UniversalFuturesBotGUI:
             self.v_use_vol.set(
                 cfg.get(
                     "use_vol",
-                    True,
+                    DEFAULT_USE_VOLUME,
                 )
             )
             self.e_vol_len.delete(
@@ -5451,7 +5466,7 @@ class UniversalFuturesBotGUI:
             self.v_use_adx.set(
                 cfg.get(
                     "use_adx",
-                    True,
+                    DEFAULT_USE_ADX,
                 )
             )
             self.e_adx_thresh.delete(
@@ -5469,7 +5484,7 @@ class UniversalFuturesBotGUI:
             self.v_use_mtf.set(
                 cfg.get(
                     "use_mtf",
-                    True,
+                    DEFAULT_USE_MTF,
                 )
             )
 
@@ -5514,18 +5529,18 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "min_score",
-                    "4",
+                    "1",
                 ),
             )
             self.e_adaptive_edge.delete(0, tk.END)
-            self.e_adaptive_edge.insert(0, cfg.get("adaptive_edge", "0.18"))
+            self.e_adaptive_edge.insert(0, cfg.get("adaptive_edge", DEFAULT_ADAPTIVE_EDGE))
             self.e_adaptive_min_weight.delete(0, tk.END)
-            self.e_adaptive_min_weight.insert(0, cfg.get("adaptive_min_weight", "3.5"))
+            self.e_adaptive_min_weight.insert(0, cfg.get("adaptive_min_weight", DEFAULT_ADAPTIVE_MIN_WEIGHT))
 
             self.v_size_mode.set(
                 cfg.get(
                     "size_mode",
-                    "EQUITY_RISK_%",
+                    DEFAULT_RISK_MODE,
                 )
             )
 
@@ -5537,7 +5552,7 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "risk_pct",
-                    "1.0",
+                    DEFAULT_RISK_PER_TRADE,
                 ),
             )
 
@@ -6138,8 +6153,15 @@ class UniversalFuturesBotGUI:
         """
         try:
             if self.exchange_id == "bybit":
-                return self.exchange.fetch_open_orders(symbol, limit=50)
-            return self.exchange.fetch_open_orders(symbol)
+                rows = self.exchange.fetch_open_orders(symbol, limit=OPEN_ORDER_PAGE_LIMIT)
+            else:
+                rows = self.exchange.fetch_open_orders(symbol)
+            if strict and self.exchange_id == "bybit" and len(rows) >= OPEN_ORDER_PAGE_LIMIT:
+                raise RuntimeError(
+                    f"Open-order snapshot for {symbol} reached the {OPEN_ORDER_PAGE_LIMIT}-order page limit; "
+                    "refusing to assume the inventory is complete."
+                )
+            return rows
         except Exception as e:
             self.log(f"Open-order read warning: {e}")
             if strict:
@@ -6223,6 +6245,12 @@ class UniversalFuturesBotGUI:
             self.log(f"Specific order query inconclusive | ID={oid} | {e}")
             return None
 
+    def _remember_managed_order_ids(self, ids):
+        """Persist exact exchange order IDs previously created/tracked by this bot."""
+        for oid in (ids or set()):
+            if oid:
+                self.retired_managed_order_ids.add(str(oid))
+
     def _known_managed_order_ids(self, symbol):
         ids=set()
         p=self.last_protected_position or {}
@@ -6233,6 +6261,30 @@ class UniversalFuturesBotGUI:
             if gs.get(k): ids.add(str(gs[k]))
         for meta in (gs.get("entry_orders") or {}).values():
             if meta.get("id"): ids.add(str(meta["id"]))
+        ids.update(str(x) for x in self.retired_managed_order_ids if x)
+        return ids
+
+    @staticmethod
+    def _checkpoint_managed_order_ids(state):
+        """Extract only exact order IDs persisted by this bot profile."""
+        ids = set()
+        if not isinstance(state, dict):
+            return ids
+        ps = state.get("position_state") or {}
+        lp = ps.get("last_protected_position")
+        if isinstance(lp, dict):
+            for key in ("sl_id", "tp1_id", "tp2_id"):
+                if lp.get(key):
+                    ids.add(str(lp[key]))
+        retired = ps.get("retired_managed_order_ids") or []
+        ids.update(str(x) for x in retired if x)
+        gs = state.get("grid_state") or {}
+        for key in ("tp_order_id", "sl_order_id"):
+            if gs.get(key):
+                ids.add(str(gs[key]))
+        for meta in (gs.get("entry_orders") or {}).values():
+            if isinstance(meta, dict) and meta.get("id"):
+                ids.add(str(meta["id"]))
         return ids
 
     def _cancel_known_managed_orders(self, symbol):
@@ -7858,6 +7910,7 @@ class UniversalFuturesBotGUI:
     def _grid_stop(self, symbol, reason, cooldown_seconds=0):
         """Stop Grid safely: close inventory before removing its protection."""
         self.log(f"GRID STOP: {reason}")
+        self._remember_managed_order_ids(self._known_managed_order_ids(symbol))
         self._grid_cancel_entry_orders(symbol)
         pos = self.fetch_position(symbol)
         close_succeeded = True
@@ -7988,7 +8041,8 @@ class UniversalFuturesBotGUI:
                 return False
 
         # Only after the symbol is confirmed flat is it safe to remove old
-        # basket TP/SL protection.
+        # basket TP/SL protection. Retain exact IDs in recovery state first.
+        self._remember_managed_order_ids(self._known_managed_order_ids(symbol))
         self._grid_cancel_managed_orders(symbol)
         if self.fetch_position(symbol):
             self.log(
@@ -8297,6 +8351,27 @@ class UniversalFuturesBotGUI:
             raise ValueError("Adaptive Edge must be between 0 and 1.")
         if adaptive_min_weight <= 0:
             raise ValueError("Adaptive Min Weight must be greater than 0.")
+        size_mode = str(self.v_size_mode.get()).strip().upper()
+        if size_mode not in ("EQUITY_RISK_%", "FIXED_QTY"):
+            raise ValueError("Sizing Mode must be EQUITY_RISK_% or FIXED_QTY.")
+        risk_pct = float(str(self.e_risk_pct.get()).strip())
+        fixed_qty = float(str(self.e_fixed_qty.get()).strip())
+        if risk_pct <= 0 or risk_pct >= 100:
+            raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
+        if fixed_qty <= 0:
+            raise ValueError("Fixed Qty must be greater than 0.")
+        max_dd = float(str(self.e_max_dd.get()).strip())
+        emergency_loss = float(str(self.e_emergency_capital_pct.get()).strip())
+        if not 0.0 <= max_dd < 100.0:
+            raise ValueError("Max Daily Drawdown must be between 0% and less than 100%.")
+        if not 0.0 <= emergency_loss < 100.0:
+            raise ValueError("Emergency Capital Loss Stop must be between 0% and less than 100%.")
+        emergency_scope = str(self.v_emergency_scope.get()).strip().upper()
+        if emergency_scope not in ("BOT_SYMBOL", "ALL_ACCOUNT"):
+            raise ValueError("Emergency Scope must be BOT_SYMBOL or ALL_ACCOUNT.")
+        cooldown = float(str(self.e_cooldown_min.get()).strip())
+        if cooldown < 0:
+            raise ValueError("Cooldown cannot be negative.")
         self._grid_validate_settings()
         return True
 
@@ -8407,6 +8482,7 @@ class UniversalFuturesBotGUI:
                 self.trade_pnls = []
                 self.active_trade = None
                 self.last_protected_position = None
+                self.retired_managed_order_ids = set()
                 self.tp1_be_done = False
                 self.reentry_direction_lock = None
                 self.reentry_lock_reason = ""
@@ -8432,17 +8508,39 @@ class UniversalFuturesBotGUI:
                 )
 
                 # A genuinely new session must never silently adopt an existing
-                # position or stale orders. This remains the fail-closed safety
-                # rule that protects against manual/external inventory.
+                # position or unknown/manual orders. Exact IDs from the previous
+                # checkpoint are the only orders eligible for automatic cleanup.
                 if grid_cfg["mode"] in ("OFF", "DIRECT_SHOT"):
                     existing_position = self.fetch_position(self.symbol)
                     existing_orders = self.fetch_open_orders_safe(self.symbol, strict=True)
-                    if existing_position or existing_orders:
+                    if existing_position:
                         raise RuntimeError(
-                            "START BLOCKED: existing position/open orders found on this symbol. "
+                            "START BLOCKED: existing position found on this symbol. "
                             "Choose Resume if this inventory belongs to this bot, or "
-                            "close/clean the inventory before starting a new session."
+                            "close/clean the position before starting a new session."
                         )
+                    if existing_orders:
+                        checkpoint_ids = self._checkpoint_managed_order_ids(self.resume_candidate)
+                        open_ids = {str(order.get("id")) for order in existing_orders if order.get("id")}
+                        orphan_bot_orders = open_ids & checkpoint_ids
+                        unknown_orders = open_ids - checkpoint_ids
+                        if orphan_bot_orders and not unknown_orders:
+                            self.log(
+                                "START CLEANUP: account is flat and all existing open orders "
+                                f"are verified as previous bot-managed orders ({len(orphan_bot_orders)}). "
+                                "Cancelling them before starting the new session."
+                            )
+                            self._cancel_known_managed_orders_from_ids(self.symbol, orphan_bot_orders)
+                            existing_orders = self.fetch_open_orders_safe(self.symbol, strict=True)
+                            if existing_orders:
+                                raise RuntimeError("START BLOCKED: previous bot-managed orders could not be fully cancelled.")
+                            self.log("START CLEANUP VERIFIED: previous bot-managed orders removed; account is flat.")
+                        else:
+                            raise RuntimeError(
+                                "START BLOCKED: existing position/open orders found on this symbol. "
+                                "Unknown/manual orders will never be adopted automatically. "
+                                "Cancel/clean them before starting a new session."
+                            )
 
             # Never change leverage on a resumed live position. Use the exchange
             # position's actual leverage for recovery; configure leverage normally
@@ -10854,6 +10952,9 @@ class UniversalFuturesBotGUI:
                                 reason="PROTECTION/EXTERNAL CLOSE",
                                 balance=flat_balance,
                             )
+                        self._remember_managed_order_ids(
+                            self._known_managed_order_ids(self.symbol)
+                        )
                         pos_type = "NONE"
                         pos_qty = 0.0
                         pos_entry = 0.0
