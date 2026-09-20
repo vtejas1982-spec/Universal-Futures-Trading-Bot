@@ -44,8 +44,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.2.1"
-APP_TITLE = "Universal Futures Trading Bot V8.2.1 - Multi-Exchange (No KuCoin)"
+APP_VERSION = "V8.2.2"
+APP_TITLE = "Universal Futures Trading Bot V8.2.2 - Multi-Exchange (No KuCoin)"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -62,7 +62,7 @@ RUNTIME_SCHEMA_VERSION = 3
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "STRICT_ALL_FILTERS")
 SUPPORTED_EXCHANGES = ("bybit", "binance", "gate", "bitget", "weex")
-PROFILE_OPERATION_SCHEMA_VERSION = 1
+PROFILE_OPERATION_SCHEMA_VERSION = 2  # V8.2.2 explicit current-vs-selected profile controls
 
 
 class StrategyEngine:
@@ -2106,12 +2106,23 @@ class UniversalFuturesBotGUI:
             parent=self.root,
         )
 
-    def _delete_selected_or_current_profile(self):
+    def _delete_current_profile(self):
+        """Delete the profile named in the Bot Profile ID field."""
+        if self.is_running:
+            messagebox.showwarning("Bot running", "Stop the bot before deleting a profile.", parent=self.root)
+            return
+        self._delete_profile_by_id(self._sanitize_profile_id(self.v_bot_id.get()))
+
+    def _delete_selected_profile(self):
+        """Delete the profile selected in the Profile Manager tree."""
+        self._delete_profile_by_id(self._selected_profile_id())
+
+    def _delete_profile_by_id(self, profile):
         """Safely delete saved profile config/recovery state; preserve trade history."""
         if self.is_running:
             messagebox.showwarning("Bot running", "Stop the bot before deleting a profile.", parent=self.root)
             return
-        profile = self._sanitize_profile_id(self._selected_profile_id())
+        profile = self._sanitize_profile_id(profile)
         if self._profile_lock_is_active(profile):
             messagebox.showerror("Delete Profile", f"Profile {profile} is active in another bot process. Stop it first.", parent=self.root)
             return
@@ -2153,10 +2164,18 @@ class UniversalFuturesBotGUI:
             if legacy_path and legacy_path.exists():
                 legacy_path.unlink()
                 removed.append(str(legacy_path))
-            if self._sanitize_profile_id(self.bot_profile_id) == profile:
-                self.bot_profile_id = "BOT-01"
-                self.v_bot_id.set("BOT-01")
+            current_profile = self._sanitize_profile_id(self.bot_profile_id)
+            current_field = self._sanitize_profile_id(self.v_bot_id.get())
+            if current_profile == profile or current_field == profile:
+                remaining = self._list_saved_profiles()
+                next_profile = remaining[0] if remaining else "BOT-01"
+                self.bot_profile_id = self._sanitize_profile_id(next_profile)
+                self.v_bot_id.set(self.bot_profile_id)
             self._refresh_profile_list(select_profile=self.bot_profile_id)
+            selected_after = self._selected_profile_id()
+            if selected_after and selected_after != self._sanitize_profile_id(self.v_bot_id.get()):
+                self.v_bot_id.set(selected_after)
+                self.bot_profile_id = selected_after
             self.log(f"PROFILE DELETED: {profile} | Removed {len(removed)} profile location(s); master trade history preserved.")
             messagebox.showinfo("Profile Deleted", f"Profile {profile} was deleted.\n\nMaster trade/session history was preserved.", parent=self.root)
         except Exception as e:
@@ -2704,7 +2723,7 @@ class UniversalFuturesBotGUI:
         self.e_bot_id.grid(row=4, column=1, padx=5, pady=2, sticky="w")
         ttk.Button(
             f_api,
-            text="Load Profile",
+            text="Load Profile ID",
             command=self.load_profile_from_ui,
         ).grid(row=4, column=2, padx=4, pady=2, sticky="w")
         ttk.Button(
@@ -2714,8 +2733,8 @@ class UniversalFuturesBotGUI:
         ).grid(row=4, column=3, padx=4, pady=2, sticky="w")
         ttk.Button(
             f_api,
-            text="Delete Profile",
-            command=self._delete_selected_or_current_profile,
+            text="Delete Profile ID",
+            command=self._delete_current_profile,
         ).grid(row=4, column=4, padx=4, pady=2, sticky="w")
 
         tk.Label(
@@ -2765,7 +2784,7 @@ class UniversalFuturesBotGUI:
         ttk.Button(
             profile_buttons,
             text="Delete Selected",
-            command=self._delete_selected_or_current_profile,
+            command=self._delete_selected_profile,
         ).pack(side="left", padx=2)
 
         tk.Label(
