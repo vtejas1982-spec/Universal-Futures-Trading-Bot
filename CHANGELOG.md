@@ -1,3 +1,40 @@
+## V8.3.0 — Hardened Adaptive Engine — 2026-09-20
+
+### Added
+- Added `ADAPTIVE_SCORE`, a correlation-aware weighted voting mode across the 19-module V8 strategy family.
+- Added Adaptive Edge and Adaptive Minimum Weight configuration.
+- VOL and ATR are regime gates in Adaptive mode rather than independent candle-direction votes.
+- Added daily peak-equity drawdown protection and persisted session/daily peak state.
+- Added stale-market-data detection and a three-consecutive-cycle-error fail-closed halt.
+- Added emergency-stop scope with safe `BOT_SYMBOL` default and explicit `ALL_ACCOUNT` option.
+- Added managed-order cleanup for normal/Grid shutdown and strategy reversal paths.
+- Added V8.3 hardened strategy-parity backtester and 5/5 regression tests.
+
+### Fixed / Hardened
+- Configuration schema bumped from 6 to 7.
+- Runtime checkpoint schema bumped from 3 to 4.
+- Daily drawdown no longer relies only on closed wallet balance; unrealized equity drawdown is included through the daily peak-equity reference.
+- Emergency circuit breaker no longer defaults to closing unrelated account positions.
+- Normal cleanup/reversal paths prefer known bot-managed order IDs instead of broad symbol-wide cancellation.
+- Existing confirmed-candle, confirmed-divergence and higher-timeframe look-ahead protections remain in place.
+
+### Modified
+- New profiles default to `ADAPTIVE_SCORE`; existing saved profiles retain their saved strategy mode.
+- Backtester defaults to the same Adaptive strategy family and exposes Adaptive Edge / Minimum Weight.
+- Release documentation now records the exact strategy/risk hardening contract.
+
+### Validation
+- Live bot compilation: PASS.
+- Backtester compilation: PASS.
+- Live/backtester Adaptive decision parity: PASS.
+- Synthetic backtest smoke test: PASS.
+- Safety-contract static audit: PASS.
+- Regression suite: **5/5 PASS**.
+
+### Important
+V8.3.0 does not claim a guaranteed maximum-profit configuration. The new strategy is designed to improve signal quality and robustness; historical backtests remain OHLC approximations and demo/testnet validation is required before live deployment.
+
+---
 ## V8.2.6 — Advanced Strategy Modules + Backtester Parity — 2026-09-20
 
 ### Added
