@@ -53,6 +53,7 @@ V8.3.0 is the hardening pass after V8.2.6. It focuses on decision quality, risk-
 - Three-consecutive-cycle-error fail-closed safety halt.
 - Emergency-stop scope with safe default **BOT_SYMBOL** and explicit **ALL_ACCOUNT** option.
 - Managed-order cleanup for normal/Grid shutdown and reversal paths.
+- Adaptive Grid SCORE/NEUTRAL_GRID parity: weighted evidence is retained inside Grid direction filtering.
 - V8.3 hardened backtester and 5/5 regression suite.
 
 ### Modified
