@@ -40,3 +40,12 @@ Existing saved profile configuration remains authoritative.
 ## Important
 
 These are engineering defaults and safety contracts, not a profitability guarantee.
+
+
+## Backtester parity
+
+V8.3.3 keeps the historical backtester aligned with the live strategy contract. The backtester mirrors the live StrategyEngine Adaptive decision/diagnostic methods, explicit per-profile Adaptive Edge / Minimum Weight parameters, causal Volume S/R handling, and the V8.3.3 completed-candle execution model.
+
+Runtime-only exchange protections such as managed-order checkpoint ownership, strict open-order pagination safety and startup inventory preflight are intentionally not simulated as historical price signals.
+
+Regression coverage: tests/test_v833_backtester_parity.py — 8/8 PASS.
