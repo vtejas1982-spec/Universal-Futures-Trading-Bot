@@ -6,7 +6,9 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.2.2**
+**Current build — V8.2.4**
+
+`UniversalFuturesBot_V8_2_4_AUDITED_STRATEGY_ENGINE.py`
 
 `UniversalFuturesBot_V8_2_MODULAR_ENGINE.py`
 
@@ -35,6 +37,34 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 - Telegram alerts
 - Dashboard and CSV trade logging
 
+## 🆕 V8.2.4 Strategy + Execution Audit — 2026-09-20
+
+### Added
+- **ANY_NON_CONFLICTING** signal mode: any enabled directional module may trigger when the final direction is not contradictory.
+- Explicit conflict blocking: EMA=BULL + VWAP Delta=BEAR remains **NO TRADE** in ANY_NON_CONFLICTING.
+- `StrategyEngine.decision_reason()` for deterministic signal diagnostics.
+- Per-module signal-state logging and explicit decision reasons.
+- Configuration schema version 5.
+
+### Fixed
+- `2_SIGNALS`, `3_SIGNALS` and `4_SIGNALS` now enforce their named confirmation count inside the central StrategyEngine.
+- Invalid saved signal modes fall back safely to `SINGLE_SIGNAL`.
+- Worker-thread trade-limit and max-drawdown shutdown paths no longer call the Tkinter-touching `stop_bot()` method.
+- Persisted schema values use the central schema constants.
+
+### Modified
+- The signal log now shows states such as `EMA_CROSS:BULL,VWAP_DELTA:BEAR`, the required confirmation count and the decision reason.
+- Existing Grid, recovery, profile, SL/TP and protection architecture is retained.
+- The V8.2.3 runtime symbol normalization fix remains included.
+
+### Validation
+- Python compilation: PASS.
+- GUI attribute/callback audit: PASS.
+- Save/load coverage audit: PASS.
+- V8.2.4 regression tests: **12/12 PASS** locally.
+- Full live exchange lifecycle: not claimed by this audit.
+
+See **[V8.2.4 Release Notes](docs/V8_2_4_RELEASE_NOTES.md)** and **[V8.2.4 Audit Tests](tests/test_v824_audit.py)**.
 ## 🆕 What was fixed / added / modified
 
 ### 1. Crash / restart recovery
@@ -375,7 +405,7 @@ Keep credentials outside Git. See [SECURITY.md](SECURITY.md).
 ### 4. Run the current build
 
 ```powershell
-py UniversalFuturesBot_V8_2_MODULAR_ENGINE.py
+py UniversalFuturesBot_V8_2_4_AUDITED_STRATEGY_ENGINE.py
 ```
 
 ### 5. Test recovery safely
@@ -430,6 +460,12 @@ V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be de
 
 - [x] 17 directional modules
 - [x] DIRECT_SHOT / SCORE execution
+
+### V8.2.4 audited strategy/execution build
+- Added ANY_NON_CONFLICTING and explicit signal-decision diagnostics.
+- Enforced 2/3/4 confirmation semantics inside StrategyEngine.
+- Fixed worker-thread shutdown paths that called Tkinter-touching stop_bot().
+- Added 12 regression checks covering strategy conflict handling, confirmation counts, configuration coverage and worker shutdown safety.
 
 ### V8.2.3 checkpoint fix
 - Fixed live configuration checkpoint false warnings caused by comparing GUI symbols such as `OP/USDT` with CCXT canonical runtime symbols such as `OP/USDT:USDT`.
