@@ -67,7 +67,7 @@ The goal is not a guaranteed maximum-profit setting. The Adaptive engine reduces
 
 See **[V8.3.0 Release Notes](docs/V8_3_HARDENED_ADAPTIVE_RELEASE_NOTES.md)** and **[V8.3 Adaptive Strategy Specification](docs/V8_3_HARDENED_ADAPTIVE_STRATEGY.md)**.
 
-`tests/test_v830_hardened.py`: **5/5 PASS** locally.
+`tests/test_v830_hardened.py`: **6/6 PASS** locally.
 
 `V8_3_HARDENED_ADAPTIVE_RELEASE.zip` is the local release package for this build.
 
