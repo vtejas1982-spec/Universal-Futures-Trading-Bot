@@ -430,3 +430,8 @@ V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be de
 
 - [x] 17 directional modules
 - [x] DIRECT_SHOT / SCORE execution
+
+### V8.2.3 checkpoint fix
+- Fixed live configuration checkpoint false warnings caused by comparing GUI symbols such as `OP/USDT` with CCXT canonical runtime symbols such as `OP/USDT:USDT`.
+- The running symbol is now normalized through the connected exchange before the live identity check.
+- Real symbol changes while running remain blocked.
