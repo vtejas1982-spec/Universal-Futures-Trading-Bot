@@ -71,7 +71,7 @@ The bot remains one-way/single-position oriented. Actual exchange position entry
 - synthetic OHLCV backtest smoke test: PASS
 - safety-contract static audit: PASS
 
-**5/5 PASS**.
+**6/6 PASS**.
 
 ## Backtester limitations
 
