@@ -1,3 +1,30 @@
+## V8.2.5 — Strategy-Parity Backtester + Grid Default Audit — 2026-09-20
+
+### Added
+- Added the V8.2.5 strategy-parity backtester package locally with all 17 live directional modules, live signal modes, normal SL/TP/risk behavior, Hold-All-Reverse, post-SL lock, Grid modes, sweep, walk-forward, combination lab, caching and exports.
+- Added V8 bot-config JSON import/export to the backtester.
+- Added regression coverage for all 17 modules and the V8.2.4 signal contract.
+
+### Fixed
+- Fixed the live Grid default: Global Grid SL changed from 5.0% to 6.0%. The previous 5.0% value was invalid with 5 levels × 1.0% spacing because the validator requires SL to be greater than the total grid depth.
+- Backtester EMA Filter now has its own EMA period instead of incorrectly reusing the EMA Cross slow period.
+- Backtester indicator calculations are conditional in the same places as the live bot.
+- Backtester now includes the live Liquidity Swings and Trendline modules that were absent from the older reference backtester.
+- Backtester signal decisions use the centralized V8.2.4 StrategyEngine rather than the old ALL/MAJORITY-only rule.
+
+### Modified
+- Added exact live-style protection conversion, TP1/TP2 split handling, break-even, reversal-hold checks and Grid basket protection simulation.
+- Added conservative same-candle SL/TP ambiguity handling: SL first.
+- Added monthly statistics to Excel output.
+
+### Validation
+- Live V8.2.5 source compilation: PASS.
+- Backtester compilation: PASS.
+- Indicator source parity check: all 16 indicator functions match the uploaded V8.2.4 bot implementations.
+- Backtester regression suite: 6/6 PASS.
+- Synthetic normal and Grid simulations: PASS.
+
+---
 ## V8.2.4 — Strategy Decision + Execution Safety Audit — 2026-09-20
 
 ### Added
