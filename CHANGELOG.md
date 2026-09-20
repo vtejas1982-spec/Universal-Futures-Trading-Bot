@@ -1,5 +1,37 @@
 # Changelog
 
+## V8.1 Engine + Strategy Safety Audit — 2026-09-20
+
+### Fixed
+
+- Validated API credentials before profile-lock acquisition.
+- Recovery now requires verifiable saved position identity before adopting a live position.
+- Recovery blocks an open position when saved protection state is missing.
+- Recovery immediately reconciles normal-position protection.
+- Multiple active positions for one symbol are treated as an unsafe multi-position/hedge state.
+- Bybit normal entry and normal emergency close explicitly use positionIdx=0.
+- Trendline breakout buffer is bounded to less than 100%.
+- Generic CCXT trigger creation checks explicit triggerPrice/reduceOnly capability results when available.
+- Profile-folder identity is authoritative when config.json contains a stale/mismatched bot_id.
+
+### Modified
+
+- Extracted signal voting into pure _decide_signal() logic without changing the existing signal modes.
+- Added configuration schema version 3.
+
+### Added
+
+- 10 automated V8.1 static/regression checks in tests/test_v81_static_audit.py.
+
+### Validation
+
+- Python compile: PASS.
+- Static GUI/configuration/callback audit: PASS.
+- V8.1 regression checks: 10/10 PASS.
+- Full exchange lifecycle remains untested live/demo in this pass.
+
+
+
 ## V8 Recovery + Multi-Bot Build — 2026-09-20
 
 ### Added
