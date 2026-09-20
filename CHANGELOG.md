@@ -1,3 +1,31 @@
+## V8.3.3 — Full Engine / Strategy / Configuration Audit — 2026-09-20
+
+### Fixed
+- Fixed the V8.3.2 orphan-order ownership gap: exact SL/TP/Grid order IDs are now retained in runtime recovery state after the live position becomes flat.
+- Fixed strict Bybit open-order safety so a full 50-order page cannot be mistaken for a complete inventory snapshot.
+- Added startup preflight validation for sizing mode, risk %, fixed quantity, daily drawdown, emergency loss, emergency scope and cooldown.
+
+### Added
+- Runtime schema version 5.
+- Persistent `retired_managed_order_ids`.
+- Centralized requested new-profile defaults.
+- Full-audit regression test file `tests/test_v833_full_audit.py`.
+- V8.3.3 release notes.
+
+### Modified
+- New-profile defaults are Adaptive Conservative defaults; existing saved profiles remain authoritative.
+- Grid shutdown/direction cleanup retains exact managed IDs for future orphan cleanup.
+- Unknown/manual orders remain fail-closed and are never auto-adopted.
+
+### Validation
+- Source compilation/import: PASS.
+- Adaptive isolation: PASS.
+- Retired-order checkpoint extraction: PASS.
+- Strict open-order page guard: PASS.
+- Runtime checkpoint serialization: PASS.
+
+---
+
 ## V8.3.1 — Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
 
 ### Fixed
