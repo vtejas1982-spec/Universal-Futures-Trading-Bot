@@ -8,7 +8,7 @@ import hashlib
 import re
 from datetime import datetime, timezone
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import ccxt
 import numpy as np
@@ -1048,6 +1048,7 @@ class UniversalFuturesBotGUI:
         self._build_ui()
         self.update_estimated_window()
         self.load_settings()
+        self._refresh_profile_list(select_profile=self.bot_profile_id)
 
         # Give Tk time to finish constructing the GUI before showing a
         # recovery question.  A previous RUNNING/CRASHED checkpoint is never
@@ -1674,14 +1675,259 @@ class UniversalFuturesBotGUI:
             )
             return
         try:
-            self.bot_profile_id = self._sanitize_profile_id(self.v_bot_id.get())
+            candidate = self._sanitize_profile_id(self.v_bot_id.get())
+            candidate_path = PROFILE_DIR / candidate / "config.json"
+            if not candidate_path.exists() and not (
+                candidate == "BOT-01" and Path(CONFIG_FILE).exists()
+            ):
+                raise RuntimeError(
+                    f"No saved configuration exists for profile {candidate}. "
+                    "Use Save Profile or Copy Selected Profile first."
+                )
+            self.bot_profile_id = candidate
+            self.v_bot_id.set(candidate)
             self.resume_prompt_shown = False
             self.resume_requested = False
             self.resume_candidate = None
             self.load_settings(show_resume=False)
+            self._refresh_profile_list(select_profile=self.bot_profile_id)
             self._check_resume_candidate()
         except Exception as e:
             messagebox.showerror("Profile load failed", str(e))
+
+    def _profile_lock_is_active(self, profile_id):
+        """Return True when another live process owns the profile lock."""
+        profile = self._sanitize_profile_id(profile_id)
+        lock_path = PROFILE_DIR / profile / "bot.lock"
+        if not lock_path.exists():
+            return False
+        payload = self._read_json_file(lock_path) or {}
+        try:
+            pid = int(payload.get("pid") or 0)
+        except Exception:
+            pid = 0
+        if pid and pid == os.getpid():
+            return False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _profile_strategy_summary(self, cfg):
+        checks = [
+            ("use_st","ST"),("use_ema","EMA"),("use_ema_cross","EMA Cross"),
+            ("use_macd","MACD"),("use_rsi","RSI"),("use_bb","BB"),
+            ("use_stoch","Stoch"),("use_vwap","VWAP"),("use_vwap_delta","VWAP Delta"),
+            ("use_vidya","VIDYA"),("use_nwe","NWE"),("use_liq_swings","Liquidity"),
+            ("use_trendline","Trendline"),("use_mtf","4H MTF"),("use_vol","Volume"),
+            ("use_adx","ADX"),("use_atr","ATR"),
+        ]
+        return ", ".join(label for key,label in checks if bool(cfg.get(key))) or "None"
+
+    def _profile_summary_record(self, profile_id):
+        profile = self._sanitize_profile_id(profile_id)
+        path = PROFILE_DIR / profile / "config.json"
+        if not path.exists() and profile == "BOT-01" and Path(CONFIG_FILE).exists():
+            path = Path(CONFIG_FILE)
+        if not path.exists():
+            return None
+        cfg = self._read_json_file(path) or {}
+        runtime = self._read_json_file(PROFILE_DIR / profile / "runtime_state.json") or {}
+        status = str(runtime.get("status") or "CONFIGURED").upper()
+        if self._profile_lock_is_active(profile):
+            status = "RUNNING"
+        grid = str(cfg.get("grid_mode") or "OFF").upper()
+        signal = str(cfg.get("signal_mode") or "SINGLE_SIGNAL").upper()
+        mode = grid if grid not in ("OFF","DIRECT_SHOT") else signal
+        size_mode = str(cfg.get("size_mode") or "EQUITY_RISK_%")
+        qty = f"Risk {cfg.get('risk_pct','1.0')}%" if size_mode == "EQUITY_RISK_%" else f"Fixed {cfg.get('fixed_qty','0.001')}"
+        updated = runtime.get("updated_at_utc")
+        if not updated:
+            try: updated = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+            except Exception: updated = ""
+        return {
+            "profile":profile,"exchange":str(cfg.get("exchange") or "").upper(),
+            "account":str(cfg.get("account_mode") or ""),"symbol":str(cfg.get("symbol") or ""),
+            "timeframe":str(cfg.get("timeframe") or ""),"leverage":str(cfg.get("leverage") or ""),
+            "mode":mode,"qty":qty,"grid":grid,"status":status,
+            "strategy":self._profile_strategy_summary(cfg),
+            "updated":str(updated).replace("T"," ")[:19],
+        }
+
+    def _list_saved_profiles(self):
+        ids = set()
+        try:
+            if PROFILE_DIR.exists():
+                for folder in PROFILE_DIR.iterdir():
+                    if folder.is_dir() and (folder / "config.json").exists():
+                        ids.add(self._sanitize_profile_id(folder.name))
+        except Exception:
+            pass
+        if Path(CONFIG_FILE).exists():
+            ids.add("BOT-01")
+        return sorted(ids)
+
+    def _set_profile_details_text(self, content):
+        box = getattr(self, "profile_details", None)
+        if box is None: return
+        box.configure(state="normal")
+        box.delete("1.0", tk.END)
+        box.insert("1.0", content)
+        box.configure(state="disabled")
+
+    def _selected_profile_id(self):
+        tree = getattr(self, "profile_tree", None)
+        if tree is None: return self._sanitize_profile_id(self.v_bot_id.get())
+        selection = tree.selection()
+        if not selection: return self._sanitize_profile_id(self.v_bot_id.get())
+        values = tree.item(selection[0], "values")
+        return self._sanitize_profile_id(values[0]) if values else self._sanitize_profile_id(self.v_bot_id.get())
+
+    def _profile_details_text(self, profile_id):
+        profile = self._sanitize_profile_id(profile_id)
+        path = PROFILE_DIR / profile / "config.json"
+        if not path.exists() and profile == "BOT-01" and Path(CONFIG_FILE).exists():
+            path = Path(CONFIG_FILE)
+        cfg = self._read_json_file(path) or {}
+        if not cfg: return f"Profile {profile} has no saved configuration."
+        runtime = self._read_json_file(PROFILE_DIR / profile / "runtime_state.json") or {}
+        out = [
+            f"PROFILE: {profile}", "="*92,
+            "CORE / MARKET",
+            f"Exchange       : {cfg.get('exchange','')}",
+            f"Account Mode   : {cfg.get('account_mode','')}",
+            f"Symbol / Pair  : {cfg.get('symbol','')}",
+            f"Timeframe      : {cfg.get('timeframe','')}",
+            f"Leverage       : {cfg.get('leverage','')}x",
+            "",
+            "STRATEGY",
+            f"Signal Mode    : {cfg.get('signal_mode','')}",
+            f"Minimum Score  : {cfg.get('min_score','')}",
+            f"Strategy       : {self._profile_strategy_summary(cfg)}",
+            f"Hold All Reverse: {cfg.get('hold_until_all_reverse','')}",
+            "",
+            "GRID",
+            f"Grid Mode      : {cfg.get('grid_mode','')}",
+            f"Levels         : {cfg.get('grid_levels','')}",
+            f"Spacing        : {cfg.get('grid_spacing','')}%",
+            f"Order Size     : {cfg.get('grid_order_size','')} USDT",
+            f"Size Increase  : {cfg.get('grid_size_increase','')}%",
+            f"Grid TP / SL   : {cfg.get('grid_tp','')}% / {cfg.get('grid_sl','')}%",
+            f"Max Exposure   : {cfg.get('grid_max_exposure','')} USDT",
+            f"Max Grid DD    : {cfg.get('grid_max_dd','')}%",
+            f"Grid Score Min : {cfg.get('grid_score_min','')}",
+            f"Trend Filter   : {cfg.get('grid_trend_filter','')}",
+            "",
+            "SIZING / PROTECTION",
+            f"Size Mode      : {cfg.get('size_mode','')}",
+            f"Risk %         : {cfg.get('risk_pct','')}%",
+            f"Fixed Qty      : {cfg.get('fixed_qty','')}",
+            f"Daily DD       : {cfg.get('max_dd','')}%",
+            f"Emergency Loss : {cfg.get('emergency_capital_pct','')}%",
+            f"SL / TP Mode   : {cfg.get('sl_mode',cfg.get('sltp_mode',''))} / {cfg.get('tp_mode',cfg.get('sltp_mode',''))}",
+            f"SL / TP1 / TP2 : {cfg.get('sl_pct','')}% / {cfg.get('tp1_pct','')}% / {cfg.get('tp2_pct','')}%",
+            f"TP Quantity    : {cfg.get('tp_qty_mode','')}",
+            f"TP1 / TP2 Close: {cfg.get('tp1_close','')} / {cfg.get('tp2_close','')}",
+            "",
+            "ALERTS / RECOVERY",
+            f"Telegram       : {cfg.get('tele_enable','')}",
+            f"Runtime Status : {runtime.get('status','CONFIGURED')}",
+            f"Session ID     : {runtime.get('session_id','')}",
+            f"Resumed        : {runtime.get('resumed',False)}",
+            f"Last Checkpoint: {runtime.get('updated_at_utc','')}",
+            "",
+            "ALL SAVED SETTINGS (secrets masked)", "-"*92,
+        ]
+        secret_keys = {"api_key","api_secret","tele_token"}
+        for key in sorted(cfg):
+            value = cfg.get(key)
+            if key in secret_keys:
+                value = "*" * min(max(len(str(value)),8),24) if value else ""
+            out.append(f"{key:30} = {value}")
+        return "\n".join(out)
+
+    def _show_selected_profile_details(self, _event=None):
+        self._set_profile_details_text(self._profile_details_text(self._selected_profile_id()))
+
+    def _refresh_profile_list(self, select_profile=None):
+        tree = getattr(self, "profile_tree", None)
+        if tree is None: return
+        selected = select_profile or self._sanitize_profile_id(self.v_bot_id.get())
+        for item in tree.get_children(): tree.delete(item)
+        selected_item = None
+        for profile in self._list_saved_profiles():
+            rec = self._profile_summary_record(profile)
+            if not rec: continue
+            vals = tuple(rec[k] for k in ("profile","exchange","account","symbol","timeframe","leverage","mode","qty","grid","status","updated"))
+            item = tree.insert("", "end", values=vals)
+            if rec["profile"] == selected: selected_item = item
+        if selected_item:
+            tree.selection_set(selected_item); tree.focus(selected_item); tree.see(selected_item)
+        elif tree.get_children():
+            first=tree.get_children()[0]; tree.selection_set(first); tree.focus(first)
+        self._show_selected_profile_details()
+
+    def _load_selected_profile(self):
+        if self.is_running:
+            messagebox.showwarning("Bot running","Stop the bot before loading another profile.")
+            return
+        profile = self._selected_profile_id()
+        if not (PROFILE_DIR / profile / "config.json").exists() and not (profile=="BOT-01" and Path(CONFIG_FILE).exists()):
+            messagebox.showwarning("Profile not found",f"No saved configuration exists for {profile}.")
+            return
+        self.v_bot_id.set(profile)
+        self.load_profile_from_ui()
+
+    def _copy_selected_profile(self):
+        if self.is_running:
+            messagebox.showwarning("Bot running","Stop the bot before copying a profile.")
+            return
+        source = self._selected_profile_id()
+        source_path = PROFILE_DIR / source / "config.json"
+        if not source_path.exists() and source=="BOT-01" and Path(CONFIG_FILE).exists():
+            source_path = Path(CONFIG_FILE)
+        cfg = self._read_json_file(source_path)
+        if not isinstance(cfg,dict):
+            messagebox.showerror("Copy Profile",f"Could not read source profile {source}.")
+            return
+        target = simpledialog.askstring(
+            "Copy Bot Profile",
+            f"Copy {source} to a new Bot Profile ID.\n\n"
+            "Strategy, risk, Grid, exchange and API credential settings are copied.\n"
+            "You can then change Pair, Quantity/Risk and Leverage.",
+            initialvalue=f"{source}-COPY", parent=self.root)
+        if target is None: return
+        target=self._sanitize_profile_id(target)
+        if target==source:
+            messagebox.showwarning("Copy Profile","Source and target Profile IDs must be different."); return
+        target_path=PROFILE_DIR / target / "config.json"
+        if target_path.exists() and not messagebox.askyesno(
+            "Overwrite Profile?",
+            f"{target} already exists. Replace its configuration and reset its recovery state?",
+            parent=self.root):
+            return
+        if self._profile_lock_is_active(target):
+            messagebox.showerror("Copy Profile",f"Profile {target} is currently active in another bot process."); return
+        target_path.parent.mkdir(parents=True,exist_ok=True)
+        cfg["bot_id"]=target
+        self._write_json_atomic(target_path,cfg)
+        state_path=PROFILE_DIR / target / "runtime_state.json"
+        try:
+            if state_path.exists(): state_path.unlink()
+        except Exception as e:
+            self.log(f"PROFILE COPY WARNING: could not reset old runtime state: {e}")
+        self.v_bot_id.set(target)
+        self.load_settings(show_resume=False)
+        self._refresh_profile_list(select_profile=target)
+        self.log(f"PROFILE COPIED: {source} -> {target} | settings copied; runtime state reset.")
+        messagebox.showinfo(
+            "Profile Copied",
+            f"{target} was created from {source}.\n\n"
+            "Now change Symbol/Pair, Quantity or Risk, and Leverage as needed, then Save Profile.",
+            parent=self.root)
 
     # -------------------- MASTER TRADE DATABASE ---------------
 
@@ -2246,6 +2492,53 @@ class UniversalFuturesBotGUI:
             columnspan=6,
             sticky="w",
         )
+
+        # ---------------- PROFILE MANAGER ----------------
+        f_profiles = tk.LabelFrame(self.tab_connection, text=" Saved Bot Profiles / Copy & Details ")
+        f_profiles.pack(fill="both", expand=True, padx=10, pady=5)
+
+        profile_buttons = tk.Frame(f_profiles)
+        profile_buttons.pack(fill="x", padx=5, pady=(4,2))
+        ttk.Button(profile_buttons, text="Refresh Profiles", command=self._refresh_profile_list).pack(side="left", padx=2)
+        ttk.Button(profile_buttons, text="Load Selected", command=self._load_selected_profile).pack(side="left", padx=2)
+        ttk.Button(profile_buttons, text="Copy Selected Profile", command=self._copy_selected_profile).pack(side="left", padx=2)
+        tk.Label(
+            profile_buttons,
+            text="Copy keeps strategy/risk/Grid/exchange settings and credentials; edit Pair, Qty/Risk and Leverage afterward.",
+            fg="#555555",
+        ).pack(side="left", padx=8)
+
+        profile_tree_frame = tk.Frame(f_profiles)
+        profile_tree_frame.pack(fill="x", padx=5, pady=2)
+        profile_columns = ("profile","exchange","account","symbol","timeframe","leverage","mode","qty","grid","status","updated")
+        self.profile_tree = ttk.Treeview(profile_tree_frame, columns=profile_columns, show="headings", height=7, selectmode="browse")
+        headings = {
+            "profile":"Profile","exchange":"Exchange","account":"Account","symbol":"Pair",
+            "timeframe":"TF","leverage":"Lev","mode":"Mode","qty":"Qty / Risk",
+            "grid":"Grid","status":"Status","updated":"Last Update",
+        }
+        widths = {
+            "profile":90,"exchange":75,"account":105,"symbol":105,"timeframe":45,
+            "leverage":45,"mode":120,"qty":105,"grid":105,"status":105,"updated":145,
+        }
+        for col in profile_columns:
+            self.profile_tree.heading(col,text=headings[col])
+            self.profile_tree.column(col,width=widths[col],minwidth=45,anchor="w")
+        profile_scroll=ttk.Scrollbar(profile_tree_frame,orient="horizontal",command=self.profile_tree.xview)
+        self.profile_tree.configure(xscrollcommand=profile_scroll.set)
+        self.profile_tree.pack(fill="x",expand=True)
+        profile_scroll.pack(fill="x")
+        self.profile_tree.bind("<<TreeviewSelect>>",self._show_selected_profile_details)
+        self.profile_tree.bind("<Double-1>",lambda _e:self._load_selected_profile())
+
+        tk.Label(
+            f_profiles,
+            text="Selected Profile Details (API key/secret and Telegram token are masked):",
+            anchor="w",
+        ).pack(fill="x",padx=5,pady=(4,1))
+        self.profile_details=tk.Text(f_profiles,height=12,width=120,wrap="none",font=("Consolas",8),bg="#f7f7f7")
+        self.profile_details.pack(fill="both",expand=True,padx=5,pady=(0,5))
+        self.profile_details.configure(state="disabled")
 
         # 2. Market
         f_market = tk.LabelFrame(
@@ -3314,7 +3607,26 @@ class UniversalFuturesBotGUI:
     # -------------------- SETTINGS ---------------------------
 
     def save_settings(self):
-        self.bot_profile_id = self._sanitize_profile_id(self.v_bot_id.get())
+        requested_profile = self._sanitize_profile_id(self.v_bot_id.get())
+        if self.is_running:
+            if requested_profile != self._sanitize_profile_id(self.bot_profile_id):
+                raise RuntimeError(
+                    "Profile ID cannot be changed while the bot is running. "
+                    "Stop the bot first, then load/copy another profile."
+                )
+            current_symbol = str(self.symbol or "").strip().upper()
+            requested_symbol = str(self.e_symbol.get()).strip().upper()
+            current_exchange = str(self.exchange_id or "").strip().lower()
+            requested_exchange = str(self.v_exchange.get()).strip().lower()
+            current_account = str(self.runtime_account_mode or "").strip().upper()
+            requested_account = str(self.v_account_mode.get()).strip().upper()
+            if current_symbol and requested_symbol != current_symbol:
+                raise RuntimeError(f"Symbol cannot be changed while the bot is running ({current_symbol} is active). Stop the bot first.")
+            if current_exchange and requested_exchange != current_exchange:
+                raise RuntimeError(f"Exchange cannot be changed while the bot is running ({current_exchange.upper()} is active). Stop the bot first.")
+            if current_account and requested_account != current_account:
+                raise RuntimeError(f"Account Mode cannot be changed while the bot is running ({current_account} is active). Stop the bot first.")
+        self.bot_profile_id = requested_profile
         self.v_bot_id.set(self.bot_profile_id)
         cfg = {
             "bot_id": self.bot_profile_id,
@@ -3467,8 +3779,11 @@ class UniversalFuturesBotGUI:
                 f"Configuration saved | Profile={self.bot_profile_id} | "
                 f"File={config_path}"
             )
+            self._refresh_profile_list(select_profile=self.bot_profile_id)
         except Exception as e:
             self.log(f"Config save error: {e}")
+            if self.is_running:
+                raise
 
     def load_settings(self, show_resume=True):
         self.bot_profile_id = self._sanitize_profile_id(
@@ -3483,6 +3798,18 @@ class UniversalFuturesBotGUI:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
+
+            # Clear Entry widgets before loading so repeated profile switches
+            # never concatenate old and new values (including API credentials).
+            for attr in dir(self):
+                if not attr.startswith("e_"):
+                    continue
+                try:
+                    widget = getattr(self, attr)
+                    if isinstance(widget, tk.Entry):
+                        widget.delete(0, tk.END)
+                except Exception:
+                    pass
 
             self.bot_profile_id = self._sanitize_profile_id(
                 cfg.get("bot_id", self.bot_profile_id)
@@ -6593,7 +6920,6 @@ class UniversalFuturesBotGUI:
 
         try:
             self.save_settings()
-            self._acquire_profile_lock()
 
             exchange_id = (
                 self.v_exchange.get()
@@ -6616,6 +6942,11 @@ class UniversalFuturesBotGUI:
                     "Enter API Key and API Secret first.",
                 )
                 return
+
+            # Acquire the profile lock only after credentials are validated.
+            # This prevents a missing-credentials early return from leaving
+            # a stale lock owned by the current process.
+            self._acquire_profile_lock()
 
             account_mode = (
                 self.v_account_mode.get()
