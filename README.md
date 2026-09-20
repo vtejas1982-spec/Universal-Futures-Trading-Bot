@@ -6,7 +6,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.3.0**
+**Current build — V8.3.1**
 
 `V8_3_HARDENED_ADAPTIVE_BOT.py` — hardened adaptive live engine
 
@@ -38,6 +38,30 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 - **Excel-compatible master CSV trade/session export**
 - Telegram alerts
 - Dashboard and CSV trade logging
+
+## 🆕 V8.3.1 Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
+
+V8.3.1 is a correctness/hardening patch after the first V8.3.0 demo startup exposed a real ADAPTIVE_SCORE startup bug.
+
+### Fixed
+
+- Fixed START FAILED: name 'adaptive_edge' is not defined.
+- start_bot() now reads and validates Adaptive Edge / Adaptive Minimum Weight before startup logging.
+- Removed mutable StrategyEngine.adaptive_edge / StrategyEngine.adaptive_min_weight class state.
+- Adaptive thresholds are now explicit inputs to the live StrategyEngine decision and diagnostic functions.
+- Backtester Adaptive thresholds are explicit inputs too; no hidden global cfg_adaptive_* state.
+- This prevents one bot profile from overwriting another profile's Adaptive thresholds when multiple workers run concurrently.
+
+### Validation
+
+- Live bot source compilation: PASS.
+- Backtester source compilation: PASS.
+- Live/backtester Adaptive parity: PASS.
+- Startup NameError regression: PASS.
+- Per-profile parameter isolation: PASS.
+- Regression suite: **6/6 PASS**.
+
+See **[V8.3.1 Release Notes](docs/V8_3_HARDENED_ADAPTIVE_RELEASE_NOTES.md)** and **[V8.3.1 Adaptive Strategy Specification](docs/V8_3_HARDENED_ADAPTIVE_STRATEGY.md)**.
 
 ## 🆕 V8.3.0 Hardened Adaptive Engine — 2026-09-20
 
