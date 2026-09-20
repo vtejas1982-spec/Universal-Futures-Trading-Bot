@@ -31,7 +31,7 @@
 - Live/backtester Adaptive decision parity: PASS.
 - Synthetic backtest smoke test: PASS.
 - Safety-contract static audit: PASS.
-- Regression suite: **5/5 PASS**.
+- Regression suite: **6/6 PASS**.
 
 ### Important
 V8.3.0 does not claim a guaranteed maximum-profit configuration. The new strategy is designed to improve signal quality and robustness; historical backtests remain OHLC approximations and demo/testnet validation is required before live deployment.
