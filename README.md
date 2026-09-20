@@ -1,4 +1,4 @@
-# Universal Futures Trading Bot V8.2
+# Universal Futures Trading Bot V8.3
 
 A Python/Tkinter multi-exchange cryptocurrency futures trading bot for development, testing, research and educational use.
 
@@ -6,9 +6,11 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.2.6**
+**Current build — V8.3.0**
 
-`V8_2_6_ADVANCED_STRATEGY_BOT.py` (local V8.2.6 release artifact)
+`V8_3_HARDENED_ADAPTIVE_BOT.py` — hardened adaptive live engine
+
+`V8_3_HARDENED_ADAPTIVE_BACKTESTER.py` — strategy-parity hardened backtester
 
 `UniversalFuturesBot_V8_2_MODULAR_ENGINE.py` remains available as the earlier V8.2 baseline.
 
@@ -36,6 +38,39 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 - **Excel-compatible master CSV trade/session export**
 - Telegram alerts
 - Dashboard and CSV trade logging
+
+## 🆕 V8.3.0 Hardened Adaptive Engine — 2026-09-20
+
+V8.3.0 is the hardening pass after V8.2.6. It focuses on decision quality, risk-state correctness and fail-closed execution rather than adding more indicators.
+
+### Added
+- **ADAPTIVE_SCORE** strategy mode with correlation-aware module weights.
+- Adaptive Edge and Adaptive Minimum Weight controls, persisted through save/load and recovery.
+- VOL and ATR act as regime gates in Adaptive mode instead of being counted as independent candle-direction votes.
+- Daily drawdown now uses **daily peak equity**, so unrealized losses cannot hide behind an unchanged balance.
+- Session peak equity is persisted for recovery/audit.
+- Stale market-data guard.
+- Three-consecutive-cycle-error fail-closed safety halt.
+- Emergency-stop scope with safe default **BOT_SYMBOL** and explicit **ALL_ACCOUNT** option.
+- Managed-order cleanup for normal/Grid shutdown and reversal paths.
+- V8.3 hardened backtester and 5/5 regression suite.
+
+### Modified
+- Configuration schema **6 → 7**.
+- Runtime schema **3 → 4**.
+- New profiles default to ADAPTIVE_SCORE; existing saved profiles retain their saved strategy mode.
+- Backtester defaults to ADAPTIVE_SCORE and exposes the same Adaptive Edge / Minimum Weight settings.
+
+### Engineering intent
+The goal is not a guaranteed maximum-profit setting. The Adaptive engine reduces the chance that many correlated trend indicators are treated as independent votes, while regime gates reduce entries during unsuitable conditions. Risk controls are deliberately conservative and remain configurable.
+
+See **[V8.3.0 Release Notes](docs/V8_3_HARDENED_ADAPTIVE_RELEASE_NOTES.md)** and **[V8.3 Adaptive Strategy Specification](docs/V8_3_HARDENED_ADAPTIVE_STRATEGY.md)**.
+
+`tests/test_v830_hardened.py`: **5/5 PASS** locally.
+
+`V8_3_HARDENED_ADAPTIVE_RELEASE.zip` is the local release package for this build.
+
+`V8_3_HARDENED_ADAPTIVE_BOT.py` and `V8_3_HARDENED_ADAPTIVE_BACKTESTER.py` are committed to the repository.
 
 ## 🆕 V8.2.4 Strategy + Execution Audit — 2026-09-20
 
@@ -87,7 +122,7 @@ The directional strategy contract is now **19 modules**. Both modules participat
 
 The V8.2.6 backtester also aligns higher-timeframe S/R states at the higher-timeframe candle close and requests additional historical warmup when configured higher-timeframe S/R is enabled, reducing look-ahead risk.
 
-**Local V8.2.6 release artifacts:** the complete live bot, strategy-parity backtester, regression tests and release notes were generated as the V8.2.6 release package for this development session. The available GitHub connector can update repository text files, but does not provide a direct local-file upload operation for these generated Python source files; therefore the repository documentation is updated without falsely claiming the generated source files were committed.
+**Local V8.2.6 release artifacts:** the complete live bot, strategy-parity backtester, regression tests and release notes were generated as the V8.2.6 release package for this development session. The V8.2.6 generated source files were subsequently committed to the repository; V8.3.0 supersedes that build with the hardened adaptive engine.
 
 ## 🆕 V8.2.5 Strategy-Parity Backtester
 
@@ -450,7 +485,7 @@ Keep credentials outside Git. See [SECURITY.md](SECURITY.md).
 ### 4. Run the current build
 
 ```powershell
-py V8_2_6_ADVANCED_STRATEGY_BOT.py
+py V8_3_HARDENED_ADAPTIVE_BOT.py
 ```
 
 ### 5. Test recovery safely
