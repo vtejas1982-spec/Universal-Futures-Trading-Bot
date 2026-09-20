@@ -1,4 +1,4 @@
-# Universal Futures Trading Bot V8
+# Universal Futures Trading Bot V8.1
 
 A Python/Tkinter multi-exchange cryptocurrency futures trading bot for development, testing, research and educational use.
 
@@ -173,6 +173,41 @@ The audit also confirmed that all 115 GUI setting attributes are assigned before
 ### 11. Previous protection-reconciliation fix
 
 The previous protection reconciliation implementation contained an undefined `open_ids` reference in a branch that could be reached during reconciliation. The audited build removes that undefined-variable dependency and uses the existing specific-order verification path.
+
+### 12. V8.1 Engine / Strategy / Configuration Safety Audit
+
+The V8.1 pass rechecked the execution engine, strategy decision path, settings variables, defaults, callbacks, profile configuration and recovery behavior.
+
+#### Fixed
+
+- Profile-lock startup ordering: API credentials are validated before lock acquisition.
+- Recovery position identity: an open exchange position must match saved position/active-trade identity before recovery can adopt it.
+- Recovery protection gate: a saved live position without a protection checkpoint is blocked.
+- Immediate recovery protection reconciliation: a resumed normal position is reconciled immediately.
+- One-way position safety: multiple live positions returned for one symbol are treated as unsafe and the engine refuses to guess.
+- Bybit order consistency: normal market entry and normal emergency close explicitly use positionIdx=0.
+- Trendline validation: breakout buffer is constrained to 0% <= buffer < 100%.
+- Generic trigger safety: generic CCXT trigger orders check reported triggerPrice/reduceOnly capabilities when available and fail closed on explicit unsupported results.
+- Profile identity integrity: the profile folder remains authoritative if config.json contains a stale/mismatched bot_id.
+- Configuration schema: saved profiles now carry config_schema_version=3.
+
+#### Modified
+
+- Signal voting was extracted into a pure _decide_signal() engine helper. Existing SINGLE_SIGNAL, SCORE/2/3/4_SIGNALS and STRICT_ALL_FILTERS behavior is preserved while the core decision path becomes independently regression-testable.
+- Existing 17-module strategy, Grid, SL/TP, recovery and Profile Manager architecture is preserved.
+
+#### Added
+
+- tests/test_v81_static_audit.py with 10 automated checks covering Python compilation, GUI variable assignment, callback resolution, save/load coverage, profile-lock ordering, recovery safety, one-way position protection, trendline bounds, schema versioning and signal-voting behavior.
+
+#### V8.1 validation
+
+- Python compilation: PASS
+- Static engine/configuration audit: PASS
+- V8.1 regression checks: 10/10 PASS
+- Full exchange order lifecycle: NOT LIVE-TESTED in this audit
+
+V8.1 remains intended for demo/testnet validation before live funds are used.
 
 ## 🧠 17 directional modules
 
@@ -376,6 +411,12 @@ Do not interpret static validation as proof of safe live trading.
 - [x] Excel-compatible master CSV
 - [x] User manual
 - [x] Security guidance
+
+### V8.1 — current
+
+- Automated static regression checks added.
+- Recovery, profile, position-mode and protection safety tightened.
+- Next engineering milestone: demo/testnet exchange lifecycle tests.
 
 ### Future work
 
