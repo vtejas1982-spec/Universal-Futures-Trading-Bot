@@ -1,3 +1,29 @@
+## V8.2 Modular Engine + Safety Hardening — 2026-09-20
+
+### Added
+
+- New V8.2 Modular StrategyEngine for GUI/exchange-independent final signal voting.
+- Centralized V8.2 contracts for supported exchanges, signal modes and Grid modes.
+- Configuration schema version 4 and runtime checkpoint schema version 3.
+- Cross-module startup preflight validation before profile-lock acquisition or exchange-side mutations.
+- 20-second CCXT client timeout.
+- V8.2 static, strategy, recovery and opt-in exchange-demo regression tests.
+- V8.2 release notes and demo/testnet validation plan.
+
+### Fixed / Hardened
+
+- SINGLE_SIGNAL no longer lets an ambiguous module reporting both bull and bear win merely because its bull branch appears first; ambiguous votes are ignored.
+- Invalid minimum signal score is rejected.
+- Invalid signal mode is rejected before exchange initialization.
+- Non-positive leverage is rejected before exchange configuration.
+- Existing Grid validation remains a mandatory pre-order gate.
+- Existing recovery and Grid fail-closed protection behavior is preserved.
+
+### Validation
+
+- Local V8.2 regression suite: 22 tests passed, 1 exchange-demo gate skipped.
+- Full real exchange lifecycle is not claimed by this release; demo/testnet execution remains required.
+
 # Changelog
 
 ## V8.1 Engine + Strategy Safety Audit — 2026-09-20
