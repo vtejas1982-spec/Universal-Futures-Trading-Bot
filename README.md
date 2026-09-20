@@ -433,6 +433,7 @@ Universal-Futures-Trading-Bot/
 └── docs/
     ├── UniversalFuturesBot_V8_User_Manual.pdf
     ├── V8_RECOVERY_MULTI_BOT_AUDIT.md
+    ├── PROFILE_MANAGER.md
     ├── LAUNCH_KIT.md
     └── screenshots/
         └── V8_GUI_Screenshots_Overview.jpg
