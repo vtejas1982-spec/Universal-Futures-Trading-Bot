@@ -103,6 +103,8 @@ Key points to mention:
 - Resume-or-start-new prompt after an interrupted session
 - Exchange-side reconciliation before recovery
 - Per-bot configuration/runtime profiles
+- Saved profile manager with full details
+- One-click configuration cloning for another pair/quantity/leverage
 - Duplicate-profile process lock
 - Shared SQLite master ledger
 - Excel-compatible multi-bot CSV
