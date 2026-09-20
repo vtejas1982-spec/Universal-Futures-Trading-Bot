@@ -44,8 +44,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.2.4"
-APP_TITLE = "Universal Futures Trading Bot V8.2.4 - Multi-Exchange (No KuCoin)"
+APP_VERSION = "V8.2.5"
+APP_TITLE = "Universal Futures Trading Bot V8.2.5 - Multi-Exchange (No KuCoin)"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -3669,7 +3669,7 @@ class UniversalFuturesBotGUI:
         self.e_grid_tp = tk.Entry(f_grid, width=7); self.e_grid_tp.insert(0, "1.0"); self.e_grid_tp.grid(row=1, column=5, padx=3)
 
         tk.Label(f_grid, text="Global Grid SL %:").grid(row=2, column=0, sticky="w")
-        self.e_grid_sl = tk.Entry(f_grid, width=7); self.e_grid_sl.insert(0, "5.0"); self.e_grid_sl.grid(row=2, column=1, padx=5, sticky="w")
+        self.e_grid_sl = tk.Entry(f_grid, width=7); self.e_grid_sl.insert(0, "6.0"); self.e_grid_sl.grid(row=2, column=1, padx=5, sticky="w")
         tk.Label(f_grid, text="Max Exposure USDT:").grid(row=2, column=2, sticky="e")
         self.e_grid_max_exposure = tk.Entry(f_grid, width=9); self.e_grid_max_exposure.insert(0, "100"); self.e_grid_max_exposure.grid(row=2, column=3, padx=3)
         tk.Label(f_grid, text="Max Grid DD %:").grid(row=2, column=4, sticky="e")
@@ -4695,7 +4695,7 @@ class UniversalFuturesBotGUI:
             self.e_trendline_retest.insert(0, cfg.get("trendline_retest_candles", "3"))
 
             self.v_grid_mode.set(cfg.get("grid_mode", "OFF"))
-            for widget, key, default in ((self.e_grid_levels, "grid_levels", "5"), (self.e_grid_spacing, "grid_spacing", "1.0"), (self.e_grid_order_size, "grid_order_size", "10"), (self.e_grid_size_increase, "grid_size_increase", "0"), (self.e_grid_tp, "grid_tp", "1.0"), (self.e_grid_sl, "grid_sl", "5.0"), (self.e_grid_max_exposure, "grid_max_exposure", "100"), (self.e_grid_max_dd, "grid_max_dd", "3.0"), (self.e_grid_score_min, "grid_score_min", "1"), (self.e_grid_recenter, "grid_recenter_distance", "3.0"), (self.e_grid_cooldown, "grid_cooldown", "30")):
+            for widget, key, default in ((self.e_grid_levels, "grid_levels", "5"), (self.e_grid_spacing, "grid_spacing", "1.0"), (self.e_grid_order_size, "grid_order_size", "10"), (self.e_grid_size_increase, "grid_size_increase", "0"), (self.e_grid_tp, "grid_tp", "1.0"), (self.e_grid_sl, "grid_sl", "6.0"), (self.e_grid_max_exposure, "grid_max_exposure", "100"), (self.e_grid_max_dd, "grid_max_dd", "3.0"), (self.e_grid_score_min, "grid_score_min", "1"), (self.e_grid_recenter, "grid_recenter_distance", "3.0"), (self.e_grid_cooldown, "grid_cooldown", "30")):
                 widget.delete(0, tk.END); widget.insert(0, cfg.get(key, default))
             self.v_grid_trend_filter.set(cfg.get("grid_trend_filter", "OFF"))
             self.v_grid_recenter.set(cfg.get("grid_recenter", False))
