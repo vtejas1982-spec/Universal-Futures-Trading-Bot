@@ -4,13 +4,13 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
 
-## 🚀 V8 Recovery + Multi-Bot Build
+## 🚀 V8.1 Recovery + Multi-Bot Build
 
-**Current build**
+**Current build — V8.1**
 
 `UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py`
 
-This build keeps the existing V8 strategy/Grid architecture and adds a persistent recovery layer, exchange-side reconciliation, isolated bot profiles, and a shared multi-bot trade/session ledger.
+This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 safety/regression layer and adds a persistent recovery layer, exchange-side reconciliation, isolated bot profiles, and a shared multi-bot trade/session ledger.
 
 ### Highlights
 
