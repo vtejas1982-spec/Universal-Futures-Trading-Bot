@@ -6287,6 +6287,26 @@ class UniversalFuturesBotGUI:
                 ids.add(str(meta["id"]))
         return ids
 
+    def _cancel_known_managed_orders_from_ids(self, symbol, ids):
+        ids = {str(oid) for oid in (ids or set()) if oid}
+        for oid in sorted(ids):
+            try:
+                self.exchange.cancel_order(oid, symbol)
+            except Exception as e:
+                self.log(f"MANAGED ORDER CANCEL WARNING | ID={oid} | {e}")
+        if ids:
+            time.sleep(0.25)
+            remaining = []
+            for oid in sorted(ids):
+                state = self._order_is_still_open(symbol, oid, unknown_is_open=False)
+                if state is None or state:
+                    remaining.append(oid)
+            if remaining:
+                raise RuntimeError(
+                    "Managed orders could not be verified cancelled: "
+                    + ",".join(remaining[:20])
+                )
+
     def _cancel_known_managed_orders(self, symbol):
         ids=self._known_managed_order_ids(symbol)
         for oid in sorted(ids):
