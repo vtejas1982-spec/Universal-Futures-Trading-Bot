@@ -129,6 +129,23 @@ Selecting a profile opens a detailed configuration view. API keys, API secrets a
 
 **Copy Selected Profile** creates an independent profile with the same strategy, risk, Grid, exchange and credential settings. The copied runtime checkpoint is reset. You can then change Pair, Quantity/Risk and Leverage before saving and starting the second bot.
 
+### 6.1 Profile Load / Save / Copy Improvements
+
+The Profile Manager also strengthens the existing profile loading and saving workflow:
+
+- **Load Selected Profile** loads the saved configuration into the GUI.
+- Before loading, existing Tkinter Entry fields are cleared so values such as API keys, secrets, symbol and other text fields cannot be accidentally concatenated during repeated profile loads.
+- Loading a **nonexistent profile is blocked** instead of leaving an older profile's settings visible.
+- **Save Profile** writes the current profile configuration to its own profile storage.
+- **Copy Selected Profile** creates a new Bot Profile ID with the source strategy, indicators, risk, Grid, exchange and credential configuration.
+- The copied profile's previous runtime checkpoint is reset, so it does not inherit the source bot's recovery session.
+- After copying, the new profile can be changed independently for **Pair, Quantity/Risk and Leverage**, then saved and started.
+- While a bot is running, **Profile ID, Exchange, Account Mode and active Symbol** cannot be silently changed through a live configuration checkpoint.
+- Profile locking prevents the same Bot Profile ID from being started by another process at the same time.
+- Profile lock acquisition occurs only after API credential validation, preventing a failed credential check from leaving a stale profile lock.
+
+This section describes the configuration/profile changes made in the **V8 Profile Manager + Configuration Audit — 2026-09-20** update.
+
 ### 7. Excel-compatible master log
 
 The database is accompanied by:
