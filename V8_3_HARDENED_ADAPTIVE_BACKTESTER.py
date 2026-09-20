@@ -1,8 +1,8 @@
 """
-V8.2.5 UNIVERSAL FUTURES BACKTESTER — STRATEGY-PARITY EDITION
+V8.3.0 UNIVERSAL FUTURES BACKTESTER — HARDENED ADAPTIVE STRATEGY-PARITY EDITION
 ===============================================================
 
-Historical simulator for Universal Futures Trading Bot V8.2.5.
+Historical simulator for Universal Futures Trading Bot V8.3.0.
 
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
