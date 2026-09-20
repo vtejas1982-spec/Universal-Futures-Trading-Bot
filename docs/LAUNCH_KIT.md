@@ -93,3 +93,28 @@ python, crypto trading bot, algorithmic trading, futures trading, ccxt, bybit, b
 - Do not promise profits or guaranteed performance.
 - Do not buy stars, followers or engagement.
 - Encourage real testing, issues and pull requests.
+
+
+## V8 Recovery + Multi-Bot launch angle
+
+The current build adds persistent recovery and multi-bot operation on top of the existing V8 strategy/Grid engine.
+
+Key points to mention:
+- Resume-or-start-new prompt after an interrupted session
+- Exchange-side reconciliation before recovery
+- Per-bot configuration/runtime profiles
+- Duplicate-profile process lock
+- Shared SQLite master ledger
+- Excel-compatible multi-bot CSV
+- Audited protection reconciliation
+- Existing Grid duplicate-order synchronization fix
+
+Suggested headline:
+
+**I added crash recovery and multi-bot state management to my open-source Python futures trading bot**
+
+Suggested technical angle:
+
+**How I designed exchange-verified crash recovery for a Python futures trading bot**
+
+Important: describe the project as experimental trading software for development/testing/research. Do not claim guaranteed profitability or guaranteed safety.
