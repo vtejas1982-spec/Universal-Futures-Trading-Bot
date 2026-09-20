@@ -6,7 +6,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.2.4**
+**Current build — V8.2.5**
 
 `UniversalFuturesBot_V8_2_4_AUDITED_STRATEGY_ENGINE.py`
 
@@ -65,6 +65,25 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 - Full live exchange lifecycle: not claimed by this audit.
 
 See **[V8.2.4 Release Notes](docs/V8_2_4_RELEASE_NOTES.md)** and **[V8.2.4 Audit Tests](tests/test_v824_audit.py)**.
+## 🆕 V8.2.5 Strategy-Parity Backtester
+
+The V8.2.5 backtester was built from the uploaded V8.2.4 live engine plus the previously supplied V8 multi-strategy backtester reference.
+
+### Backtester coverage
+- All 17 live directional modules: ST, EMA, EMA Cross, MACD, RSI, Bollinger, Stochastic, VWAP, VWAP Delta, VIDYA, NWE, Liquidity Swings, Trendline, MTF, Volume, ADX, ATR.
+- Every live indicator option/entry mode.
+- Central signal modes: SINGLE_SIGNAL, ANY_NON_CONFLICTING, SCORE, 2_SIGNALS, 3_SIGNALS, 4_SIGNALS, STRICT_ALL_FILTERS.
+- Normal risk sizing, cooldown, same-candle protection, max trades, daily DD and emergency capital-loss stop.
+- PRICE_% / ROI_% protection, TP1/TP2 split, TP1 break-even, Hold-All-Reverse and post-SL opposite-signal lock.
+- DIRECT_SHOT, LONG_GRID, SHORT_GRID and NEUTRAL_GRID with Grid risk/protection controls.
+- Multi-symbol public OHLCV, caching, CSV/XLSX export, monthly statistics, equity data, parameter sweep, walk-forward and 1/2/3/4-way combination lab.
+- V8 bot-config JSON import/export.
+
+### Important V8.2.5 fix
+The live Grid validator requires Global Grid SL to be greater than Grid Spacing × Grid Levels. The previous default was 5.0% SL with 5 × 1.0% levels, which fails its own validator because 5.0 is equal to 5.0. The live default is now 6.0%.
+
+### Historical execution model
+Signals use completed candles and normal entries are simulated at the next candle OPEN. If an OHLC candle touches both SL and TP, the backtester assumes SL first. Funding, liquidation, order-book latency and exchange-specific conditional-order behavior are not invented.
 ## 🆕 What was fixed / added / modified
 
 ### 1. Crash / restart recovery
