@@ -1,4 +1,5 @@
-# Universal Futures Trading Bot V8.3
+# Universal Futures Trading Bot V8.3.3
+
 
 A Python/Tkinter multi-exchange cryptocurrency futures trading bot for development, testing, research and educational use.
 
@@ -38,6 +39,38 @@ This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 sa
 - **Excel-compatible master CSV trade/session export**
 - Telegram alerts
 - Dashboard and CSV trade logging
+
+## 🆕 V8.3.3 Full Engine / Strategy / Configuration Audit — 2026-09-20
+
+V8.3.3 is a full correctness and safety audit of the V8.3.2 live engine.
+
+### Fixed
+- **Real orphan-order recovery gap:** V8.3.2 could lose ownership evidence after a normal position exit because `last_protected_position` was cleared. V8.3.3 persists exact retired bot-managed order IDs in the recovery checkpoint.
+- **Strict Bybit open-order pagination guard:** a full 50-order page is treated as potentially truncated during safety-critical reads instead of being mistaken for the complete inventory.
+- **Startup risk validation:** Sizing Mode, Risk %, Fixed Qty, Daily DD, Emergency Loss, Emergency Scope and Cooldown are now checked before leverage mutation.
+
+### Added
+- Runtime schema **5** with `retired_managed_order_ids`.
+- Centralized requested new-profile defaults for Adaptive/risk/safety settings.
+- `tests/test_v833_full_audit.py`.
+- `docs/V8_3_3_FULL_AUDIT_RELEASE_NOTES.md`.
+
+### Modified
+- New profile defaults remain **ADAPTIVE_SCORE**, Edge 0.18, Min Weight 3.5, MTF/ADX/Volume ON, ATR OFF, Grid OFF, EQUITY_RISK_% at 1%, Post-SL lock ON and No-Same-Candle ON.
+- Adaptive thresholds remain explicit per-call/per-profile; mutable StrategyEngine Adaptive class state remains prohibited.
+- Grid shutdown/direction cleanup also preserves exact managed order IDs for recovery.
+
+### Safety rule
+Automatic orphan cleanup still requires exact persisted bot order IDs. Unknown/manual orders continue to block startup.
+
+### Validation
+- Source compile/import: PASS.
+- Adaptive isolation: PASS.
+- Retired-order checkpoint: PASS.
+- Strict full-page order guard: PASS.
+- Runtime checkpoint serialization: PASS.
+
+See **[V8.3.3 Full Audit Release Notes](docs/V8_3_3_FULL_AUDIT_RELEASE_NOTES.md)**.
 
 ## 🆕 V8.3.1 Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
 
