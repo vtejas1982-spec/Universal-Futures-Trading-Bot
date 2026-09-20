@@ -233,6 +233,7 @@ This is intended to prevent repeated recreation of Grid levels when an exchange 
 - **[User Manual](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
 - **[Change Log](CHANGELOG.md)**
 - **[Recovery / Multi-Bot / Profile Manager Audit](docs/V8_RECOVERY_MULTI_BOT_AUDIT.md)**
+- **[Bot Profile Manager Guide](docs/PROFILE_MANAGER.md)**
 - **[Launch Kit](docs/LAUNCH_KIT.md)**
 - **[Contributing Guide](CONTRIBUTING.md)**
 - **[Security Policy](SECURITY.md)**
