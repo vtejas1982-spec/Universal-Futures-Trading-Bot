@@ -1,14 +1,14 @@
-# Universal Futures Trading Bot V8.1
+# Universal Futures Trading Bot V8.2
 
 A Python/Tkinter multi-exchange cryptocurrency futures trading bot for development, testing, research and educational use.
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
 
-## 🚀 V8.1 Recovery + Multi-Bot Build
+## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.1**
+**Current build — V8.2**
 
-`UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py`
+`UniversalFuturesBot_V8_2_MODULAR_ENGINE.py`
 
 This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 safety/regression layer and adds a persistent recovery layer, exchange-side reconciliation, isolated bot profiles, and a shared multi-bot trade/session ledger.
 
@@ -209,6 +209,19 @@ The V8.1 pass rechecked the execution engine, strategy decision path, settings v
 
 V8.1 remains intended for demo/testnet validation before live funds are used.
 
+## 🧩 V8.2 Modular Engine
+
+V8.2 keeps the existing execution/recovery architecture but separates the final strategy-voting contract into a GUI/exchange-independent StrategyEngine. The GUI remains the execution coordinator and the existing 17 directional modules continue to feed the same decision path.
+
+Additional V8.2 hardening:
+
+- Central supported-exchange, signal-mode and Grid-mode contracts.
+- Preflight validation runs before profile-lock acquisition or exchange-side mutations.
+- Invalid signal mode, minimum score, leverage and Grid settings are rejected early.
+- CCXT client timeout is set to 20 seconds to prevent an indefinitely blocked network call from freezing a worker cycle.
+- Configuration schema is version 4; runtime checkpoint schema is version 3.
+- V8.2 regression tests cover compilation, GUI attributes, callback resolution, strategy voting, recovery contracts and Grid fail-closed behavior.
+
 ## 🧠 17 directional modules
 
 The V8 Section 3 strategy engine can use:
@@ -389,6 +402,12 @@ This release has **not** been fully live-tested against Bybit Demo or every supp
 
 Do not interpret static validation as proof of safe live trading.
 
+## 🧪 V8.2 validation status
+
+- Local static/unit regression suite: **22 tests passed; 1 exchange-demo gate skipped**.
+- Exchange demo/testnet order lifecycle: **not yet executed by the static suite**.
+- V8.2 is intended to be validated on one exchange demo/testnet profile before live use.
+
 ## 🗺️ Roadmap
 
 ### V8 — current
@@ -412,11 +431,21 @@ Do not interpret static validation as proof of safe live trading.
 - [x] User manual
 - [x] Security guidance
 
-### V8.1 — current
+### V8.1 — previous audit layer
 
 - Automated static regression checks added.
 - Recovery, profile, position-mode and protection safety tightened.
-- Next engineering milestone: demo/testnet exchange lifecycle tests.
+
+### V8.2 — current
+
+- [x] Modular StrategyEngine decision contract
+- [x] Configuration/runtime schema versioning
+- [x] Preflight validation before exchange mutation
+- [x] CCXT network timeout
+- [x] Static + unit + recovery contract tests
+- [ ] Real exchange demo/testnet lifecycle suite
+- [ ] Recovery fault-injection tests
+- [ ] Dedicated Grid-engine unit-test suite
 
 ### Future work
 
@@ -476,7 +505,7 @@ Current contributor-friendly areas include:
 
 ```text
 Universal-Futures-Trading-Bot/
-├── UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py
+├── UniversalFuturesBot_V8_2_MODULAR_ENGINE.py
 ├── README.md
 ├── CHANGELOG.md
 ├── requirements.txt
@@ -489,7 +518,11 @@ Universal-Futures-Trading-Bot/
 │       ├── bug_report.md
 │       └── feature_request.md
 ├── tests/
-│   └── test_v81_static_audit.py
+│   ├── test_v81_static_audit.py
+│   ├── test_v82_static_audit.py
+│   ├── test_v82_strategy_engine.py
+│   ├── test_v82_recovery_contract.py
+│   └── test_v82_exchange_demo.py
 └── docs/
     ├── UniversalFuturesBot_V8_User_Manual.pdf
     ├── V8_RECOVERY_MULTI_BOT_AUDIT.md
