@@ -1,3 +1,41 @@
+## V8.2.6 — Advanced Strategy Modules + Backtester Parity — 2026-09-20
+
+### Added
+- Added **DIVERGENCE** as a new directional module using confirmed/causal pivots from the supplied Divergence for Many Indicators v4 source.
+- Added MACD, MACD Histogram, RSI, Stochastic, CCI, Momentum, OBV, VWMACD, CMF and MFI divergence sources.
+- Added **VOL_SR** as a new directional module using the supplied Volume-based Support & Resistance Zones V2 volume-confirmed fractal/S/R logic.
+- Added four configurable Volume S/R timeframes, volume threshold, timeframe voting and entry mode controls.
+- Added both modules to the live strategy contract, Grid SCORE/NEUTRAL_GRID direction logic, Hold-All-Reverse persistent states and the strategy-parity backtester.
+- Added V8.2.6 regression tests covering source parsing, 19-module contract, new settings, new indicator columns, module voting, normal/Grid simulation and signal-engine behavior.
+
+### Fixed / Hardened
+- Configuration schema bumped from version 5 to **6** for the new settings.
+- Higher-timeframe S/R backtest states are aligned to the higher-timeframe candle close instead of the candle open, preventing future-data leakage during lower-timeframe bars.
+- Backtester history is extended when higher-timeframe S/R is enabled so configured D/W S/R has meaningful historical context.
+- The backtester compatibility decide() helper no longer references an undefined df.
+- Advanced live events now have explicit diagnostic logging.
+- Existing V8.2.5 CCXT market-loading and Grid-default fixes remain included.
+
+### Modified
+- Strategy module count increased from 17 to **19**.
+- Live GUI Strategy tab now exposes Divergence and Volume S/R controls.
+- Save/load configuration, Grid module counting, combination lab and backtester JSON configuration include the new settings.
+- Chart-only TradingView drawing objects are converted to numerical strategy states rather than being treated as executable orders.
+
+### Validation
+- Live bot AST parse: PASS.
+- Backtester AST parse/import: PASS.
+- 19-module contract: PASS.
+- New divergence/S/R columns: PASS.
+- All-module synthetic voting: PASS.
+- Normal and NEUTRAL_GRID synthetic backtests: PASS.
+- Regression suite: **7/7 PASS**.
+
+### Important
+The backtester remains a historical OHLC model and cannot reproduce every exchange-specific fill, latency, order-book, funding, liquidation or conditional-order behavior. Demo/testnet validation remains required before live deployment.
+
+---
+
 ## V8.2.5 — Strategy-Parity Backtester + Grid Default Audit — 2026-09-20
 
 ### Added
