@@ -26,6 +26,8 @@ This build keeps the existing V8 strategy/Grid architecture and adds a persisten
 - Individual Grid order-status verification
 - **Crash/restart recovery with Resume or Start New prompt**
 - **Per-bot profile configuration and runtime state**
+- **Saved Bot Profile Manager with profile table, full details and Copy Profile**
+- **Copy Profile workflow for cloning a bot to another pair/quantity/leverage**
 - **Exchange-side position/order reconciliation before recovery**
 - **Profile locking to prevent duplicate instances of the same bot profile**
 - **Shared SQLite master database for multiple bots**
@@ -119,7 +121,15 @@ The master ledger records bot/session context such as:
 - Exit reason
 - Configuration hash
 
-### 6. Excel-compatible master log
+### 6. Saved Bot Profile Manager
+
+The Connection tab now includes a profile table showing saved bots with Profile ID, Exchange/account mode, Pair, Timeframe, Leverage, Strategy/Grid mode, Quantity or risk mode, Runtime status and Last update.
+
+Selecting a profile opens a detailed configuration view. API keys, API secrets and Telegram tokens are masked in the details panel.
+
+**Copy Selected Profile** creates an independent profile with the same strategy, risk, Grid, exchange and credential settings. The copied runtime checkpoint is reset. You can then change Pair, Quantity/Risk and Leverage before saving and starting the second bot.
+
+### 7. Excel-compatible master log
 
 The database is accompanied by:
 
@@ -129,15 +139,21 @@ universal_bot_master_log.csv
 
 The CSV can be opened directly in Microsoft Excel for comparing multiple bot profiles, pairs, timeframes and strategy configurations.
 
-### 7. Protection reconciliation safety improvement
+### 8. Protection reconciliation safety improvement
 
 Protection reconciliation now distinguishes verified exchange states from uncertain states. If protection cannot be safely verified, the recovery/execution path fails closed rather than guessing.
 
-### 8. Existing Grid duplicate-order protection retained
+### 9. Existing Grid duplicate-order protection retained
 
 The previous V8 Grid fix remains in this build. The Grid engine tracks managed order IDs and individually verifies missing orders rather than recreating levels from an incomplete open-order snapshot.
 
-### 9. Bug fixed during audit
+### 10. Bugs fixed during configuration/profile audit
+
+The current audited build also fixes repeated profile loads concatenating Entry-widget values, loading a nonexistent profile while leaving previous settings visible, changing Profile ID/exchange/account mode/active symbol through a live checkpoint, and acquiring a profile lock before API credential validation.
+
+The audit also confirmed that all 115 GUI setting attributes are assigned before use, callbacks resolve to existing methods, and the saved configuration covers the current settings system.
+
+### 11. Previous protection-reconciliation fix
 
 The previous protection reconciliation implementation contained an undefined `open_ids` reference in a branch that could be reached during reconciliation. The audited build removes that undefined-variable dependency and uses the existing specific-order verification path.
 
@@ -216,7 +232,7 @@ This is intended to prevent repeated recreation of Grid levels when an exchange 
 
 - **[User Manual](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
 - **[Change Log](CHANGELOG.md)**
-- **[Recovery / Multi-Bot Audit](docs/V8_RECOVERY_MULTI_BOT_AUDIT.md)**
+- **[Recovery / Multi-Bot / Profile Manager Audit](docs/V8_RECOVERY_MULTI_BOT_AUDIT.md)**
 - **[Launch Kit](docs/LAUNCH_KIT.md)**
 - **[Contributing Guide](CONTRIBUTING.md)**
 - **[Security Policy](SECURITY.md)**
@@ -334,6 +350,9 @@ Do not interpret static validation as proof of safe live trading.
 - [x] Crash/restart recovery prompt
 - [x] Exchange-side recovery reconciliation
 - [x] Multi-bot profile isolation
+- [x] Saved profile manager
+- [x] Profile copy workflow
+- [x] Profile detail viewer
 - [x] Profile lock
 - [x] Shared SQLite master ledger
 - [x] Excel-compatible master CSV
@@ -350,6 +369,7 @@ Do not interpret static validation as proof of safe live trading.
 - [ ] Configuration import/export UI
 - [ ] More contributor-friendly strategy modularization
 - [ ] Recovery fault-injection test suite
+- [ ] Automated multi-profile UI integration tests
 
 ## 🤝 Contributing
 
