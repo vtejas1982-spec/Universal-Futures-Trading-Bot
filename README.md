@@ -6,7 +6,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 ## 🚀 V8.2 Modular Engine + Recovery + Multi-Bot Build
 
-**Current build — V8.2**
+**Current build — V8.2.1**
 
 `UniversalFuturesBot_V8_2_MODULAR_ENGINE.py`
 
@@ -401,6 +401,10 @@ The local audit also checked:
 This release has **not** been fully live-tested against Bybit Demo or every supported exchange. Exchange-side recovery, order-mode behavior, account modes and permissions can vary.
 
 Do not interpret static validation as proof of safe live trading.
+
+## 🗑️ V8.2.1 Profile Delete
+
+V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be deleted while it is running, locked by another bot process, or has recovery state that may represent an open/unverified position or active Grid orders. BOT-01 legacy configuration is handled explicitly, while the master SQLite trade/session history is preserved.
 
 ## 🧪 V8.2 validation status
 
