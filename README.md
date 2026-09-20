@@ -8,7 +8,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 **Current build — V8.2.6**
 
-`UniversalFuturesBot_V8_2_5_GRID_DEFAULT_FIX.py`
+`V8_2_6_ADVANCED_STRATEGY_BOT.py` (local V8.2.6 release artifact)
 
 `UniversalFuturesBot_V8_2_MODULAR_ENGINE.py` remains available as the earlier V8.2 baseline.
 
