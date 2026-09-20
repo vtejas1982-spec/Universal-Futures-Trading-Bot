@@ -120,3 +120,18 @@ Suggested technical angle:
 **How I designed exchange-verified crash recovery for a Python futures trading bot**
 
 Important: describe the project as experimental trading software for development/testing/research. Do not claim guaranteed profitability or guaranteed safety.
+
+
+## V8.1 engineering update
+
+V8.1 focuses on execution safety and regression coverage rather than adding more indicators.
+
+Key points:
+- recovery requires verifiable position identity and protection state
+- one-way position ambiguity is fail-closed
+- Bybit normal entry/close paths explicitly use positionIdx=0
+- generic trigger capability checks are added where CCXT exposes them
+- signal voting is isolated into a pure testable helper
+- 10 automated static/regression checks are included
+
+Describe V8.1 as an engineering/safety validation update. Do not describe it as proof of profitability or complete live-exchange validation.
