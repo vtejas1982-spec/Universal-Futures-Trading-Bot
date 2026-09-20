@@ -41,3 +41,31 @@
 - Exchange-specific account mode, order mode, permissions and recovery behavior still require demo/testnet validation.
 - Normal-trade PnL remains based on the existing account-balance-delta accounting model. When multiple bots share one exchange account, deposits, withdrawals, fees or another bot's activity can affect that balance delta.
 - The master ledger should therefore be treated as an operational/session ledger rather than an exchange-certified per-fill realized-PnL statement.
+
+## V8 Profile Manager + Configuration Audit — 2026-09-20
+
+### Added
+
+- Saved Bot Profile Manager in the Connection tab.
+- Profile table showing pair, timeframe, leverage, mode, quantity/risk, Grid state, runtime status and last update.
+- Full selected-profile details viewer with secrets masked.
+- Copy Selected Profile workflow for cloning a complete configuration to another Bot Profile ID.
+- Copied profiles start with a reset runtime checkpoint so the new bot does not inherit the source bot recovery session.
+
+### Fixed
+
+- Repeated profile loads no longer concatenate values in Tk Entry widgets.
+- Loading a nonexistent profile is now blocked instead of leaving the previous profile settings active.
+- A running bot cannot silently change Profile ID, exchange, account mode or active symbol through configuration checkpoints.
+- Profile locking now occurs after API credential validation, avoiding a lock leak on missing-credential startup failure.
+
+### Audited
+
+- 115 GUI setting attributes reviewed; all are assigned before use.
+- Current GUI callbacks resolve to existing methods.
+- 117 saved configuration keys reviewed, including dynamically loaded Grid settings.
+- Strategy, Grid, recovery, protection and persistence paths rechecked.
+
+### Limitation
+
+- Python syntax/static checks passed; full exchange lifecycle testing remains a separate demo/testnet task.
