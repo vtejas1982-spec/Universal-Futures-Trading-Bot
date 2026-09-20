@@ -90,3 +90,8 @@
 - Static GUI/configuration/callback audit: PASS.
 - V8.1 regression checks: 10/10 PASS.
 - Full exchange lifecycle remains untested live/demo in this pass.
+
+## V8.2.3
+- Fixed a live-checkpoint bug where equivalent symbol forms such as `OP/USDT` and `OP/USDT:USDT` were treated as different symbols.
+- Live strategy/risk settings can now be checkpointed without the false `Symbol cannot be changed while the bot is running` warning.
+- Real exchange/symbol/account/profile identity changes while running remain blocked.
