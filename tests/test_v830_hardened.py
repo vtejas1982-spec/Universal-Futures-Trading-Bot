@@ -25,33 +25,29 @@ def test_compile():
     py_compile.compile(str(BT), doraise=True)
 
 def test_contracts():
-    bot = load(BOT, 'v830_bot_contract')
-    bt = load(BT, 'v830_bt_contract')
+    bot = load(BOT, 'v831_bot_contract')
+    bt = load(BT, 'v831_bt_contract')
     assert bot.CONFIG_SCHEMA_VERSION == 7
     assert bot.RUNTIME_SCHEMA_VERSION == 4
     assert 'ADAPTIVE_SCORE' in bot.SUPPORTED_SIGNAL_MODES
     assert 'ADAPTIVE_SCORE' in bt.SUPPORTED_SIGNAL_MODES
     assert len(bt.MODULES) == 19
-    assert bot.StrategyEngine.adaptive_edge == bot.ADAPTIVE_DEFAULT_EDGE
+    assert not hasattr(bot.StrategyEngine, 'adaptive_edge')
 
 def test_adaptive_parity():
-    bot = load(BOT, 'v830_bot_adaptive')
-    bt = load(BT, 'v830_bt_adaptive')
-    bot.StrategyEngine.adaptive_edge = 0.18
-    bot.StrategyEngine.adaptive_min_weight = 3.5
-    bt.cfg_adaptive_edge = 0.18
-    bt.cfg_adaptive_min_weight = 3.5
+    bot = load(BOT, 'v831_bot_adaptive')
+    bt = load(BT, 'v831_bt_adaptive')
     votes = [
         ('ST', True, False), ('EMA', True, False), ('MTF', True, False),
         ('MACD', True, False), ('RSI', False, True), ('VOL_SR', True, False),
     ]
-    a = bot.StrategyEngine.decide_signal(votes, 'ADAPTIVE_SCORE', 1, True, True, True, True, False)
-    b = bt.StrategyEngine.decide_signal(votes, 'ADAPTIVE_SCORE', 1, True, True, True, True, False)
+    a = bot.StrategyEngine.decide_signal(votes, 'ADAPTIVE_SCORE', 1, True, True, True, True, False, 0.18, 3.5)
+    b = bt.StrategyEngine.decide_signal(votes, 'ADAPTIVE_SCORE', 1, True, True, True, True, False, 0.18, 3.5)
     assert a == b
     assert a[0] and not a[1]
 
 def test_backtest_smoke():
-    bt = load(BT, 'v830_bt_smoke')
+    bt = load(BT, 'v831_bt_smoke')
     n = 700
     rng = np.random.default_rng(830)
     close = 100 * np.exp(np.cumsum(0.0002 + rng.normal(0, 0.004, n)))
@@ -71,7 +67,7 @@ def test_backtest_smoke():
     assert 'net_pnl' in metrics and 'max_drawdown' in metrics
 
 def test_adaptive_grid_smoke():
-    bt = load(BT, 'v830_bt_grid')
+    bt = load(BT, 'v831_bt_grid')
     n = 420
     rng = np.random.default_rng(831)
     close = 100 * np.exp(np.cumsum(0.0001 + rng.normal(0, 0.003, n)))
@@ -94,6 +90,9 @@ def test_safety_contracts_static():
     assert 'BOT_SYMBOL' in s
     assert 'ALL_ACCOUNT' in s
     assert 'MAX_CONSECUTIVE_CYCLE_ERRORS = 3' in s
+    assert 'adaptive_edge = float(self.e_adaptive_edge.get().strip())' in s
+    assert 'StrategyEngine.adaptive_edge =' not in s
+    assert 'StrategyEngine.adaptive_min_weight =' not in s
     assert 'STALE_MARKET_DATA' in s
     assert 'daily_peak_equity' in s
     assert '_cancel_known_managed_orders' in s
