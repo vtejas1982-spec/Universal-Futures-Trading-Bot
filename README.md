@@ -72,6 +72,22 @@ Automatic orphan cleanup still requires exact persisted bot order IDs. Unknown/m
 
 See **[V8.3.3 Full Audit Release Notes](docs/V8_3_3_FULL_AUDIT_RELEASE_NOTES.md)**.
 
+
+## 🧪 V8.3.3 Strategy-Parity Backtester — 2026-09-20
+
+The V8.3.3 backtester is kept in lock-step with the live strategy contract. When the live bot's strategy/indicator logic changes, the matching backtester is updated and regression-tested before release.
+
+### V8.3.3 parity updates
+- Live StrategyEngine.decide_signal() and decision_reason() are mirrored exactly, including explicit per-profile Adaptive Edge / Minimum Weight parameters.
+- Volume S/R causal logic is synchronized with the live V8.3.3 implementation.
+- The pandas boolean aggregation path uses nullable Boolean dtype to avoid future downcasting behavior changes.
+- The backtester records V8.3.3 strategy parity separately from live-only runtime protections; checkpoint/order-ownership safety is not fabricated as historical price behavior.
+- Historical execution remains completed-candle → next-open for normal entries, with the existing conservative OHLC SL/TP ambiguity rule.
+
+### Regression validation
+- tests/test_v833_backtester_parity.py: 8/8 PASS.
+- Deterministic synthetic V8.3.3 backtest executed successfully with the full Divergence + Volume S/R modules enabled.
+
 ## 🆕 V8.3.1 Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
 
 V8.3.1 is a correctness/hardening patch after the first V8.3.0 demo startup exposed a real ADAPTIVE_SCORE startup bug.
