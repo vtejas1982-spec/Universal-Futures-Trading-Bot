@@ -1,8 +1,16 @@
-# V8.3 Adaptive Strategy Specification
+# V8.3.1 Adaptive Strategy Specification
 
-## Core idea
+## V8.3.1 execution contract
 
-V8.3 separates **directional evidence** from **market-regime gates**.
+V8.3.1 retains the V8.3 Adaptive strategy but makes Adaptive thresholds explicitly per-call/per-profile.
+
+A bot worker passes adaptive_edge and adaptive_min_weight directly to the pure StrategyEngine.
+
+They are not stored as mutable class-level state. This prevents one running bot profile from overwriting another profile's thresholds.
+
+## Core strategy
+
+V8.3 separates directional evidence from market-regime gates.
 
 The 19 modules remain available:
 
@@ -50,28 +58,20 @@ The 19 modules remain available:
 | ADX | 1.25 |
 | ATR | 0.50 |
 
-The weights are not probabilities and are not a guarantee of predictive power. Their purpose is to prevent a large number of correlated indicators from being treated as equally independent evidence.
+These are engineering weights, not probabilities.
 
 ## Entry rule
 
 For each completed candle:
 
-- calculate bullish and bearish module states;
-- ignore modules with simultaneous bullish/bearish conflict;
-- sum the configured module weights by side;
-- calculate:
+- calculate bullish/bearish module states;
+- ignore simultaneous bull/bear module conflicts;
+- sum weights by direction;
+- calculate edge = abs(weight_buy - weight_sell) / (weight_buy + weight_sell).
 
-`edge = abs(weight_buy - weight_sell) / (weight_buy + weight_sell)`
+A side can trigger only when weighted score is at least Adaptive Minimum Weight, is strictly greater than the opposite side, Edge is at least Adaptive Edge, enabled ATR/Volume/ADX gates pass, and enabled 4H MTF direction agrees.
 
-A side can trigger only when:
-
-- its weighted score is at least Adaptive Minimum Weight;
-- it is strictly greater than the opposite weighted score;
-- Edge is at least Adaptive Edge;
-- ATR/Volume/ADX gates pass when enabled;
-- 4H MTF direction agrees when MTF is enabled.
-
-VOL and ATR are therefore not counted twice as both a gate and a directional candle vote in Adaptive mode.
+VOL and ATR are not double-counted as both directional evidence and regime gates in Adaptive mode.
 
 ## Risk hardening
 
@@ -79,9 +79,11 @@ VOL and ATR are therefore not counted twice as both a gate and a directional can
 - Session peak equity is persisted.
 - Stale market data is rejected.
 - Three consecutive execution-cycle failures stop the worker.
-- Emergency loss scope defaults to the bot's active symbol.
+- Emergency loss scope defaults to the active bot symbol.
 - Normal cleanup prefers bot-managed order IDs.
 
-## Why this is different from simply adding more indicators
+## Backtester parity
 
-The objective is to make the decision layer more robust to indicator correlation and market regime changes rather than increasing the raw number of signals.
+The backtester accepts the same Adaptive Edge and Minimum Weight values explicitly and uses the same decision contract.
+
+This prevents a hidden global setting from changing historical results.
