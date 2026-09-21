@@ -281,7 +281,7 @@ ATR is a regime gate, not a directional family in ADAPTIVE_EVIDENCE.
 #### ADX gate
 Measures trend strength, not direction.
 R5:
-- Crypto length 14, threshold 21
+- Crypto length 14, threshold 20
 - Forex length 14, threshold 20
 If ADX is below the configured threshold, the strategy can block a trend-dependent signal.
 
