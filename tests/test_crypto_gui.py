@@ -2,7 +2,7 @@ import sys, types, tkinter as tk, importlib.util
 stub=types.ModuleType("ccxt"); stub.Exchange=type("Exchange",(),{})
 for n in ("bybit","binance","gateio"): setattr(stub,n,type(n,(),{}))
 sys.modules["ccxt"]=stub
-p="UniversalFuturesBot_UniversalFuturesBot_CRYPTO.py"
+p="UniversalFuturesBot_CRYPTO.py"
 sp=importlib.util.spec_from_file_location("crypto_r5_gui",p); m=importlib.util.module_from_spec(sp); sys.modules["crypto_r5_gui"]=m; sp.loader.exec_module(m)
 root=tk.Tk(); root.withdraw(); app=m.UniversalFuturesBotGUI(root)
 app.e_max_open_trades.delete(0,tk.END); app.e_max_open_trades.insert(0,"2")
