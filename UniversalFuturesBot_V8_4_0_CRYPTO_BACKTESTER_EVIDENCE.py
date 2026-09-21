@@ -734,6 +734,16 @@ def calculate_supertrend(
 
 def calculate_adx(df, length=14):
     df = df.copy()
+    length = int(length)
+    if length <= 0:
+        raise ValueError("ADX period must be greater than 0.")
+
+    # Keep ADX self-contained so direct indicator/backtester tests do not depend
+    # on Supertrend having been calculated first.
+    prev_close = df["close"].shift(1)
+    df["tr0"] = (df["high"] - df["low"]).abs()
+    df["tr1"] = (df["high"] - prev_close).abs()
+    df["tr2"] = (df["low"] - prev_close).abs()
 
     df["up_move"] = df["high"] - df["high"].shift(1)
     df["down_move"] = df["low"].shift(1) - df["low"]
