@@ -2234,6 +2234,10 @@ class UniversalFuturesBotGUI:
             "hold_until_all_reverse": self.v_hold_until_all_reverse.get(),
             "adaptive_edge": self.e_adaptive_edge.get().strip(),
             "adaptive_min_weight": self.e_adaptive_min_weight.get().strip(),
+            "evidence_min_families": self.evidence_min_families.get().strip(),
+            "evidence_family_min_score": self.evidence_family_min_score.get().strip(),
+            "evidence_require_trend": bool(self.evidence_require_trend.get()),
+            "evidence_require_independent": bool(self.evidence_require_independent.get()),
             "evidence_min_families": self.e_evidence_min_families.get().strip(),
             "evidence_family_min_score": self.e_evidence_family_min_score.get().strip(),
             "evidence_require_trend": self.v_evidence_require_trend.get(),
@@ -8579,6 +8583,19 @@ class UniversalFuturesBotGUI:
         self.e_adaptive_min_weight = tk.Entry(f_strat, width=6)
         self.e_adaptive_min_weight.insert(0, DEFAULT_ADAPTIVE_MIN_WEIGHT)
         self.e_adaptive_min_weight.grid(row=32, column=7, padx=2)
+        tk.Label(f_strat, text="Evidence Min Families:").grid(row=35, column=0, sticky="e")
+        self.evidence_min_families = tk.Entry(f_strat, width=5)
+        self.evidence_min_families.insert(0, str(EVIDENCE_DEFAULT_MIN_FAMILIES))
+        self.evidence_min_families.grid(row=35, column=1, padx=2, sticky="w")
+        tk.Label(f_strat, text="Family Evidence Min:").grid(row=35, column=2, sticky="e")
+        self.evidence_family_min_score = tk.Entry(f_strat, width=6)
+        self.evidence_family_min_score.insert(0, str(EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
+        self.evidence_family_min_score.grid(row=35, column=3, padx=2, sticky="w")
+        self.evidence_require_trend = tk.BooleanVar(value=EVIDENCE_DEFAULT_REQUIRE_TREND)
+        tk.Checkbutton(f_strat, text="Require Trend Family", variable=self.evidence_require_trend).grid(row=35, column=4, sticky="w")
+        self.evidence_require_independent = tk.BooleanVar(value=EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)
+        tk.Checkbutton(f_strat, text="Require Independent Family", variable=self.evidence_require_independent).grid(row=35, column=6, columnspan=2, sticky="w")
+        tk.Label(f_strat, text="Evidence: TREND | MOMENTUM | FLOW | STRUCTURE. ATR/ADX are regime gates and are not counted as directional evidence.", fg="#555555").grid(row=36, column=0, columnspan=8, sticky="w")
 
         self.v_hold_until_all_reverse = tk.BooleanVar(value=True)
         tk.Checkbutton(
@@ -9939,6 +9956,12 @@ class UniversalFuturesBotGUI:
             self.e_adaptive_edge.insert(0, cfg.get("adaptive_edge", DEFAULT_ADAPTIVE_EDGE))
             self.e_adaptive_min_weight.delete(0, tk.END)
             self.e_adaptive_min_weight.insert(0, cfg.get("adaptive_min_weight", DEFAULT_ADAPTIVE_MIN_WEIGHT))
+            self.evidence_min_families.delete(0, tk.END)
+            self.evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
+            self.evidence_family_min_score.delete(0, tk.END)
+            self.evidence_family_min_score.insert(0, cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
+            self.evidence_require_trend.set(bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)))
+            self.evidence_require_independent.set(bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
 
             self.v_size_mode.set(
                 cfg.get(
@@ -12774,6 +12797,12 @@ class UniversalFuturesBotGUI:
             raise ValueError("Adaptive Edge must be between 0 and 1.")
         if adaptive_min_weight <= 0:
             raise ValueError("Adaptive Min Weight must be greater than 0.")
+        evidence_min_families = int(str(self.evidence_min_families.get()).strip())
+        evidence_family_min_score = float(str(self.evidence_family_min_score.get()).strip())
+        if evidence_min_families < 1 or evidence_min_families > 4:
+            raise ValueError("Evidence Min Families must be between 1 and 4.")
+        if not 0.0 < evidence_family_min_score <= 1.0:
+            raise ValueError("Family Evidence Min must be greater than 0 and at most 1.")
         size_mode = str(self.v_size_mode.get()).strip().upper()
         if size_mode not in ("EQUITY_RISK_%", "FIXED_QTY"):
             raise ValueError("Sizing Mode must be EQUITY_RISK_% or FIXED_QTY.")
