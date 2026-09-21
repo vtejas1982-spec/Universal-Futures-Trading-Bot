@@ -5,13 +5,45 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
 
-## V8.4.1 Engine Audit — 2026-09-21
+## V8.4.1 FINAL Full Engine / Strategy / GUI / Safety Audit — 2026-09-21
 
-The V8.4.0 crypto live engine, recovery engine and strategy-parity backtester were re-audited. Syntax/indentation corruption was repaired, the duplicate live GUI definition was removed, Adaptive Evidence settings were added to save/load persistence, and the backtester MTF input path was hardened. All three sources passed AST parsing and Python compilation, plus deterministic strategy, signal-mode, Grid-mode and module smoke tests. See `docs/V8_4_1_ENGINE_AUDIT_RELEASE_NOTES.md`.
+The crypto bot has now received the full follow-up audit against the V8.2 Engine Audit requirements and the V8.4 Evidence-Family redesign.
 
-## 🚀 V8.3.3 Modular Engine + Recovery + Multi-Bot Build
+### Critical fixes in this final audit
 
-**Current build — V8.3.3**
+- Restored the 11 missing core live indicator functions: RMA, Supertrend, ADX, MACD, RSI, WMA, RSI-MA, HMA, VWAP Delta, VIDYA and Nadaraya-Watson Envelope.
+- Hardened ADX so it is self-contained and no longer depends on Supertrend having run first.
+- Added the missing Divergence **Min Div** GUI control and save/load persistence.
+- Made **Use all divergence sources** functional and persistent.
+- Passed the exact Evidence-Family settings into `decision_reason()`, keeping diagnostics aligned with the real decision.
+- Changed missing/legacy signal-mode fallback to the current `ADAPTIVE_EVIDENCE` default.
+- Added exchange/account-mode preflight validation before exchange construction.
+- Made newly created SL/TP/BE protection verification **fail closed** when the exchange response is inconclusive.
+- Kept the categorized Section 3 GUI: TREND, MOMENTUM, FLOW, STRUCTURE, REGIME, OPTIONAL/LEGACY and DECISION ENGINE.
+- Retained the V8.2/V8.3 safety contract: actual-fill protection, Grid order verification, recovery identity checks, managed-order ownership, Hold-All-Reverse, Hold-SL WAIT, post-SL opposite lock, same-candle protection, stale-data guard, emergency scope and multi-bot profile isolation.
+
+### V8.4 Evidence-Family contract
+
+- **TREND:** Supertrend, EMA, EMA Cross, MACD, VIDYA, NWE
+- **MOMENTUM:** RSI, Stochastic, Divergence
+- **FLOW:** VWAP, VWAP Delta, Volume, Volume S/R
+- **STRUCTURE:** Liquidity Swings, Trendline Breakout, MTF
+- **REGIME:** ATR and ADX gates only; they are not counted as independent directional evidence
+- **OPTIONAL / LEGACY:** Bollinger Bands
+
+### Final validation
+
+**54 PASS / 0 FAIL / 0 SKIP**
+
+The suite covers compilation, core indicators, the 19-module chain, Evidence-Family decisions, legacy modes, protection fail-closed behavior, GUI initialization and save/load round-trips.
+
+Import smoke tests for live, backtester and recovery sources also passed.
+
+See `docs/V8_4_1_ENGINE_AUDIT_RELEASE_NOTES.md` for the complete audit record.
+
+## Historical V8.3.3 Modular Engine + Recovery + Multi-Bot Build
+
+**Historical V8.3.3 baseline — retained for reference**
 
 `V8_3_HARDENED_ADAPTIVE_BOT.py` — hardened adaptive live engine
 
