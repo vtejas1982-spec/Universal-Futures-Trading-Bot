@@ -2,3 +2,6 @@ ccxt>=4.5.0
 numpy>=1.26
 pandas>=2.2
 requests>=2.31
+MetaTrader5>=5.0
+matplotlib>=3.8
+openpyxl>=3.1
