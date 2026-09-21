@@ -6479,7 +6479,11 @@ def _tp_qtys(qty,cfg):
     if q1<=0 or q2<=0: raise ValueError("TP split leaves a non-positive quantity")
     return q1,q2
 
-\n\n# V8.4.2-R5 protection parity: ATR SL/TP uses the completed signal candle ATR.\n# ATR is a regime gate in ADAPTIVE_EVIDENCE and is not a directional family vote.\ndef _normal_position_from_entry(entry,side,equity,cfg):
+
+
+# V8.4.2-R5 protection parity: ATR SL/TP uses the completed signal candle ATR.
+# ATR is a regime gate in ADAPTIVE_EVIDENCE and is not a directional family vote.
+def _normal_position_from_entry(entry,side,equity,cfg):
     hold=bool(cfg["hold_until_all_reverse"])
     atr=float(cfg.get("_entry_atr",0.0) or 0.0)
     if bool(cfg.get("use_atr_sl",False)):
