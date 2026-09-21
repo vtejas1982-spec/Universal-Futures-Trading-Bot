@@ -24,9 +24,19 @@
 
 ## Protection contract
 - SL = 1.50 × completed-candle ATR.
-- TP1 = 1.20 × actual SL distance.
+- TP1 = 1.30 × actual SL distance.
 - TP2 = 2.20 × actual SL distance.
 - Runtime logs report actual entry, ATR, Price %, and ROI %.
 
 ## Limitation
 MT5 broker behavior, fills, stop-distance rules, terminal connectivity and account mode must be validated in MT5 demo/paper before live use.
+
+
+## 2026-09-22 audit follow-up
+
+- Explicit ADX Period = 14 is now configurable and persisted.
+- ADAPTIVE_EVIDENCE diagnostics now identify the actual blocker, including family count, edge, Trend/independent requirements, ATR gate and ADX gate.
+- Runtime logs expose completed-candle ADX and ADXGate PASS/FAIL.
+- New Forex profiles use 0.50% risk, ATR gate ON, news ±30m, session 07:00–20:00 UTC, Friday cutoff 18:00 UTC, daily loss 2%, and correlation protection 0.85.
+- Forex ATR protection recommendation is SL 1.50x ATR, TP1 1.30R, TP2 2.20R.
+- Existing saved configurations remain authoritative.
