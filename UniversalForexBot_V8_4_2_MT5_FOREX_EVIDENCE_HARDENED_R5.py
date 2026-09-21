@@ -121,9 +121,19 @@ def r5_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev,**
     sl,tp1,tp2=[fx.fx_safe_price(self,symbol,x) for x in (sl,tp1,tp2)]
     if side=="LONG" and not(sl<entry<tp1<tp2):raise RuntimeError("Invalid LONG ATR Dynamic protection.")
     if side=="SHORT" and not(sl>entry>tp1>tp2):raise RuntimeError("Invalid SHORT ATR Dynamic protection.")
+    def roi(target):
+        try:
+            if float(margin)>0:
+                pnl=abs(float(self.exchange.calc_profit(side,symbol,qty,entry,float(target))))
+                return pnl/float(margin)*100.0
+        except Exception:
+            pass
+        return abs(float(target)-entry)/entry*max(float(lev),1.0)*100.0
+    sr,tr1r,tr2r=roi(sl),roi(tp1),roi(tp2)
     self.log(f"SL/TP ENGINE — ATR DYNAMIC | Entry={entry:.12g} | ATR={atr:.12g} | SL={sm:.2f} ATR")
-    self.log(f"SL={sl:.12g} | Price -{sd/entry*100:.4f}% | TP1={tp1:.12g} | Price +{d1/entry*100:.4f}% | {m1:.2f}R")
-    self.log(f"TP2={tp2:.12g} | Price +{d2/entry*100:.4f}% | {m2:.2f}R")
+    self.log(f"SL={sl:.12g} | Price -{sd/entry*100:.4f}% | ROI -{sr:.2f}%")
+    self.log(f"TP1={tp1:.12g} | Price +{d1/entry*100:.4f}% | ROI +{tr1r:.2f}% | {m1:.2f}R")
+    self.log(f"TP2={tp2:.12g} | Price +{d2/entry*100:.4f}% | ROI +{tr2r:.2f}% | {m2:.2f}R")
     return sl,tp1,tp2,sd/entry,d1/entry,d2/entry
 
 def r5_start(self):
