@@ -1,3 +1,44 @@
+## V8.4.1 — FINAL Full Engine Audit — 2026-09-21
+
+### Fixed
+- Restored 11 missing core live indicator function definitions that had been lost during the categorized GUI merge.
+- Hardened ADX so direct indicator callers do not depend on Supertrend-generated true-range columns.
+- Added the missing Divergence Min Div GUI control and save/load coverage.
+- Made Use All Divergence Sources functional and persistent.
+- Passed all Evidence-Family controls explicitly into decision diagnostics.
+- Corrected missing signal-mode fallback to the current ADAPTIVE_EVIDENCE default.
+- Added exchange/account-mode preflight validation.
+- Made SL/TP/BE protection verification fail closed on inconclusive exchange order-state responses.
+
+### Added / Modified
+- Final categorized V8.4 Evidence-Family Section 3.
+- Final 19-module indicator-chain regression coverage.
+- GUI construction and configuration round-trip tests.
+- Protection fail-closed regression test.
+- Final full audit release notes.
+
+### Retained from V8.2/V8.3
+- Actual-fill SL/TP calculation and verification.
+- TP1 break-even protection replacement.
+- Recovery/resume identity checks.
+- Exact managed-order ownership and orphan-order safety.
+- Grid order verification/cancellation safety.
+- Hold-All-Reverse and Hold-SL WAIT.
+- Post-SL opposite-signal lock and same-candle protection.
+- Profile locking, profile deletion safety and multi-bot isolation.
+- Stale-data and consecutive-cycle-error safety.
+- Emergency-stop scope.
+
+### Validation
+- **54 PASS / 0 FAIL / 0 SKIP**
+- Live, backtester and recovery AST/compile checks: PASS.
+- Full deterministic 19-module indicator chain: PASS.
+- Evidence-Family and legacy signal modes: PASS.
+- GUI init and save/load round-trip: PASS.
+- Protection verification fail-closed test: PASS.
+
+---
+
 ## V8.4.1 — Engine Audit and Source Hardening — 2026-09-21
 
 ### Fixed
