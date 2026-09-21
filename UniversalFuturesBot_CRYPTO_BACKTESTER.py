@@ -7,7 +7,7 @@ Historical simulator for Universal Futures Trading Bot V8.4.2-R5.
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
     modules, signal modes, normal risk/SL/TP logic, Hold-All-Reverse logic,
-    post-SL opposite-signal lock, and Grid modes used by the live V8.3.3 bot.
+    post-SL opposite-signal lock, and Grid modes used by the live V8.4.2-R5 bot.
 
 Included:
     * 19 V8 directional modules
@@ -33,7 +33,7 @@ Included:
 
 Important:
     This V8.4.2-R5 backtester mirrors the R5 strategy/indicator contract. The
-    V8.3.3 runtime-only protections (managed-order checkpoint retirement,
+    Live runtime-only protections (managed-order checkpoint retirement,
     strict open-order snapshot completeness, startup inventory ownership
     checks, and live exchange preflight) are not historical price signals
     and are therefore not fabricated as backtest trades.
@@ -102,7 +102,7 @@ DEFAULTS.update({
 
 
 # ============================================================
-# V8.3.3 ADVANCED STRATEGY MODULES
+# R5 ADVANCED STRATEGY MODULES
 # ------------------------------------------------------------
 # Divergence source: "Divergence for Many Indicators v4"
 # © LonesomeTheBlue — Mozilla Public License 2.0.
@@ -1459,7 +1459,7 @@ def calculate_vwap(df, length=50):
     return df
 
 class StrategyEngine:
-    """V8.3 hardened adaptive, pure strategy-decision engine.
+    """R5 hardened adaptive, pure strategy-decision engine.
 
     Indicator calculations remain in the existing functions; this class owns
     only the final directional vote contract. It is GUI/exchange independent.
@@ -2652,7 +2652,7 @@ class UniversalFuturesBotGUI:
         tk.Label(fr, text="ADAPTIVE_EVIDENCE: weighted module evidence is normalized within each family; Regime is gating only. Minimum independent families prevents correlated Trend indicators from acting as independent confirmations.", fg="#444444", wraplength=900, justify="left").grid(row=4,column=0,columnspan=8,sticky="w",pady=3)
 
         # ---------------- Compatibility note ----------------
-        tk.Label(f_strat, text="V8.4 preserves all V8.3.4 indicator formulas, entry modes, risk/SLTP controls, config keys and legacy signal modes. Only ADAPTIVE_EVIDENCE uses the new family-aware decision contract.", fg="#444444", wraplength=980, justify="left").pack(fill="x", padx=10, pady=(2,6))
+        tk.Label(f_strat, text="R5 preserves the audited indicator formulas, entry modes, risk/SLTP controls, config keys and legacy signal modes. ADAPTIVE_EVIDENCE uses the family-aware decision contract.", fg="#444444", wraplength=980, justify="left").pack(fill="x", padx=10, pady=(2,6))
 
         # 4. Risk
         f_risk = tk.LabelFrame(
@@ -6326,7 +6326,7 @@ def persistent_votes(df,i,cfg):
     return out
 
 def decide(votes,cfg,atr_pass=True,vol_pass=True,adx_pass=True,mtf_pass_bull=True,mtf_pass_bear=True):
-    """Compatibility helper using the same per-profile Adaptive parameters as live V8.3.3."""
+    """Compatibility helper using the same per-profile Adaptive parameters as live V8.4.2-R5."""
     return StrategyEngine.decide_signal(
         votes, str(cfg["signal_mode"]).upper(), int(cfg["min_score"]),
         atr_pass=atr_pass, vol_pass=vol_pass, adx_pass=adx_pass,
@@ -6954,7 +6954,7 @@ class BacktesterGUI:
         ttk.Button(f,text="Save Backtest Config JSON",command=self.export_config).grid(row=4,column=2,columnspan=2,sticky="w",padx=4,pady=4)
     def _build_strategy(self):
         p=self.tabs["Strategy"]; top=ttk.Frame(p); top.pack(fill="x",padx=8,pady=6)
-        lf=ttk.LabelFrame(top,text="19 Directional Modules — V8.3.1 participation"); lf.pack(fill="x")
+        lf=ttk.LabelFrame(top,text="19 Directional Modules — R5 strategy contract"); lf.pack(fill="x")
         for i,m in enumerate(MODULES):
             self.check(lf,"use_"+m,m,i//6,(i%6)*2)
         sf=ttk.LabelFrame(p,text="Signal Engine"); sf.pack(fill="x",padx=8,pady=6)
