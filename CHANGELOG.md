@@ -1,3 +1,21 @@
+## V8.4.1 — Engine Audit and Source Hardening — 2026-09-21
+
+### Fixed
+- Repaired syntax/indentation corruption in the crypto live engine, recovery engine and backtester.
+- Removed the duplicate live `UniversalFuturesBotGUI` definition and duplicate top-level Liquidity Swings / Trendline implementations.
+- Added persistence for Adaptive Evidence settings.
+- Hardened backtester MTF input handling for `datetime` or millisecond `time` data.
+- Aligned backtester default signal mode with the live engine: `ADAPTIVE_EVIDENCE`.
+
+### Validation
+- Three crypto sources: AST parse and Python compilation PASS.
+- Import smoke tests PASS.
+- 19-module indicator smoke tests PASS.
+- All signal modes and Grid modes PASS in deterministic synthetic tests.
+- Added `tests/test_v841_engine_audit.py`.
+
+---
+
 ## V8.3.3 — Full Engine / Strategy / Configuration Audit — 2026-09-20
 
 ### Fixed
