@@ -11,5 +11,8 @@ assert app.e_max_open_trades.get()=="1"
 assert float(app.e_atr_sl_mult.get())==1.5
 assert float(app.e_atr_tp1_mult.get())==1.2
 assert float(app.e_atr_tp2_mult.get())==2.2
+assert float(app.e_adx_len.get())==14
+assert app.v_use_atr.get() is True
+assert app.v_grid_mode.get()=="OFF"
 assert app.v_use_atr_sl.get() is True
 root.destroy(); print("CRYPTO R5 GUI SMOKE: PASS")
