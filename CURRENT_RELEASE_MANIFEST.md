@@ -22,6 +22,7 @@
 - CHANGELOG.md
 - docs/CRYPTO_R5_RELEASE_NOTES.md
 - docs/FOREX_R5_RELEASE_NOTES.md
+- docs/R5_ENGINE_AUDIT_2026-09-22.md
 
 ## Version
 - Crypto: V8.4.2-R5
