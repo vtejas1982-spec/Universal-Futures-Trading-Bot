@@ -5,7 +5,7 @@ A Python/Tkinter multi-exchange cryptocurrency futures trading bot for developme
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
 
-## V8.4.1 FINAL Full Engine / Strategy / GUI / Safety Audit — 2026-09-21
+## V8.4.1 FINAL-R2 Full Engine / Strategy / GUI / Safety Audit — 2026-09-21
 
 The crypto bot has now received the full follow-up audit against the V8.2 Engine Audit requirements and the V8.4 Evidence-Family redesign.
 
@@ -19,6 +19,12 @@ The crypto bot has now received the full follow-up audit against the V8.2 Engine
 - Changed missing/legacy signal-mode fallback to the current `ADAPTIVE_EVIDENCE` default.
 - Added exchange/account-mode preflight validation before exchange construction.
 - Made newly created SL/TP/BE protection verification **fail closed** when the exchange response is inconclusive.
+- Fixed legacy `SINGLE_SIGNAL` so opposing directional evidence is treated as a conflict instead of accepting whichever module appears first.
+- Added a full startup strategy/risk/SLTP preflight before leverage/order setup, while retaining authoritative worker-side validation.
+- Fixed the direct backtester API so raw OHLCV containing only millisecond `time` is normalized and strategy columns are built automatically.
+- Removed duplicate top-level Liquidity Swings and Trendline Breakout definitions from the backtester.
+- Synchronized the backtester `decision_reason()` contract with the Evidence-Family requirements.
+- Added a repository-aware 60-check regression suite and corrected the test path handling for `tests/`.
 - Kept the categorized Section 3 GUI: TREND, MOMENTUM, FLOW, STRUCTURE, REGIME, OPTIONAL/LEGACY and DECISION ENGINE.
 - Retained the V8.2/V8.3 safety contract: actual-fill protection, Grid order verification, recovery identity checks, managed-order ownership, Hold-All-Reverse, Hold-SL WAIT, post-SL opposite lock, same-candle protection, stale-data guard, emergency scope and multi-bot profile isolation.
 
@@ -33,7 +39,7 @@ The crypto bot has now received the full follow-up audit against the V8.2 Engine
 
 ### Final validation
 
-**54 PASS / 0 FAIL / 0 SKIP**
+**60 PASS / 0 FAIL / 0 SKIP**
 
 The suite covers compilation, core indicators, the 19-module chain, Evidence-Family decisions, legacy modes, protection fail-closed behavior, GUI initialization and save/load round-trips.
 
