@@ -1,3 +1,61 @@
+# Universal Futures & Forex Trading Bot
+
+## CURRENT PRODUCTION RELEASE — V8.4.2-R5
+
+This repository intentionally keeps **only the current production source names** in the main working tree. Historical versions belong in Git history/tags/releases rather than beside the production files. GitHub releases are based on tags, which provide a clean historical version boundary. citeturn0search1
+
+### Production engines
+
+| Area | Live engine | Backtester |
+|---|---|---|
+| Crypto / Futures | `UniversalFuturesBot_CRYPTO.py` | `UniversalFuturesBot_CRYPTO_BACKTESTER.py` |
+| Forex / MT5 | `UniversalForexBot_MT5.py` | `UniversalForexBot_MT5_BACKTESTER.py` |
+
+### R5 status
+
+- Crypto live engine: **V8.4.2-R5**
+- Crypto strategy-parity backtester: **V8.4.2-R5**
+- Forex / MT5 live engine: **V8.4.2-R5**
+- Forex / MT5 strategy-parity backtester: **V8.4.2-R5**
+- Config schema: **9**
+- Evidence-family engine: **ADAPTIVE_EVIDENCE**
+- ATR Dynamic protection: **1.50× ATR / 1.20× SL / 2.20× SL**
+- Current single-symbol execution coordinator: **1 net position per bot/symbol**
+
+### Repository rule
+
+Do not add another `V8_4_2_R6.py`, `FINAL2.py`, `AUDITED_R3.py`, etc. to the production root. Update the current production file, increment the release/build marker, add a changelog entry, and use Git tags/releases for historical snapshots.
+
+## R5 architecture
+
+- Evidence families: TREND, MOMENTUM, FLOW, STRUCTURE; ATR/ADX are regime gates.
+- Minimum evidence families: 2.
+- Family minimum score: 0.35.
+- Trend family required.
+- Independent non-Trend family required.
+- Adaptive edge: 0.18.
+- Adaptive minimum weight: 3.50.
+- DIRECT_SHOT and Grid modes remain supported.
+- Existing saved profiles remain authoritative; missing R5 fields use safe defaults.
+- ATR Dynamic SL uses the latest completed candle and the actual filled entry/position quantity.
+- Backtests are research simulations; exchange/MT5 execution, fills, latency, trigger behavior and broker reconciliation still require demo validation.
+
+## File layout
+
+```
+Universal-Futures-Trading-Bot/
+├── UniversalFuturesBot_CRYPTO.py
+├── UniversalFuturesBot_CRYPTO_BACKTESTER.py
+├── UniversalForexBot_MT5.py
+├── UniversalForexBot_MT5_BACKTESTER.py
+├── tests/
+├── docs/
+├── README.md
+└── CHANGELOG.md
+```
+
+---
+
 ## V8.4.2-R5 — Crypto Evidence Hardened + Strategy-Parity Backtester — 2026-09-21
 
 ### R5 fixes / additions
@@ -8,15 +66,15 @@
 - Preserved completed-candle ATR -> actual filled-entry protection.
 - Preserved explicit Evidence-family runtime parameters, including Minimum Families and Family Minimum Score.
 - Removed a pandas FutureWarning in the Volume/S-R aggregation path.
-- Added a dedicated R5 strategy-parity backtester: UniversalFuturesBot_V8_4_2_CRYPTO_BACKTESTER_EVIDENCE_R5.py
+- Added a dedicated R5 strategy-parity backtester: UniversalFuturesBot_CRYPTO_BACKTESTER.py
 - Backtester supports raw OHLCV/DataFrame/CSV input, completed 4H MTF, causal divergence, Volume/S-R, Evidence-family decisions, ATR Dynamic SL/TP, risk sizing, cooldown, drawdown, loss-streak, post-SL lock, Grid simulation and conservative SL-first same-bar ambiguity.
 - ATR Dynamic contract: SL 1.50x ATR, TP1 1.20x actual SL distance, TP2 2.20x actual SL distance.
 - Added R5 engine audit and GUI smoke tests.
 
 ### R5 files
 
-- UniversalFuturesBot_V8_4_2_CRYPTO_EVIDENCE_HARDENED_R5.py
-- UniversalFuturesBot_V8_4_2_CRYPTO_BACKTESTER_EVIDENCE_R5.py
+- UniversalFuturesBot_CRYPTO.py
+- UniversalFuturesBot_CRYPTO_BACKTESTER.py
 - tests/test_v842_crypto_engine_audit_R5.py
 - tests/test_v842_crypto_gui_smoke_R5.py
 - docs/V8_4_2_CRYPTO_R5_RELEASE_NOTES.md
@@ -53,8 +111,8 @@ The Forex/MT5 engine now has a dedicated V8.4.2-R5 hardening layer aligned with 
 
 ### Forex R5 source files
 
-- UniversalForexBot_V8_4_2_MT5_FOREX_EVIDENCE_HARDENED_R5.py
-- UniversalForexBot_V8_4_2_MT5_FOREX_BACKTESTER_EVIDENCE_R5.py
+- UniversalForexBot_MT5.py
+- UniversalForexBot_MT5_BACKTESTER.py
 - tests/test_forex_v842_engine_audit_R5.py
 - docs/V8_4_2_FOREX_R5_RELEASE_NOTES.md
 
