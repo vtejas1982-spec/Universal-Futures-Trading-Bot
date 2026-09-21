@@ -30,20 +30,23 @@ import py_compile
 
 
 ROOT = Path(__file__).resolve().parent
-if (ROOT / "UniversalFuturesBot_V8_4_1_CRYPTO_FINAL_AUDITED_FIXED.py").exists():
-    LIVE = ROOT / "UniversalFuturesBot_V8_4_1_CRYPTO_FINAL_AUDITED_FIXED.py"
-else:
-    LIVE = ROOT / "UniversalFuturesBot_V8_4_1_EVIDENCE_FAMILY_FULL_AUDIT.py"
-
-if (ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_BACKTESTER_EVIDENCE_V8_4_1_FINAL_AUDITED.py").exists():
-    BACKTEST = ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_BACKTESTER_EVIDENCE_V8_4_1_FINAL_AUDITED.py"
-else:
-    BACKTEST = ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_BACKTESTER_EVIDENCE_V8_4_1_AUDITED.py"
-
-if (ROOT / "UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED_V8_4_1_FIXED.py").exists():
-    RECOVERY = ROOT / "UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED_V8_4_1_FIXED.py"
-else:
-    RECOVERY = ROOT / "UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py"
+# Repository names are preferred; the standalone release names are supported
+# when this test is run from the exported final-audit package.
+LIVE = (
+    ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_EVIDENCE_HARDENED.py"
+    if (ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_EVIDENCE_HARDENED.py").exists()
+    else ROOT / "UniversalFuturesBot_V8_4_1_CRYPTO_FINAL_AUDITED_FIXED.py"
+)
+BACKTEST = (
+    ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_BACKTESTER_EVIDENCE.py"
+    if (ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_BACKTESTER_EVIDENCE.py").exists()
+    else ROOT / "UniversalFuturesBot_V8_4_0_CRYPTO_BACKTESTER_EVIDENCE_V8_4_1_FINAL_AUDITED.py"
+)
+RECOVERY = (
+    ROOT / "UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py"
+    if (ROOT / "UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED.py").exists()
+    else ROOT / "UniversalFuturesBot_V8_RECOVERY_MULTI_BOT_AUDITED_V8_4_1_FIXED.py"
+)
 
 PASS = 0
 FAIL = 0
