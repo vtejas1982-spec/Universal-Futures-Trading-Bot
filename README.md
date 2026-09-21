@@ -1,3 +1,36 @@
+## V8.4.2-R5 — Forex / MT5 Hardened Release — 2026-09-21
+
+The Forex/MT5 engine now has a dedicated V8.4.2-R5 hardening layer aligned with the Crypto R5 protection/configuration contract while preserving MT5-native execution.
+
+### R5 fixes / additions
+
+- Added Max Open Trades (per bot/symbol) with fail-safe normalization to 1 net position for the current single-symbol execution coordinator.
+- Fixed the Forex GUI cooldown-row overlap.
+- Added ATR Dynamic SL + TP1 + TP2 controls:
+  - SL = completed-candle ATR × 1.50
+  - TP1 = actual SL distance × 1.20
+  - TP2 = actual SL distance × 2.20
+- ATR protection uses the actual filled entry and actual position quantity.
+- Runtime ATR protection diagnostics report entry, ATR, price movement %, ROI context and R relationships.
+- Added persistent atr_sl_mult, atr_tp1_mult, atr_tp2_mult and max_open_trades settings.
+- Bumped Forex config schema to 9.
+- Added R5 strategy-parity backtester and 26-check Forex R5 audit suite.
+- New profiles use the R5 Evidence-family contract: ADAPTIVE_EVIDENCE, 2 families, family score 0.35, Trend + independent non-Trend requirements, Edge 0.18, and synchronized trend/momentum/flow/structure defaults.
+- Existing saved profiles remain authoritative; missing R5 fields receive safe defaults during migration.
+
+### Forex R5 source files
+
+- UniversalForexBot_V8_4_2_MT5_FOREX_EVIDENCE_HARDENED_R5.py
+- UniversalForexBot_V8_4_2_MT5_FOREX_BACKTESTER_EVIDENCE_R5.py
+- tests/test_forex_v842_engine_audit_R5.py
+- docs/V8_4_2_FOREX_R5_RELEASE_NOTES.md
+
+### Validation
+
+26/26 Forex R5 audit checks PASS, plus GUI smoke and config save/load round-trip validation. Live MT5 order lifecycle remains a demo/paper validation step.
+
+---
+
 # Universal Futures Trading Bot V8.4.1
 
 
