@@ -697,3 +697,123 @@ LOG / CHECKPOINT / RECOVERY
 ```
 
 **Core R5 principle:** require better evidence from different families instead of simply counting more correlated indicators.
+
+
+## APPENDIX — SUPPLIED UPDATED MANUAL: RECOMMENDED CRYPTO + FOREX PROFILES
+
+The supplied V8.4.2-R5 updated manual contains the following recommended settings. They are recommendations, not profitability guarantees.
+
+### Crypto Futures — recommended profile
+
+| Setting | Value |
+|---|---|
+| Timeframe | 15m |
+| Higher timeframe | 4H |
+| Entry / Grid | DIRECT_SHOT; Grid OFF initially |
+| Signal Mode | ADAPTIVE_EVIDENCE |
+| Minimum Families / Family Score | 2 / 0.35 |
+| Trend / Independent family required | YES / YES |
+| Adaptive Edge / Minimum Weight | 0.18 / 3.50 |
+| Max Open Trades | 1 net position per bot/symbol |
+| Cooldown | 15 min |
+| Completed Candle / Same-candle re-entry | ON / OFF |
+| Leverage | 3x–5x |
+| Margin | ISOLATED where supported |
+| Risk / trade | 0.75% preferred; source range 0.5%–1.0% |
+| Max DD | 5% |
+| Emergency capital loss | 30% |
+| Loss streak | ON; max 3 |
+| Daily loss | ON; 3% |
+| Supertrend | ON; 10; 3.0; CURRENT_TREND |
+| EMA / EMA Cross | ON; 50 / ON; 9/21 |
+| MACD | ON; 12/26/9 |
+| VIDYA / NWE | OFF initially / OFF initially |
+| RSI | ON; 14; OB 70; OS 30; continuation/current-trend style |
+| Stochastic | ON; K14; Smooth3; D3 |
+| Divergence | ON; confirmed/causal; all sources ON |
+| VWAP | ON; 50 |
+| VWAP Delta | ON; Smooth; 21; baseline 50; CURRENT_TREND |
+| Volume / Volume S/R | ON; MA20 / ON; MA20; MAJORITY; CURRENT_ZONE |
+| Liquidity Swings | ON; 14; Wick Extremity; Count |
+| Trendline Breakout | ON; 14; min distance 5; buffer 0; retest 3; FRESH_BREAK |
+| MTF | ON; 15m + 4H |
+| ATR gate | Recommended ON; minimum 0.30% |
+| ADX | ON; 14; threshold 21 |
+| ATR Dynamic SL | ON; 1.50 × completed-candle ATR |
+| TP1 / TP2 | 1.20 × actual SL distance / 2.20 × actual SL distance |
+| TP1 / TP2 close | 50% / 50% |
+| TP1 break-even | ON |
+
+### Forex / MT5 — recommended profile
+
+| Setting | Value |
+|---|---|
+| Timeframe / Higher timeframe | 15m / 4H |
+| Entry | DIRECT_SHOT |
+| Signal Mode | ADAPTIVE_EVIDENCE |
+| Minimum Families / Family Score | 2 / 0.35 |
+| Trend / Independent family required | YES / YES |
+| Adaptive Edge | 0.18 |
+| Risk / trade | 0.50% preferred |
+| Max DD / Daily loss | 5% / 2% |
+| Max loss streak | 3 |
+| Emergency scope | BOT_ONLY |
+| News filter | ON; 30 min before + 30 min after |
+| News unavailable | BLOCK NEW ENTRY |
+| Session | ON; 07:00–20:00 |
+| Friday protection | ON; cutoff 18:00 |
+| Grid | OFF initially |
+| Supertrend | ON; 10/3.0; CURRENT_TREND |
+| EMA / EMA Cross | ON; 50 / ON; 9/21 |
+| MACD | ON; 12/26/9 |
+| VIDYA / NWE | OFF / OFF; repaint protection retained |
+| RSI / Stochastic | ON; 14/70/30 / ON; 14/3/3 |
+| Divergence | ON; confirmed; all sources ON |
+| VWAP | ON; 50 |
+| VWAP Delta | ON; Smooth; 21; baseline 50; CURRENT_TREND |
+| Volume / Volume S/R | ON; MA20 / ON; MA20; MAJORITY; CURRENT_ZONE |
+| Liquidity Swings | ON; 14; Wick Extremity; Count |
+| Trendline Breakout | ON; 14; min distance 5; buffer 0; retest 3; FRESH_BREAK |
+| MTF | ON; 15m + 4H |
+| ATR gate | Recommended 0.20% minimum |
+| ADX | ON; 14; threshold 20 |
+| ATR Dynamic SL | ON; 1.50 × completed-candle ATR |
+| TP1 / TP2 | **1.30R / 2.20R in the supplied recommendation** |
+| TP1 / TP2 close | 50% / 50% |
+| TP1 break-even | ON |
+
+### Forex pairs listed in the supplied manual
+
+EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF. The supplied manual also says to avoid opening several highly correlated USD positions simultaneously; the audited Forex engine includes correlation controls.
+
+### Important Forex TP1 distinction
+
+The supplied updated manual records **TP1 = 1.30R** as the recommended Forex profile value. Separately, the GitHub R5 engine/release contract documents **TP1 = 1.20 × actual SL distance** and TP2 = 2.20 × actual SL distance. These are intentionally documented as two different values/semantics rather than silently changing one to match the other. Verify the actual GUI/profile value before live trading.
+
+### Quick-start values from the supplied manual
+
+| Parameter | Crypto | Forex |
+|---|---|---|
+| TF | 15m | 15m |
+| MTF | 4H | 4H |
+| Entry | DIRECT_SHOT | DIRECT_SHOT |
+| Signal | ADAPTIVE_EVIDENCE | ADAPTIVE_EVIDENCE |
+| Families / Family score | 2 / 0.35 | 2 / 0.35 |
+| Trend / Independent | YES / YES | YES / YES |
+| Adaptive Edge | 0.18 | 0.18 |
+| ST / EMA / Cross / MACD | 10/3; 50; 9/21; 12/26/9 | 10/3; 50; 9/21; 12/26/9 |
+| RSI / Stoch | 14/70/30; 14/3/3 | 14/70/30; 14/3/3 |
+| Divergence | ON, causal | ON, causal |
+| VWAP / Delta | ON / ON | ON / ON |
+| Volume / S/R | ON / ON | ON / ON |
+| Liquidity / Trendline | ON / ON | ON / ON |
+| ATR gate | 0.30% recommended | 0.20% recommended |
+| ADX | 21 | 20 |
+| Risk / trade | 0.75% preferred | 0.50% preferred |
+| Max DD | 5% | 5% |
+| Daily loss | 3% | 2% |
+| Loss streak | 3 | 3 |
+| ATR SL | 1.5× | 1.5× |
+| TP1 / TP2 | 1.2R / 2.2R recommended | 1.3R / 2.2R recommended |
+| Grid | OFF initially | OFF |
+| News / session | N/A | ON / ON |
