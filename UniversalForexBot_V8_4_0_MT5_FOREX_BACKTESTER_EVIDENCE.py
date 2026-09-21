@@ -9,8 +9,9 @@ BOT_PATH = Path(__file__).with_name("UniversalForexBot_V8_4_0_MT5_FOREX_EVIDENCE
 spec=importlib.util.spec_from_file_location("fx_live", str(BOT_PATH))
 fx=importlib.util.module_from_spec(spec); spec.loader.exec_module(fx)
 
-APP_VERSION="V8.4.0-FOREX-EVIDENCE-BT"
-APP_TITLE="Universal Forex Bot V8.4.0 — MT5 Forex Evidence Strategy Backtester"
+APP_VERSION="V8.4.1-FOREX-EVIDENCE-BT-AUDITED"
+APP_TITLE="Universal Forex Bot V8.4.1 — MT5 Forex Evidence Strategy Backtester"
+AUDIT_BUILD="V8.4.1-ENGINE-AUDIT-2026-09-21-FOREX-R2"
 
 DEFAULTS={
     "capital":10000.0,"risk_pct":1.0,"contract_size":100000.0,"commission_per_lot":0.0,
@@ -72,7 +73,9 @@ def build_frame(df,c):
     if c['use_vwap']: x=fx.calculate_vwap(x,int(c['vwap_len']))
     if c['use_vwap_delta']: x=fx.calculate_vwap_delta(x,bool(c['vwap_delta_smooth']),int(c['vwap_delta_smooth_len']),int(c['vwap_delta_baseline']))
     if c['use_vidya']: x=fx.calculate_vidya(x,int(c['vidya_len']),int(c['vidya_momentum']),float(c['vidya_band']))
-    if c['use_nwe']: x=fx.calculate_nadaraya_watson_envelope(x,float(c['nwe_bandwidth']),float(c['nwe_mult']),bool(c['nwe_repaint']))
+    if c['use_nwe']:
+        # Match the live Forex engine's causal NWE parameter contract.
+        x=fx.calculate_nadaraya_watson_envelope(x,float(c['nwe_bandwidth']),float(c['nwe_mult']),lookback=500,mae_length=499)
     x['vol_ma']=x.vol.rolling(int(c['vol_len'])).mean()
     if c['use_liq_swing']: x=fx.calculate_liquidity_swings(x,int(c['liq_len']),c['liq_area'],c['liq_filter'],float(c['liq_filter_value']))
     if c['use_trendline']: x=fx.calculate_trendline_breakout(x,int(c['trend_len']),int(c['trend_min_dist']),float(c['trend_buffer']),int(c['trend_retest']))
@@ -205,6 +208,30 @@ def backtest(df,c,progress=None):
         px=float(x.close.iloc[-1]); pnl=((px-pos['entry']) if pos['side']=='BUY' else (pos['entry']-px))*pos['qty']*c['contract_size']; equity+=pnl; trades.append({**pos,'exit':px,'reason':'EOD','pnl':pnl})
     wins=sum(t['pnl']>0 for t in trades); losses=sum(t['pnl']<0 for t in trades); net=equity-start
     return {'starting_equity':start,'ending_equity':equity,'net_pnl':net,'return_pct':net/start*100,'trades':len(trades),'wins':wins,'losses':losses,'win_rate':wins/len(trades)*100 if trades else 0,'max_drawdown_pct':max_dd*100,'halted_reason':halted_reason,'trades_detail':trades}
+
+def run_backtest(df, config=None, progress=None):
+    """Public deterministic backtest API used by regression tests and automation."""
+    c = dict(DEFAULTS)
+    if config:
+        c.update(config)
+    required = ("time", "datetime", "open", "high", "low", "close", "vol")
+    x = df.copy()
+    if "datetime" not in x.columns:
+        if "time" not in x.columns:
+            raise ValueError("Backtest data requires datetime or time.")
+        raw = pd.to_numeric(x["time"], errors="coerce")
+        unit = "ms" if raw.median() > 1e11 else "s"
+        x["datetime"] = pd.to_datetime(raw, unit=unit, utc=True, errors="coerce")
+    if "time" not in x.columns:
+        x["time"] = (pd.to_datetime(x["datetime"], utc=True).astype("int64") // 10**6).astype("int64")
+    if "vol" not in x.columns:
+        x["vol"] = 1.0
+    missing = [k for k in ("open","high","low","close") if k not in x.columns]
+    if missing:
+        raise ValueError("Backtest data missing: " + ", ".join(missing))
+    x = x.sort_values("datetime").dropna(subset=["datetime","open","high","low","close"]).reset_index(drop=True)
+    return backtest(x, c, progress=progress)
+
 
 class App:
     def __init__(self,root):
