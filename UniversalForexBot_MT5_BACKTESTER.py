@@ -15,7 +15,7 @@ base=fx
 
 APP_VERSION="V8.4.2-FOREX-EVIDENCE-BT-R5"
 AUDIT_BUILD="V8.4.2-ENGINE-AUDIT-2026-09-21-FOREX-R5"
-DEFAULTS={"capital":10000.0,"risk_pct":1.0,"leverage":5.0,"contract_size":100000.0,
+DEFAULTS={"capital":10000.0,"risk_pct":0.5,"leverage":5.0,"contract_size":100000.0,
 "signal_mode":"ADAPTIVE_EVIDENCE","min_score":1,"adaptive_edge":0.18,"adaptive_min_weight":3.5,
 "evidence_min_families":2,"evidence_family_min_score":0.35,"evidence_require_trend":True,
 "evidence_require_independent":True,"max_trades":10,"max_open_trades":1,
@@ -25,14 +25,14 @@ DEFAULTS={"capital":10000.0,"risk_pct":1.0,"leverage":5.0,"contract_size":100000
 "rsi_logic":"CROSS_MA","rsi_ma_type":"EMA","rsi_ma_len":9,"use_stoch":True,"stoch_k":14,"stoch_smooth":3,"stoch_d":3,
 "use_vwap":True,"vwap_len":50,"use_vwap_delta":True,"vwap_delta_smooth":True,"vwap_delta_smooth_len":21,
 "vwap_delta_baseline":50,"vwap_delta_logic":"CURRENT_TREND","use_vidya":False,"use_nwe":False,
-"use_atr":False,"atr_min_pct":0.30,"use_vol":True,"vol_len":20,"use_adx":True,"adx_thresh":20,"use_mtf":True,
+"use_atr":True,"atr_min_pct":0.30,"adx_len":14,"use_vol":True,"vol_len":20,"use_adx":True,"adx_thresh":20,"use_mtf":True,
 "use_liq_swing":True,"liq_len":14,"liq_area":"Wick Extremity","liq_filter":"Count","liq_filter_value":0,
 "use_trendline":True,"trend_len":14,"trend_min_dist":5,"trend_buffer":0.0,"trend_retest":3,"trend_entry":"FRESH_BREAK",
 "use_divergence":True,"div_pivot":5,"div_max_pivots":10,"div_max_bars":100,"div_type":"Regular/Hidden","div_source":"Close",
 "div_use_all":True,"div_cci_len":10,"div_mom_len":10,"div_vwmacd_fast":12,"div_vwmacd_slow":26,"div_cmf_len":21,"div_mfi_len":14,
 "use_vol_sr":True,"sr_volume_ma":6,"sr_vote_mode":"MAJORITY","sr_entry_mode":"CURRENT_ZONE",
 "sl_mode":"PRICE_%","tp_mode":"ROI_%","sl_pct":1.5,"tp1_pct":2.0,"tp2_pct":4.0,
-"use_atr_sl":True,"atr_sl_mult":1.5,"atr_tp1_mult":1.2,"atr_tp2_mult":2.2,"tp1_close":50.0,"tp1_be":True,
+"use_atr_sl":True,"atr_sl_mult":1.5,"atr_tp1_mult":1.3,"atr_tp2_mult":2.2,"tp1_close":50.0,"tp1_be":True,
 "daily_loss_pct":3.0,"max_dd_pct":5.0,"emergency_capital_pct":30.0,"max_loss_streak":3,
 "no_same_candle":True,"hold_until_all_reverse":False,"require_opposite_after_sl":True}
 
