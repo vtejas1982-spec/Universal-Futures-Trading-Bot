@@ -1,3 +1,36 @@
+## V8.4.2-R5 — Crypto Evidence Hardened + Strategy-Parity Backtester — 2026-09-21
+
+### R5 fixes / additions
+
+- R5 live engine is based directly on the V8.4.2-R3 hardened source.
+- Fixed Max Open Trades handling: values above 1 now normalize safely to 1 instead of aborting startup because the current single-symbol coordinator manages one net position.
+- Added ATR Dynamic SL/TP safety bounds.
+- Preserved completed-candle ATR -> actual filled-entry protection.
+- Preserved explicit Evidence-family runtime parameters, including Minimum Families and Family Minimum Score.
+- Removed a pandas FutureWarning in the Volume/S-R aggregation path.
+- Added a dedicated R5 strategy-parity backtester: UniversalFuturesBot_V8_4_2_CRYPTO_BACKTESTER_EVIDENCE_R5.py
+- Backtester supports raw OHLCV/DataFrame/CSV input, completed 4H MTF, causal divergence, Volume/S-R, Evidence-family decisions, ATR Dynamic SL/TP, risk sizing, cooldown, drawdown, loss-streak, post-SL lock, Grid simulation and conservative SL-first same-bar ambiguity.
+- ATR Dynamic contract: SL 1.50x ATR, TP1 1.20x actual SL distance, TP2 2.20x actual SL distance.
+- Added R5 engine audit and GUI smoke tests.
+
+### R5 files
+
+- UniversalFuturesBot_V8_4_2_CRYPTO_EVIDENCE_HARDENED_R5.py
+- UniversalFuturesBot_V8_4_2_CRYPTO_BACKTESTER_EVIDENCE_R5.py
+- tests/test_v842_crypto_engine_audit_R5.py
+- tests/test_v842_crypto_gui_smoke_R5.py
+- docs/V8_4_2_CRYPTO_R5_RELEASE_NOTES.md
+
+### Validation
+
+27/27 Crypto R5 engine checks PASS
+GUI smoke PASS
+Synthetic raw-OHLCV backtest PASS
+
+The historical backtester does not claim exchange-side order/fill/reconciliation equivalence. Demo validation is still required.
+
+---
+
 ## V8.4.2-R5 — Forex / MT5 Hardened Release — 2026-09-21
 
 The Forex/MT5 engine now has a dedicated V8.4.2-R5 hardening layer aligned with the Crypto R5 protection/configuration contract while preserving MT5-native execution.
