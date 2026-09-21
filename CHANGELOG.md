@@ -1,3 +1,25 @@
+## V8.4.2-R5 — Repository Cleanup / Production Layout — 2026-09-21
+
+### Changed
+- Established four production source files with stable names:
+  - `UniversalFuturesBot_CRYPTO.py`
+  - `UniversalFuturesBot_CRYPTO_BACKTESTER.py`
+  - `UniversalForexBot_MT5.py`
+  - `UniversalForexBot_MT5_BACKTESTER.py`
+- Removed superseded versioned production copies from the main working tree where present.
+- Made the Forex R5 production engine self-contained so it no longer depends on a historical V8.4.0 source file.
+- Updated the Forex R5 backtester to load the clean production Forex engine.
+- Added clean production test entry points under `tests/`.
+- README now identifies the four current production files as the only files to run.
+- Historical releases should be recovered from Git history/tags/releases, not from duplicate source files in the production root.
+
+### Important
+- This cleanup changes filenames, not the intended R5 trading contract.
+- The current single-symbol execution coordinator still manages one net position per bot/symbol.
+- Demo validation remains required before live trading.
+
+---
+
 ## V8.4.2-R5 — Crypto Evidence Hardened + Backtester — 2026-09-21
 
 ### Fixed
