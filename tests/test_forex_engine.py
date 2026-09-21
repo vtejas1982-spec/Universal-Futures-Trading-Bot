@@ -6,7 +6,7 @@ import pandas as pd
 
 ROOT=Path(__file__).resolve().parents[1]
 LIVE=ROOT/"UniversalForexBot_MT5.py"
-BT=ROOT/"UniversalForexBot_V8_4_2_MT5_FOREX_BACKTESTER_EVIDENCE_R5.py"
+BT=ROOT/"UniversalForexBot_MT5_BACKTESTER.py"
 
 def load(p,n):
     sp=importlib.util.spec_from_file_location(n,str(p)); m=importlib.util.module_from_spec(sp); sp.loader.exec_module(m); return m
