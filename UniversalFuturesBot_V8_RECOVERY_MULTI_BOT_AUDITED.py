@@ -43,8 +43,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.1"
-APP_TITLE = "Universal Futures Trading Bot V8.1 - Multi-Exchange (No KuCoin)"
+APP_VERSION = "V8.4.1-RECOVERY-MULTI-BOT-AUDITED"
+APP_TITLE = "Universal Futures Trading Bot V8.4.1 - Recovery Multi-Bot Audit"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -4831,32 +4831,32 @@ class UniversalFuturesBotGUI:
                 or pos.get("avgPrice")
             )
 
-            try:
-                entry = float(entry)
-            except Exception:
-                entry = 0.0
+        try:
+            entry = float(entry)
+        except Exception:
+            entry = 0.0
 
-            raw_info = pos.get("info") or {}
+        raw_info = pos.get("info") or {}
 
-            leverage_value = (
-                pos.get("leverage")
-                or raw_info.get("leverage")
-            )
-            try:
-                leverage_value = float(leverage_value)
-            except Exception:
-                leverage_value = 0.0
+        leverage_value = (
+            pos.get("leverage")
+            or raw_info.get("leverage")
+        )
+        try:
+            leverage_value = float(leverage_value)
+        except Exception:
+            leverage_value = 0.0
 
-            initial_margin = (
-                pos.get("initialMargin")
-                or pos.get("initialMarginByMp")
-                or raw_info.get("positionIM")
-                or raw_info.get("positionIMByMp")
-            )
-            try:
-                initial_margin = float(initial_margin)
-            except Exception:
-                initial_margin = 0.0
+        initial_margin = (
+            pos.get("initialMargin")
+            or pos.get("initialMarginByMp")
+            or raw_info.get("positionIM")
+            or raw_info.get("positionIMByMp")
+        )
+        try:
+            initial_margin = float(initial_margin)
+        except Exception:
+            initial_margin = 0.0
 
             return {
                 "side": side.upper(),
