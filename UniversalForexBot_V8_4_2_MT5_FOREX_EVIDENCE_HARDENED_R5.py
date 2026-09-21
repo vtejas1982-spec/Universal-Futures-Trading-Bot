@@ -51,8 +51,25 @@ def _add_controls(self):
     self.e_atr_tp2_mult=tk.Entry(f,width=7); self.e_atr_tp2_mult.insert(0,"2.2"); self.e_atr_tp2_mult.grid(row=1,column=5)
     tk.Label(f,text="Completed-candle ATR • actual filled entry/quantity • Price % + ROI %",fg="#444").grid(row=2,column=0,columnspan=6,sticky="w")
 
+
+def _new_profile_defaults(self):
+    vals={"e_st_mult":"3.0","e_ema_len":"50","e_ema_slow":"21","e_macd_fast":"12","e_macd_slow":"26","e_macd_signal":"9","e_rsi_ob":"70","e_rsi_os":"30","e_adx_thresh":"20","e_evidence_min_families":"2","e_evidence_family_min_score":"0.35"}
+    for name,value in vals.items():
+        if hasattr(self,name):
+            w=getattr(self,name); w.delete(0,tk.END); w.insert(0,value)
+    for name,value in {"v_use_ema_cross":True,"v_use_macd":True,"v_use_rsi":True,"v_use_stoch":True,"v_use_vwap":True,"v_use_vwap_delta":True,"v_vwap_delta_smooth":True,"v_use_vol":True,"v_use_vol_sr":True,"v_use_mtf":True,"v_use_liq_swing":True,"v_use_trendline":True,"v_use_divergence":True,"v_evidence_require_trend":True,"v_evidence_require_independent":True,"v_hold_until_all_reverse":False,"v_use_atr_sl":True}.items():
+        if hasattr(self,name): getattr(self,name).set(value)
+    if hasattr(self,"v_signal_mode"): self.v_signal_mode.set("ADAPTIVE_EVIDENCE")
+    if hasattr(self,"v_st_entry_mode"): self.v_st_entry_mode.set("CURRENT_TREND")
+    if hasattr(self,"v_ema_cross_entry_mode"): self.v_ema_cross_entry_mode.set("CURRENT_TREND")
+    if hasattr(self,"v_rsi_logic"): self.v_rsi_logic.set("CROSS_MA")
+    if hasattr(self,"e_lev"):
+        self.e_lev.delete(0,tk.END); self.e_lev.insert(0,"5")
+
 def r5_init(self,root):
+    fresh=not Path(CONFIG_FILE).exists()
     _orig_init(self,root); _add_controls(self)
+    if fresh: _new_profile_defaults(self)
     try:self.e_cooldown_min.grid_configure(row=4,column=1)
     except:pass
     try:
