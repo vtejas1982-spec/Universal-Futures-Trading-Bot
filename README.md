@@ -1,9 +1,13 @@
-# Universal Futures Trading Bot V8.3.3
+# Universal Futures Trading Bot V8.4.1
 
 
 A Python/Tkinter multi-exchange cryptocurrency futures trading bot for development, testing, research and educational use.
 
 > **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
+
+## V8.4.1 Engine Audit — 2026-09-21
+
+The V8.4.0 crypto live engine, recovery engine and strategy-parity backtester were re-audited. Syntax/indentation corruption was repaired, the duplicate live GUI definition was removed, Adaptive Evidence settings were added to save/load persistence, and the backtester MTF input path was hardened. All three sources passed AST parsing and Python compilation, plus deterministic strategy, signal-mode, Grid-mode and module smoke tests. See `docs/V8_4_1_ENGINE_AUDIT_RELEASE_NOTES.md`.
 
 ## 🚀 V8.3.3 Modular Engine + Recovery + Multi-Bot Build
 
