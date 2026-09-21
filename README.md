@@ -667,3 +667,29 @@ V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be de
 - Fixed live configuration checkpoint false warnings caused by comparing GUI symbols such as `OP/USDT` with CCXT canonical runtime symbols such as `OP/USDT:USDT`.
 - The running symbol is now normalized through the connected exchange before the live identity check.
 - Real symbol changes while running remain blocked.
+
+
+## V8.4.1 FOREX-R2 MT5 Full Engine / Strategy / GUI / Safety Audit — 2026-09-21
+
+The MT5 Forex V8.4 Evidence-Family bot was audited against the V8.2 Engine Audit contract.
+
+### Forex audit fixes
+- Fixed SINGLE_SIGNAL conflict handling: simultaneous BUY+SELL evidence now returns NONE.
+- Fixed Evidence-Family decision_reason parity for Trend and independent non-Trend requirements.
+- Added startup strategy/risk/SL-TP preflight before MT5 connection/login/order setup.
+- Fixed worker signal-mode validation so all supported modes, including ADAPTIVE_EVIDENCE, are accepted at runtime.
+- Added config schema 8 and migration logging while preserving saved settings.
+- Preserved MT5-native execution, broker-side SL reconciliation, fail-closed protection, entry idempotency, profile lock, runtime recovery and Forex V2 guardrails.
+- Fixed backtester NWE parameter parity with the live engine.
+- Added a public raw-OHLCV run_backtest() API.
+
+### Forex validation
+- AST / compile: PASS
+- GUI smoke + default preflight: PASS
+- Config save/load round-trip: PASS
+- Evidence-family and SINGLE_SIGNAL regression: PASS
+- Full 19-module strategy frame: PASS
+- Raw-OHLCV backtest API: PASS
+- **7/7 audit groups PASS**
+
+The Forex backtester remains an OHLC approximation and synthetic validation is engineering validation only, not a claim of live profitability.
