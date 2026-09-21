@@ -86,7 +86,7 @@ LIVE_STRATEGY_PARITY_VERSION = "V8.4.2-R5"
 LIVE_RUNTIME_SCHEMA_VERSION = 5
 MODULES = ["ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE","LIQ_SWING","TRENDLINE","MTF","VOL","ADX","ATR","DIVERGENCE","VOL_SR"]
 
-DEFAULTS = {'exchange': 'Binance', 'symbols': 'BTC/USDT', 'tf': '15m', 'start': '2026-01-01', 'end': '2026-09-01', 'capital': 1000.0, 'leverage': 5, 'no_same_candle': True, 'cooldown_min': 0.0, 'max_trades': 10, 'max_open_trades': 1, 'use_st': True, 'st_len': 10, 'st_mult': 3.0, 'st_source': 'CLOSE', 'st_change_atr': True, 'st_entry_mode': 'CURRENT_TREND', 'use_ema': True, 'ema_len': 50, 'use_ema_cross': True, 'ema_fast': 9, 'ema_slow': 21, 'ema_cross_entry_mode': 'CURRENT_TREND', 'use_macd': True, 'macd_fast': 12, 'macd_slow': 26, 'macd_signal': 9, 'use_rsi': True, 'rsi_len': 14, 'rsi_ob': 70, 'rsi_os': 30, 'rsi_logic': 'CROSS_MA', 'rsi_ma_type': 'EMA', 'rsi_ma_len': 9, 'use_bb': False, 'bb_len': 20, 'bb_std': 2.0, 'use_stoch': True, 'stoch_k': 14, 'stoch_smooth': 3, 'stoch_d': 3, 'use_vwap': True, 'vwap_len': 50, 'use_vwap_delta': True, 'vwap_delta_smooth': True, 'vwap_delta_smooth_len': 21, 'vwap_delta_baseline': 50, 'vwap_delta_logic': 'CURRENT_TREND', 'use_vidya': False, 'vidya_len': 10, 'vidya_momentum': 20, 'vidya_band': 2.0, 'vidya_entry_mode': 'CURRENT_TREND', 'use_nwe': False, 'nwe_bandwidth': 8.0, 'nwe_mult': 3.0, 'nwe_entry_mode': 'FRESH_CROSS', 'nwe_lookback': 500, 'nwe_mae': 499, 'use_liq_swings': True, 'liq_length': 14, 'liq_area': 'Wick Extremity', 'liq_filter': 'Count', 'liq_filter_value': 0.0, 'liq_entry_mode': 'FRESH_BREAK', 'use_trendline': True, 'trendline_length': 14, 'trendline_min_distance': 5, 'trendline_entry_mode': 'FRESH_BREAK', 'trendline_buffer': 0.0, 'trendline_retest_candles': 3, 'use_atr': False, 'atr_min_pct': 0.3, 'use_vol': True, 'vol_len': 20, 'use_adx': True, 'adx_thresh': 20.0, 'use_mtf': True, 'signal_mode': 'ADAPTIVE_EVIDENCE', 'min_score': 1, 'adaptive_edge': 0.18, 'adaptive_min_weight': 3.5, 'evidence_min_families': 2, 'evidence_family_min_score': 0.35, 'evidence_require_trend': True, 'evidence_require_independent': True, 'hold_until_all_reverse': False, 'require_opposite_after_sl': True, 'size_mode': 'EQUITY_RISK_%', 'risk_pct': 1.0, 'use_atr_sl': True, 'atr_sl_mult': 1.5, 'atr_tp1_mult': 1.2, 'atr_tp2_mult': 2.2, 'fixed_qty': 0.001, 'max_dd': 5.0, 'emergency_capital_pct': 30.0, 'sl_mode': 'PRICE_%', 'tp_mode': 'ROI_%', 'sl_pct': 1.5, 'tp1_pct': 2.0, 'tp2_pct': 4.0, 'hold_sl_roi': 5.0, 'hold_sl_wait_reversal': False, 'tp1_be': True, 'tp_qty_mode': 'PERCENT_%', 'tp1_close': 50.0, 'tp2_close': 50.0, 'grid_mode': 'DIRECT_SHOT', 'grid_levels': 5, 'grid_spacing': 1.0, 'grid_order_size': 10.0, 'grid_size_increase': 0.0, 'grid_tp': 1.0, 'grid_sl': 6.0, 'grid_max_exposure': 100.0, 'grid_max_dd': 3.0, 'grid_score_min': 1, 'grid_trend_filter': 'OFF', 'grid_recenter': False, 'grid_recenter_distance': 3.0, 'grid_cooldown': 30.0, 'fee_pct': 0.04, 'slippage_pct': 0.01, 'slippage_exit': True, 'warmup': 250, 'exit_on_opposite': False, 'output_trades': True}
+DEFAULTS = {'exchange': 'Binance', 'symbols': 'BTC/USDT', 'tf': '15m', 'start': '2026-01-01', 'end': '2026-09-01', 'capital': 1000.0, 'leverage': 5, 'no_same_candle': True, 'cooldown_min': 15.0, 'max_trades': 10, 'max_open_trades': 1, 'adx_len': 14, 'use_st': True, 'st_len': 10, 'st_mult': 3.0, 'st_source': 'CLOSE', 'st_change_atr': True, 'st_entry_mode': 'CURRENT_TREND', 'use_ema': True, 'ema_len': 50, 'use_ema_cross': True, 'ema_fast': 9, 'ema_slow': 21, 'ema_cross_entry_mode': 'CURRENT_TREND', 'use_macd': True, 'macd_fast': 12, 'macd_slow': 26, 'macd_signal': 9, 'use_rsi': True, 'rsi_len': 14, 'rsi_ob': 70, 'rsi_os': 30, 'rsi_logic': 'CROSS_MA', 'rsi_ma_type': 'EMA', 'rsi_ma_len': 9, 'use_bb': False, 'bb_len': 20, 'bb_std': 2.0, 'use_stoch': True, 'stoch_k': 14, 'stoch_smooth': 3, 'stoch_d': 3, 'use_vwap': True, 'vwap_len': 50, 'use_vwap_delta': True, 'vwap_delta_smooth': True, 'vwap_delta_smooth_len': 21, 'vwap_delta_baseline': 50, 'vwap_delta_logic': 'CURRENT_TREND', 'use_vidya': False, 'vidya_len': 10, 'vidya_momentum': 20, 'vidya_band': 2.0, 'vidya_entry_mode': 'CURRENT_TREND', 'use_nwe': False, 'nwe_bandwidth': 8.0, 'nwe_mult': 3.0, 'nwe_entry_mode': 'FRESH_CROSS', 'nwe_lookback': 500, 'nwe_mae': 499, 'use_liq_swings': True, 'liq_length': 14, 'liq_area': 'Wick Extremity', 'liq_filter': 'Count', 'liq_filter_value': 0.0, 'liq_entry_mode': 'FRESH_BREAK', 'use_trendline': True, 'trendline_length': 14, 'trendline_min_distance': 5, 'trendline_entry_mode': 'FRESH_BREAK', 'trendline_buffer': 0.0, 'trendline_retest_candles': 3, 'use_atr': True, 'atr_min_pct': 0.3, 'adx_len': 14, 'use_vol': True, 'vol_len': 20, 'use_adx': True, 'adx_thresh': 20.0, 'use_mtf': True, 'signal_mode': 'ADAPTIVE_EVIDENCE', 'min_score': 1, 'adaptive_edge': 0.18, 'adaptive_min_weight': 3.5, 'evidence_min_families': 2, 'evidence_family_min_score': 0.35, 'evidence_require_trend': True, 'evidence_require_independent': True, 'hold_until_all_reverse': False, 'require_opposite_after_sl': True, 'size_mode': 'EQUITY_RISK_%', 'risk_pct': 0.75, 'use_atr_sl': True, 'atr_sl_mult': 1.5, 'atr_tp1_mult': 1.2, 'atr_tp2_mult': 2.2, 'fixed_qty': 0.001, 'max_dd': 5.0, 'emergency_capital_pct': 30.0, 'sl_mode': 'PRICE_%', 'tp_mode': 'ROI_%', 'sl_pct': 1.5, 'tp1_pct': 2.0, 'tp2_pct': 4.0, 'hold_sl_roi': 5.0, 'hold_sl_wait_reversal': False, 'tp1_be': True, 'tp_qty_mode': 'PERCENT_%', 'tp1_close': 50.0, 'tp2_close': 50.0, 'grid_mode': 'OFF', 'grid_levels': 5, 'grid_spacing': 1.0, 'grid_order_size': 10.0, 'grid_size_increase': 0.0, 'grid_tp': 1.0, 'grid_sl': 6.0, 'grid_max_exposure': 100.0, 'grid_max_dd': 3.0, 'grid_score_min': 1, 'grid_trend_filter': 'OFF', 'grid_recenter': False, 'grid_recenter_distance': 3.0, 'grid_cooldown': 30.0, 'max_loss_streak': 3, 'fee_pct': 0.04, 'slippage_pct': 0.01, 'slippage_exit': True, 'warmup': 250, 'exit_on_opposite': False, 'output_trades': True}
 DEFAULTS.update({
     'max_configs':250,'wf_split':70,'top_n':1,'combo_one':True,'combo_two':True,'combo_three':True,'combo_four':True,
     'use_divergence':True,'div_pivot':5,'div_source':'Close','div_type':'Regular','div_min_count':1,
@@ -1640,7 +1640,20 @@ class StrategyEngine:
             threshold = float(ADAPTIVE_DEFAULT_EDGE if adaptive_edge is None else adaptive_edge)
             if len(bull_families) >= required and bt > st and edge >= threshold and atr_pass and adx_pass: return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
             if len(bear_families) >= required and st > bt and edge >= threshold and atr_pass and adx_pass: return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
-            return f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
+            trend_required = bool(evidence_require_trend)
+            independent_required = bool(evidence_require_independent)
+            dominant = "BUY" if bt > st else "SELL" if st > bt else "NONE"
+            active = bull_families if dominant == "BUY" else bear_families if dominant == "SELL" else []
+            blockers=[]
+            if len(active) < required: blockers.append(f"FAMILIES_{len(active)}/{required}")
+            if edge < threshold: blockers.append(f"EDGE_{edge:.2f}<{threshold:.2f}")
+            if trend_required and dominant != "NONE" and "TREND" not in active: blockers.append("TREND_REQUIRED")
+            if independent_required and dominant != "NONE" and not any(f in active for f in ("MOMENTUM","FLOW","STRUCTURE")): blockers.append("INDEPENDENT_REQUIRED")
+            if not atr_pass: blockers.append("ATR_GATE")
+            if not adx_pass: blockers.append("ADX_GATE")
+            return (f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
+                    f"|SIDE={dominant}|BLOCK={','.join(blockers) if blockers else 'CONFLICT_OR_NEUTRAL'}"
+                    f"|ATR={'PASS' if atr_pass else 'FAIL'}|ADX={'PASS' if adx_pass else 'FAIL'}")
         if mode == "STRICT_ALL_FILTERS":
             if buy == len(modules) and sell == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bull: return "STRICT_BUY_ALL_FILTERS_PASS"
             if sell == len(modules) and buy == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bear: return "STRICT_SELL_ALL_FILTERS_PASS"
@@ -6376,6 +6389,8 @@ def validate_config(cfg):
     if float(c["grid_sl"])<=float(c["grid_spacing"])*int(c["grid_levels"]) and c["grid_mode"] in ("LONG_GRID","SHORT_GRID","NEUTRAL_GRID"):
         raise ValueError("Grid Global SL must exceed Grid Spacing × Levels")
     if float(c["grid_max_exposure"])<=0 or float(c["grid_max_dd"])<=0 or float(c["grid_max_dd"])>=100: raise ValueError("Grid risk settings invalid")
+    if int(c.get("max_open_trades",1)) < 1: raise ValueError("Max Open Trades must be >= 1")
+    if int(c.get("max_loss_streak",0)) < 0: raise ValueError("Max loss streak cannot be negative")
     if c["grid_trend_filter"] not in ("OFF","SUPERTREND","SCORE"): raise ValueError("Invalid Grid Trend Filter")
     enabled=sum(bool(c[k]) for k in ("use_st","use_ema","use_ema_cross","use_macd","use_rsi","use_bb","use_stoch","use_vwap","use_vwap_delta","use_vidya","use_nwe","use_liq_swings","use_trendline","use_mtf","use_vol","use_adx","use_atr","use_divergence","use_vol_sr"))
     if c["grid_trend_filter"]=="SCORE":
@@ -6426,11 +6441,19 @@ def signal_for_bar(df,i,cfg):
     b,s,bs,ss=StrategyEngine.decide_signal(votes,cfg["signal_mode"],int(cfg["min_score"]),
                                            atr_pass,vol_pass,adx_pass,mtf_bull,mtf_bear,
                                            adaptive_edge=float(cfg.get("adaptive_edge", ADAPTIVE_DEFAULT_EDGE)),
-                                           adaptive_min_weight=float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
+                                           adaptive_min_weight=float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)),
+                                           evidence_min_families=int(cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES)),
+                                           evidence_family_min_score=float(cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE)),
+                                           evidence_require_trend=bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)),
+                                           evidence_require_independent=bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
     reason=StrategyEngine.decision_reason(votes,cfg["signal_mode"],int(cfg["min_score"]),
                                           atr_pass,vol_pass,adx_pass,mtf_bull,mtf_bear,
                                           adaptive_edge=float(cfg.get("adaptive_edge", ADAPTIVE_DEFAULT_EDGE)),
-                                          adaptive_min_weight=float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
+                                          adaptive_min_weight=float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)),
+                                          evidence_min_families=int(cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES)),
+                                          evidence_family_min_score=float(cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE)),
+                                          evidence_require_trend=bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)),
+                                          evidence_require_independent=bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
     return ("BUY" if b else "SELL" if s else "NONE",votes,bs,ss,reason)
 
 def all_reverse(votes, side):
@@ -6633,18 +6656,24 @@ def _grid_fill_orders(gs,row,cfg):
             fills.append((key,o))
         elif o["side"]=="SHORT" and float(row.high)>=o["price"]:
             fills.append((key,o))
-    for key,o in fills:
+    filled=[]
+    for key,o in list(fills):
         # If both long and short orders somehow coexist, only fill the active direction.
-        if gs.direction and o["side"]!=gs.direction: continue
+        if gs.direction and o["side"]!=gs.direction:
+            continue
         old_qty=gs.position_qty
-        new_qty=o["qty"]
+        new_qty=float(o["qty"])
         if old_qty<=0:
-            gs.direction=o["side"]; gs.avg_entry=o["price"]; gs.position_qty=new_qty
+            gs.direction=o["side"]; gs.avg_entry=float(o["price"]); gs.position_qty=new_qty
         else:
-            if o["side"]!=gs.direction: continue
-            gs.avg_entry=(gs.avg_entry*old_qty+o["price"]*new_qty)/(old_qty+new_qty); gs.position_qty=old_qty+new_qty
-        gs.filled_levels.add(key); gs.orders.pop(key,None); fills.append
-    return fills
+            if o["side"]!=gs.direction:
+                continue
+            gs.avg_entry=(gs.avg_entry*old_qty+float(o["price"])*new_qty)/(old_qty+new_qty)
+            gs.position_qty=old_qty+new_qty
+        gs.filled_levels.add(key)
+        gs.orders.pop(key,None)
+        filled.append((key,o))
+    return filled
 
 def _grid_update_protection(gs,cfg):
     if gs.position_qty<=0: gs.tp=None; gs.sl=None; return
@@ -6680,16 +6709,20 @@ def run_backtest(df,cfg,logger=None):
     initial=float(cfg["capital"]); equity=initial
     start=max(3,int(cfg["warmup"])); end=len(df)-2
     trades=[]; events=[]; equity_points=[]; pos=None; lock=None; last_entry_i=None; last_flat_i=-10**9
-    daily_start=initial; daily_day=None; stopped_reason="END"; completed_trades=0
+    daily_start=initial; daily_day=None; stopped_reason="END"; completed_trades=0; loss_streak=0
     grid=GridState(mode=cfg["grid_mode"],session_start_balance=initial,peak_equity=initial,started_bar=start)
     def log(msg):
         if logger: logger(msg)
         events.append(str(msg))
     def finalize_normal(reason,row,price):
-        nonlocal pos,equity,last_flat_i,lock,completed_trades
+        nonlocal pos,equity,last_flat_i,lock,completed_trades,loss_streak,stopped_reason
         if not pos: return
         p=finalize_trade(pos,row.datetime,reason,price); trades.append(p); completed_trades+=1
         exited_side=p["side"]; pos=None; last_flat_i=cur_i
+        if float(p.get("net_pnl",0.0)) <= 0: loss_streak += 1
+        else: loss_streak = 0
+        if int(cfg.get("max_loss_streak",0)) > 0 and loss_streak >= int(cfg["max_loss_streak"]):
+            stopped_reason="MAX_LOSS_STREAK"
         if reason in ("SL","SL_BE","UNKNOWN") and cfg["require_opposite_after_sl"]:
             lock=exited_side
         elif reason not in ("TP1",):
@@ -6719,7 +6752,7 @@ def run_backtest(df,cfg,logger=None):
                 equity+=_grid_close(grid,float(row.low if grid.direction=="LONG" else row.high),cfg,"EMERGENCY")
                 grid.active=False
             stopped_reason="EMERGENCY_CAPITAL_LOSS"; break
-        if float(cfg["max_dd"])>0 and daily_start>0 and (daily_start-equity)/daily_start >= float(cfg["max_dd"])/100:
+        if float(cfg["max_dd"])>0 and daily_start>0 and (daily_start-mark_equity)/daily_start >= float(cfg["max_dd"])/100:
             if pos:
                 px=float(row.close); _close_piece(pos,pos["remaining_qty"],px,cfg,"DAILY_DRAWDOWN"); equity+=pos.get("realized_net",0.0); finalize_normal("DAILY_DRAWDOWN",row,px)
             if grid.position_qty>0:
@@ -6801,6 +6834,8 @@ def run_backtest(df,cfg,logger=None):
 
         # GRID ENGINE.
         if cfg["grid_mode"] not in ("OFF","DIRECT_SHOT"):
+            if cur_i < int(grid.paused_until_bar):
+                continue
             if not grid.active:
                 grid.active=True; grid.center=float(row.close); grid.started_bar=cur_i; grid.session_start_balance=equity; grid.peak_equity=equity
                 log(f"{row.datetime} GRID START mode={grid.mode} center={grid.center:.8g}")
@@ -6810,7 +6845,9 @@ def run_backtest(df,cfg,logger=None):
             if max((gstart-equity)/gstart,(gpeak-equity)/gpeak,0)>=float(cfg["grid_max_dd"])/100:
                 if grid.position_qty>0:
                     equity+=_grid_close(grid,float(df.iloc[cur_i+1].open),cfg,"GRID_DD")
-                grid.orders={}; grid.filled_levels=set(); grid.active=False; stopped_reason="GRID_MAX_DD"
+                grid.orders={}; grid.filled_levels=set(); grid.active=False
+                tf_ms=TIMEFRAMES[cfg["tf"]]; grid.paused_until_bar=cur_i+max(1,int(math.ceil(float(cfg.get("grid_cooldown",0))*60*1000/tf_ms)))
+                stopped_reason="GRID_MAX_DD"
                 log(f"{row.datetime} GRID STOP: Grid DD limit reached")
                 continue
 
@@ -6856,6 +6893,7 @@ def run_backtest(df,cfg,logger=None):
                         "reason":rg,"gross_pnl":ng,"fees":0.0,"net_pnl":ng})
                     completed_trades+=1
                     grid.filled_levels=set(); grid.orders={}; grid.direction=None
+                    tf_ms=TIMEFRAMES[cfg["tf"]]; grid.paused_until_bar=cur_i+max(1,int(math.ceil(float(cfg.get("grid_cooldown",0))*60*1000/tf_ms)))
                     if completed_trades>=int(cfg["max_trades"])>0:
                         stopped_reason="MAX_TRADES"; break
 
@@ -6867,6 +6905,7 @@ def run_backtest(df,cfg,logger=None):
                     "entry_time":str(row.datetime),"exit_time":str(nxt.datetime),"entry":np.nan,"exit_price":float(nxt.close),
                     "reason":"GRID_MAX_EXPOSURE","gross_pnl":ng,"fees":0.0,"net_pnl":ng}); completed_trades+=1
                 grid.orders={}; grid.filled_levels=set(); grid.direction=None
+                tf_ms=TIMEFRAMES[cfg["tf"]]; grid.paused_until_bar=cur_i+max(1,int(math.ceil(float(cfg.get("grid_cooldown",0))*60*1000/tf_ms)))
             if grid.position_qty<=0: grid.filled_levels=set()
             if completed_trades>=int(cfg["max_trades"])>0:
                 stopped_reason="MAX_TRADES"; break
