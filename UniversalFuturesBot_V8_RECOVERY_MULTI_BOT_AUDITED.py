@@ -4858,14 +4858,14 @@ class UniversalFuturesBotGUI:
         except Exception:
             initial_margin = 0.0
 
-            return {
-                "side": side.upper(),
-                "qty": contracts,
-                "entry": entry,
-                "leverage": leverage_value,
-                "initial_margin": initial_margin,
-                "raw": pos,
-            }
+        return {
+            "side": side.upper(),
+            "qty": contracts,
+            "entry": entry,
+            "leverage": leverage_value,
+            "initial_margin": initial_margin,
+            "raw": pos,
+        }
 
         return None
 
