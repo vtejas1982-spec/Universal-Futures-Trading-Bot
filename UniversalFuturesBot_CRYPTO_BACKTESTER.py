@@ -997,7 +997,8 @@ def calculate_vidya(df, vidya_length=10, vidya_momentum=20, band_distance=2.0,
     df["vidya_lower"] = lower
     df["vidya_smoothed"] = smoothed
     df["vidya_trend_up"] = trend_s
-    df["vidya_cross_up"] = cross_up    df["vidya_cross_down"] = cross_down
+    df["vidya_cross_up"] = cross_up
+    df["vidya_cross_down"] = cross_down
     df["vidya_up_volume"] = up_s
     df["vidya_down_volume"] = down_s
     df["vidya_delta_volume_pct"] = delta_pct
