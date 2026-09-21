@@ -46,7 +46,7 @@ from pathlib import Path
 
 APP_VERSION = "V8.4.1-CRYPTO-EVIDENCE-FAMILY-AUDITED"
 APP_TITLE = "Universal Futures Trading Bot V8.4.1 - Hardened Adaptive Evidence Engine"
-AUDIT_BUILD = "V8.4.1-ENGINE-AUDIT-2026-09-21-FINAL"
+AUDIT_BUILD = "V8.4.1-ENGINE-AUDIT-2026-09-21-FINAL-R2"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -110,7 +110,7 @@ DEFAULT_RISK_MODE = "EQUITY_RISK_%"
 DEFAULT_RISK_PER_TRADE = "1.0"
 DEFAULT_POST_SL_OPPOSITE_LOCK = True
 DEFAULT_NO_SAME_CANDLE = True
-DEFAULT_USE_DIVERGENCE = False
+DEFAULT_USE_DIVERGENCE = True
 DEFAULT_DIV_USE_ALL = True
 RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
@@ -1147,11 +1147,14 @@ class StrategyEngine:
         count = len(modules)
 
         if signal_mode == "SINGLE_SIGNAL":
-            for _, bull, bear in modules:
-                if bool(bull) and not bool(bear):
-                    return True, False, buy_score, sell_score
-                if bool(bear) and not bool(bull):
-                    return False, True, buy_score, sell_score
+            # V8.2 contract: opposing directional evidence is ambiguous and
+            # must never become a trade merely because one module appears first.
+            has_bull = any(bool(bull) and not bool(bear) for _, bull, bear in modules)
+            has_bear = any(bool(bear) and not bool(bull) for _, bull, bear in modules)
+            if has_bull and not has_bear:
+                return True, False, buy_score, sell_score
+            if has_bear and not has_bull:
+                return False, True, buy_score, sell_score
             return False, False, buy_score, sell_score
 
         if signal_mode == "ANY_NON_CONFLICTING":
@@ -1236,7 +1239,12 @@ class StrategyEngine:
             if sell > 0 and buy == 0: return "SELL_ANY_NON_CONFLICTING"
             return f"CONFLICTING_OR_NEUTRAL_B{buy}_S{sell}"
         if mode == "SINGLE_SIGNAL":
-            return "SINGLE_SIGNAL_MATCH" if any(bool(bull) != bool(bear) for _, bull, bear in modules) else "NO_UNAMBIGUOUS_SIGNAL"
+            has_bull = any(bool(bull) and not bool(bear) for _, bull, bear in modules)
+            has_bear = any(bool(bear) and not bool(bull) for _, bull, bear in modules)
+            if has_bull and not has_bear: return "SINGLE_SIGNAL_MATCH_BUY"
+            if has_bear and not has_bull: return "SINGLE_SIGNAL_MATCH_SELL"
+            if has_bull and has_bear: return f"SINGLE_SIGNAL_CONFLICT_B{buy}_S{sell}"
+            return "NO_UNAMBIGUOUS_SIGNAL"
         if mode in ("2_SIGNALS", "3_SIGNALS", "4_SIGNALS"):
             required = {"2_SIGNALS": 2, "3_SIGNALS": 3, "4_SIGNALS": 4}[mode]
             if buy >= required and buy > sell: return f"BUY_{required}_CONFIRMATIONS"
@@ -1265,11 +1273,24 @@ class StrategyEngine:
                 return f"ADAPTIVE_SELL_W{ws:.2f}_EDGE{edge:.2f}"
             return f"ADAPTIVE_BLOCKED_WB{wb:.2f}_WS{ws:.2f}_EDGE{edge:.2f}"
         if mode == "ADAPTIVE_EVIDENCE":
-            families, bull_families, bear_families, required = StrategyEngine.evidence_summary(modules, evidence_min_families, evidence_family_min_score)
-            bt = sum(v["bull_ratio"] for v in families.values()); st = sum(v["bear_ratio"] for v in families.values()); total = bt + st; edge = abs(bt-st)/total if total else 0.0
+            families, bull_families, bear_families, required = StrategyEngine.evidence_summary(
+                modules, evidence_min_families, evidence_family_min_score
+            )
+            bt = sum(v["bull_ratio"] for v in families.values())
+            st = sum(v["bear_ratio"] for v in families.values())
+            total = bt + st
+            edge = abs(bt - st) / total if total else 0.0
             threshold = float(ADAPTIVE_DEFAULT_EDGE if adaptive_edge is None else adaptive_edge)
-            if len(bull_families) >= required and bt > st and edge >= threshold and atr_pass and adx_pass: return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
-            if len(bear_families) >= required and st > bt and edge >= threshold and atr_pass and adx_pass: return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
+            bull_ok = len(bull_families) >= required and bt > st and edge >= threshold and bool(atr_pass) and bool(adx_pass)
+            bear_ok = len(bear_families) >= required and st > bt and edge >= threshold and bool(atr_pass) and bool(adx_pass)
+            if bool(evidence_require_trend):
+                bull_ok = bull_ok and "TREND" in bull_families
+                bear_ok = bear_ok and "TREND" in bear_families
+            if bool(evidence_require_independent):
+                bull_ok = bull_ok and any(f in bull_families for f in ("MOMENTUM", "FLOW", "STRUCTURE"))
+                bear_ok = bear_ok and any(f in bear_families for f in ("MOMENTUM", "FLOW", "STRUCTURE"))
+            if bull_ok: return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
+            if bear_ok: return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
             return f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
         if mode == "STRICT_ALL_FILTERS":
             if buy == len(modules) and sell == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bull: return "STRICT_BUY_ALL_FILTERS_PASS"
@@ -3919,8 +3940,6 @@ class UniversalFuturesBotGUI:
             fr, "Source", "v_div_source", "Close",
             ("Close", "High/Low"), 4, 4
         )
-        _check(fr, "Use all divergence sources", "v_div_use_all", DEFAULT_DIV_USE_ALL, 4, 6, 2)
-
         _entry(fr, "CCI Len", "e_div_cci_len", "10", 5, 0, 5)
         _entry(fr, "Momentum Len", "e_div_mom_len", "10", 5, 2, 5)
 
@@ -3938,15 +3957,25 @@ class UniversalFuturesBotGUI:
             ("div_use_cmf", "CMF"),
             ("div_use_mfi", "MFI"),
         ]
+
+        self.v_div_use_all = tk.BooleanVar(value=DEFAULT_DIV_USE_ALL)
+
+        def _toggle_divergence_all():
+            enabled = bool(self.v_div_use_all.get())
+            for key, _label in div_names:
+                getattr(self, key).set(enabled)
+
+        tk.Checkbutton(
+            fr,
+            text="Use all divergence sources",
+            variable=self.v_div_use_all,
+            command=_toggle_divergence_all,
+        ).grid(row=4, column=6, columnspan=2, sticky="w", padx=2, pady=2)
+
         def _sync_divergence_all():
             self.v_div_use_all.set(
                 all(bool(getattr(self, key).get()) for key, _label in div_names)
             )
-
-        def _apply_divergence_all(*_args):
-            if bool(self.v_div_use_all.get()):
-                for key, _label in div_names:
-                    getattr(self, key).set(True)
 
         for j, (key, label) in enumerate(div_names):
             var = tk.BooleanVar(value=True)
@@ -3963,7 +3992,6 @@ class UniversalFuturesBotGUI:
                 padx=2,
                 pady=1,
             )
-        self.v_div_use_all.trace_add("write", _apply_divergence_all)
 
         _option(
             fr, "Divergence Entry", "v_div_entry_mode", "FRESH",
@@ -4931,6 +4959,15 @@ class UniversalFuturesBotGUI:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
+            try:
+                loaded_schema = int(cfg.get("config_schema_version", 0))
+            except Exception:
+                loaded_schema = 0
+            if loaded_schema < CONFIG_SCHEMA_VERSION:
+                self.log(
+                    f"CONFIG MIGRATION: schema {loaded_schema or 'legacy'} -> {CONFIG_SCHEMA_VERSION}; "
+                    "missing newer fields use V8.4.1 defaults; existing saved values remain authoritative."
+                )
 
             # Clear every Entry-backed setting before inserting the profile.
             # Without this, repeatedly loading profiles would concatenate API
@@ -8291,6 +8328,179 @@ class UniversalFuturesBotGUI:
 
     # -------------------- START / STOP ----------------------
 
+    def _validate_strategy_preflight(self):
+        """Validate strategy/risk/SLTP inputs before any exchange-side mutation.
+
+        The worker still performs authoritative validation again immediately
+        before indicator calculations. This startup pass prevents malformed GUI
+        values from reaching leverage/order setup first.
+        """
+        timeframe = str(self.v_tf.get()).strip().lower()
+        if timeframe not in {"1m", "3m", "5m", "15m", "30m", "45m", "1h", "4h"}:
+            raise ValueError(
+                f"Unsupported timeframe: {timeframe}. Use 1m, 3m, 5m, 15m, 30m, 45m, 1h or 4h."
+            )
+
+        max_trades = int(str(self.e_max_trades.get()).strip())
+        if max_trades < 0:
+            raise ValueError("Max Trades cannot be negative.")
+        cooldown = float(str(self.e_cooldown_min.get()).strip())
+        if cooldown < 0:
+            raise ValueError("Cooldown cannot be negative.")
+
+        st_len = int(self.e_st_len.get()); st_mult = float(self.e_st_mult.get())
+        if st_len <= 0 or st_mult <= 0:
+            raise ValueError("Supertrend ATR Period and Multiplier must be greater than 0.")
+        if self.v_st_source.get().strip().upper() not in ("CLOSE", "HL2"):
+            raise ValueError("Supertrend Source must be CLOSE or HL2.")
+        if self.v_st_entry_mode.get().strip().upper() not in ("FRESH_FLIP", "CURRENT_TREND"):
+            raise ValueError("Supertrend Entry must be FRESH_FLIP or CURRENT_TREND.")
+
+        ema_len = int(self.e_ema_len.get())
+        ema_fast = int(self.e_ema_fast.get()); ema_slow = int(self.e_ema_slow.get())
+        if ema_len <= 0 or ema_fast <= 0 or ema_slow <= 0:
+            raise ValueError("EMA periods must be greater than 0.")
+        if ema_fast == ema_slow:
+            raise ValueError("EMA crossover Fast and Slow periods must be different.")
+        if self.v_ema_cross_entry_mode.get().strip().upper() not in ("FRESH_CROSS", "CURRENT_TREND"):
+            raise ValueError("EMA crossover Entry must be FRESH_CROSS or CURRENT_TREND.")
+
+        macd_fast = int(self.e_macd_fast.get()); macd_slow = int(self.e_macd_slow.get()); macd_sig = int(self.e_macd_signal.get())
+        if min(macd_fast, macd_slow, macd_sig) <= 0 or macd_fast >= macd_slow:
+            raise ValueError("MACD requires positive periods with Fast < Slow.")
+
+        rsi_len = int(self.e_rsi_len.get()); rsi_ma_len = int(self.e_rsi_ma_len.get())
+        rsi_ob = float(self.e_rsi_ob.get()); rsi_os = float(self.e_rsi_os.get())
+        if rsi_len <= 0 or rsi_ma_len <= 0 or not (0 < rsi_os < rsi_ob < 100):
+            raise ValueError("RSI requires positive periods and 0 < Oversold < Overbought < 100.")
+        if self.v_rsi_logic.get().strip().upper() not in ("REVERSAL_ZONE", "CROSS_MA", "EITHER"):
+            raise ValueError("RSI Logic is invalid.")
+        if self.v_rsi_ma_type.get().strip().upper() not in ("SMA", "EMA", "WMA"):
+            raise ValueError("RSI MA Type is invalid.")
+
+        if int(self.e_bb_len.get()) <= 0 or float(self.e_bb_std.get()) <= 0:
+            raise ValueError("Bollinger period and StdDev must be greater than 0.")
+        if min(int(self.e_stoch_k.get()), int(self.e_stoch_smooth.get()), int(self.e_stoch_d.get())) <= 0:
+            raise ValueError("Stochastic periods must be greater than 0.")
+        if int(self.e_vwap_len.get()) <= 0:
+            raise ValueError("VWAP period must be greater than 0.")
+        if int(self.e_vwap_delta_smooth_len.get()) <= 0 or int(self.e_vwap_delta_baseline.get()) <= 0:
+            raise ValueError("VWAP Delta lengths must be greater than 0.")
+        if self.v_vwap_delta_logic.get().strip().upper() not in ("CURRENT_TREND", "CROSS_BASELINE"):
+            raise ValueError("VWAP Delta Logic is invalid.")
+
+        if int(self.e_vidya_len.get()) <= 0 or int(self.e_vidya_momentum.get()) <= 0 or float(self.e_vidya_band.get()) <= 0:
+            raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
+        if self.v_vidya_entry_mode.get().strip().upper() not in ("CURRENT_TREND", "FRESH_FLIP"):
+            raise ValueError("VIDYA Entry is invalid.")
+
+        if float(self.e_nwe_bandwidth.get()) <= 0 or float(self.e_nwe_mult.get()) < 0:
+            raise ValueError("NWE Bandwidth must be > 0 and Mult cannot be negative.")
+        if self.v_nwe_entry_mode.get().strip().upper() not in ("CURRENT_TREND", "FRESH_CROSS"):
+            raise ValueError("NWE Entry is invalid.")
+
+        if int(self.e_liq_length.get()) <= 0 or float(self.e_liq_filter_value.get()) < 0:
+            raise ValueError("Liquidity Swing Pivot/Filter values are invalid.")
+        if self.v_liq_area.get().strip() not in ("Wick Extremity", "Full Range"):
+            raise ValueError("Liquidity Swing Area is invalid.")
+        if self.v_liq_filter.get().strip().title() not in ("Count", "Volume"):
+            raise ValueError("Liquidity Swing Filter is invalid.")
+        if self.v_liq_entry_mode.get().strip().upper() not in ("FRESH_BREAK", "CURRENT_TREND"):
+            raise ValueError("Liquidity Swing Entry is invalid.")
+
+        if int(self.e_trendline_length.get()) <= 0 or int(self.e_trendline_min_distance.get()) <= 0:
+            raise ValueError("Trendline Pivot Lookback and Minimum Pivot Distance must be greater than 0.")
+        if not 0 <= float(self.e_trendline_buffer.get()) < 100:
+            raise ValueError("Trendline Breakout Buffer must be >= 0% and less than 100%.")
+        if int(self.e_trendline_retest.get()) <= 0:
+            raise ValueError("Trendline Retest Candles must be greater than 0.")
+        if self.v_trendline_entry_mode.get().strip().upper() not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
+            raise ValueError("Trendline Entry is invalid.")
+
+        if int(self.e_div_pivot.get()) < 1 or int(self.e_div_pivot.get()) > 50:
+            raise ValueError("Divergence Pivot Period must be 1-50.")
+        if int(self.e_div_min_count.get()) < 1 or int(self.e_div_min_count.get()) > 10:
+            raise ValueError("Minimum Divergence must be 1-10.")
+        if int(self.e_div_max_pivots.get()) < 1 or int(self.e_div_max_pivots.get()) > 20:
+            raise ValueError("Maximum Divergence Pivots must be 1-20.")
+        if int(self.e_div_max_bars.get()) < 30 or int(self.e_div_max_bars.get()) > 200:
+            raise ValueError("Maximum Divergence Bars must be 30-200.")
+        if self.v_div_source.get().strip() not in ("Close", "High/Low"):
+            raise ValueError("Divergence Source is invalid.")
+        if self.v_div_type.get().strip() not in ("Regular", "Hidden", "Regular/Hidden"):
+            raise ValueError("Divergence Type is invalid.")
+        if self.v_div_entry_mode.get().strip().upper() not in ("FRESH", "CURRENT_STATE"):
+            raise ValueError("Divergence Entry is invalid.")
+        if int(self.e_div_cci_len.get()) <= 0 or int(self.e_div_mom_len.get()) <= 0:
+            raise ValueError("Divergence CCI/Momentum lengths must be greater than 0.")
+        div_flags = [bool(getattr(self, k).get()) for k in (
+            "div_use_macd", "div_use_macd_hist", "div_use_rsi", "div_use_stoch",
+            "div_use_cci", "div_use_momentum", "div_use_obv", "div_use_vwmacd",
+            "div_use_cmf", "div_use_mfi"
+        )]
+        if self.v_use_divergence.get() and not any(div_flags):
+            raise ValueError("Divergence requires at least one source indicator.")
+
+        if int(self.e_sr_volume_ma.get()) <= 0:
+            raise ValueError("Volume S/R Volume MA threshold must be greater than 0.")
+        if self.v_sr_vote_mode.get().strip().upper() not in ("MAJORITY", "ANY", "ALL"):
+            raise ValueError("Volume S/R Vote mode is invalid.")
+        if self.v_sr_entry_mode.get().strip().upper() not in ("CURRENT_ZONE", "FRESH_BREAK"):
+            raise ValueError("Volume S/R Entry mode is invalid.")
+        sr_tfs = [self.v_sr_tf1.get().strip(), self.v_sr_tf2.get().strip(), self.v_sr_tf3.get().strip(), self.v_sr_tf4.get().strip()]
+        if self.v_use_vol_sr.get() and all(tf == "Disable" for tf in sr_tfs):
+            raise ValueError("Volume S/R requires at least one enabled timeframe.")
+
+        if float(self.e_atr_min_pct.get()) < 0:
+            raise ValueError("Minimum ATR % cannot be negative.")
+        if int(self.e_vol_len.get()) <= 0:
+            raise ValueError("Volume MA period must be greater than 0.")
+        if float(self.e_adx_thresh.get()) < 0:
+            raise ValueError("ADX threshold cannot be negative.")
+
+        signal_mode = self.v_signal_mode.get().strip().upper()
+        if signal_mode not in SUPPORTED_SIGNAL_MODES:
+            raise ValueError(f"Unsupported signal mode: {signal_mode}")
+        if signal_mode == "SCORE":
+            if int(self.e_min_score.get()) < 1:
+                raise ValueError("Minimum Signal Score must be at least 1.")
+        adaptive_edge = float(self.e_adaptive_edge.get()); adaptive_min_weight = float(self.e_adaptive_min_weight.get())
+        if not 0 < adaptive_edge < 1 or adaptive_min_weight <= 0:
+            raise ValueError("Adaptive strategy settings are invalid.")
+        evidence_min_families = int(self.e_evidence_min_families.get())
+        evidence_family_min_score = float(self.e_evidence_family_min_score.get())
+        if not 1 <= evidence_min_families <= len(EVIDENCE_FAMILY_ORDER):
+            raise ValueError("Evidence Minimum Families must be between 1 and 4.")
+        if not 0 < evidence_family_min_score <= 1:
+            raise ValueError("Family Minimum Score must be greater than 0 and at most 1.")
+
+        size_mode = self.v_size_mode.get().strip().upper()
+        if size_mode not in ("EQUITY_RISK_%", "FIXED_QTY"):
+            raise ValueError("Sizing Mode must be EQUITY_RISK_% or FIXED_QTY.")
+        risk_pct = float(self.e_risk_pct.get()); fixed_qty = float(self.e_fixed_qty.get())
+        if not 0 < risk_pct < 100 or fixed_qty <= 0:
+            raise ValueError("Risk Per Trade must be >0 and <100%; Fixed Qty must be >0.")
+        max_dd = float(self.e_max_dd.get()); emergency_loss = float(self.e_emergency_capital_pct.get())
+        if not 0 <= max_dd < 100 or not 0 <= emergency_loss < 100:
+            raise ValueError("Drawdown and emergency loss limits must be >=0% and <100%.")
+        if self.v_emergency_scope.get().strip().upper() not in ("BOT_SYMBOL", "ALL_ACCOUNT"):
+            raise ValueError("Emergency Scope must be BOT_SYMBOL or ALL_ACCOUNT.")
+
+        sl_mode = self.v_sl_mode.get().strip().upper(); tp_mode = self.v_tp_mode.get().strip().upper()
+        if sl_mode not in ("PRICE_%", "ROI_%") or tp_mode not in ("PRICE_%", "ROI_%"):
+            raise ValueError(f"Unknown SL/TP mode: SL={sl_mode} TP={tp_mode}")
+        if float(self.e_sl_pct.get()) <= 0 or float(self.e_hold_sl_roi.get()) <= 0 or float(self.e_tp1_pct.get()) <= 0 or float(self.e_tp2_pct.get()) <= 0:
+            raise ValueError("SL/TP targets and Hold-All-Reverse SL ROI must be greater than 0.")
+        tp_qty_mode = self.v_tp_qty_mode.get().strip().upper()
+        if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
+            raise ValueError(f"Unknown TP quantity mode: {tp_qty_mode}")
+        tp1_close = float(self.e_tp1_close.get()); tp2_close = float(self.e_tp2_close.get())
+        if tp1_close <= 0 or tp2_close <= 0:
+            raise ValueError("TP1 and TP2 close values must both be greater than 0.")
+        if tp_qty_mode == "PERCENT_%" and abs((tp1_close + tp2_close) - 100.0) > 1e-9:
+            raise ValueError("TP1 + TP2 close percentages must equal 100%.")
+        return True
+
     def _validate_v83_preflight(self):
         """Validate cross-module settings before any exchange-side mutation."""
         exchange_id = str(self.v_exchange.get()).strip().lower()
@@ -8312,6 +8522,7 @@ class UniversalFuturesBotGUI:
         signal_mode = str(self.v_signal_mode.get()).strip().upper()
         if signal_mode not in SUPPORTED_SIGNAL_MODES:
             raise ValueError(f"Unsupported signal mode: {signal_mode}")
+        self._validate_strategy_preflight()
         leverage = int(str(self.e_lev.get()).strip())
         if leverage <= 0:
             raise ValueError("Leverage must be greater than 0.")
