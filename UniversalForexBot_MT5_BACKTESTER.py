@@ -11,7 +11,7 @@ import pandas as pd
 
 LIVE=Path(__file__).with_name("UniversalForexBot_MT5.py")
 sp=importlib.util.spec_from_file_location("fx_r5",str(LIVE)); fx=importlib.util.module_from_spec(sp); sp.loader.exec_module(fx)
-base=fx.fx
+base=fx
 
 APP_VERSION="V8.4.2-FOREX-EVIDENCE-BT-R5"
 AUDIT_BUILD="V8.4.2-ENGINE-AUDIT-2026-09-21-FOREX-R5"
@@ -48,19 +48,19 @@ def load_ohlcv(df):
     return x.sort_values("datetime").dropna(subset=["datetime","open","high","low","close"]).reset_index(drop=True)
 
 def build_frame(df,c):
-    x=df.copy(); x=base.calculate_supertrend(x,int(c["st_len"]),float(c["st_mult"]),c["st_source"],bool(c["st_change_atr"]))
-    x=base.calculate_adx(x); x["ema"]=x.close.ewm(span=int(c["ema_len"]),adjust=False).mean()
+    x=df.copy(); x=fx.calculate_supertrend(x,int(c["st_len"]),float(c["st_mult"]),c["st_source"],bool(c["st_change_atr"]))
+    x=fx.calculate_adx(x); x["ema"]=x.close.ewm(span=int(c["ema_len"]),adjust=False).mean()
     x["ema_fast"]=x.close.ewm(span=int(c["ema_fast"]),adjust=False).mean(); x["ema_slow"]=x.close.ewm(span=int(c["ema_slow"]),adjust=False).mean()
-    if c["use_macd"]:x=base.calculate_macd(x,int(c["macd_fast"]),int(c["macd_slow"]),int(c["macd_signal"]))
-    if c["use_rsi"]:x=base.calculate_rsi(x,int(c["rsi_len"])); x=base.calculate_rsi_ma(x,c["rsi_ma_type"],int(c["rsi_ma_len"]))
-    if c["use_stoch"]:x=base.calculate_stochastic(x,int(c["stoch_k"]),int(c["stoch_smooth"]),int(c["stoch_d"]))
-    if c["use_vwap"]:x=base.calculate_vwap(x,int(c["vwap_len"]))
-    if c["use_vwap_delta"]:x=base.calculate_vwap_delta(x,bool(c["vwap_delta_smooth"]),int(c["vwap_delta_smooth_len"]),int(c["vwap_delta_baseline"]))
+    if c["use_macd"]:x=fx.calculate_macd(x,int(c["macd_fast"]),int(c["macd_slow"]),int(c["macd_signal"]))
+    if c["use_rsi"]:x=fx.calculate_rsi(x,int(c["rsi_len"])); x=fx.calculate_rsi_ma(x,c["rsi_ma_type"],int(c["rsi_ma_len"]))
+    if c["use_stoch"]:x=fx.calculate_stochastic(x,int(c["stoch_k"]),int(c["stoch_smooth"]),int(c["stoch_d"]))
+    if c["use_vwap"]:x=fx.calculate_vwap(x,int(c["vwap_len"]))
+    if c["use_vwap_delta"]:x=fx.calculate_vwap_delta(x,bool(c["vwap_delta_smooth"]),int(c["vwap_delta_smooth_len"]),int(c["vwap_delta_baseline"]))
     x["vol_ma"]=x.vol.rolling(int(c["vol_len"])).mean()
-    if c["use_liq_swing"]:x=base.calculate_liquidity_swings(x,int(c["liq_len"]),c["liq_area"],c["liq_filter"],float(c["liq_filter_value"]))
-    if c["use_trendline"]:x=base.calculate_trendline_breakout(x,int(c["trend_len"]),int(c["trend_min_dist"]),float(c["trend_buffer"]),int(c["trend_retest"]))
-    if c["use_divergence"]:x=base.calculate_divergence_module(x,dict(c))
-    if c["use_vol_sr"]:x=base._volume_sr_base_series(x,dict(c))
+    if c["use_liq_swing"]:x=fx.calculate_liquidity_swings(x,int(c["liq_len"]),c["liq_area"],c["liq_filter"],float(c["liq_filter_value"]))
+    if c["use_trendline"]:x=fx.calculate_trendline_breakout(x,int(c["trend_len"]),int(c["trend_min_dist"]),float(c["trend_buffer"]),int(c["trend_retest"]))
+    if c["use_divergence"]:x=fx.calculate_divergence_module(x,dict(c))
+    if c["use_vol_sr"]:x=fx._volume_sr_base_series(x,dict(c))
     if c["use_mtf"]:
         z=x.set_index("datetime").resample("4h",label="left",closed="left").agg({"open":"first","high":"max","low":"min","close":"last","vol":"sum"}).dropna()
         z["ema200"]=z.close.ewm(span=200,adjust=False).mean(); z["available_at"]=z.index+pd.Timedelta(hours=4); z=z.reset_index()
@@ -92,7 +92,7 @@ def _modules(x,i,c):
 def signal_at(x,i,c):
     mods,ap,vp,dp,mb,ms=_modules(x,i,c)
     args=(mods,c["signal_mode"],int(c["min_score"]),ap,vp,dp,mb,ms,float(c["adaptive_edge"]),float(c["adaptive_min_weight"]),int(c["evidence_min_families"]),float(c["evidence_family_min_score"]),bool(c["evidence_require_trend"]),bool(c["evidence_require_independent"]))
-    b,s,_,_=base.StrategyEngine.decide_signal(*args)
+    b,s,_,_=fx.StrategyEngine.decide_signal(*args)
     return ("BUY" if b else "SELL" if s else "NONE"),mods
 
 def run_backtest(df,config=None):
