@@ -28,10 +28,11 @@ def run():
       "ADAPTIVE_EVIDENCE" in fx.SUPPORTED_SIGNAL_MODES,
       "max_open_trades" in src and "atr_tp1_mult" in src and "atr_tp2_mult" in src,
       "ATR DYNAMIC" in src and "completed-candle ATR" in src,
+      "e_adx_len" in src and "ADX_GATE" in src,
       fx.StrategyEngine.decide_signal([("EMA",True,False),("VWAP",False,True)],"SINGLE_SIGNAL",1)[:2]==(False,False),
       "UniversalForexBot_MT5.py" in BT.read_text(),
       bt.DEFAULTS["max_open_trades"]==1,
-      bt.DEFAULTS["atr_tp1_mult"]==1.2 and bt.DEFAULTS["atr_tp2_mult"]==2.2,
+      bt.DEFAULTS["atr_tp1_mult"]==1.3 and bt.DEFAULTS["atr_tp2_mult"]==2.2,
       isinstance(bt.run_backtest(data(),{"max_trades":3}),dict)
     ]
     print(f"FOREX V8.4.2-R5 AUDIT: {sum(checks)}/{len(checks)} PASS")
