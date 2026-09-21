@@ -44,11 +44,10 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.1-CRYPTO-EVIDENCE-HARDENED-AUDITED"
+APP_VERSION = "V8.4.1-CRYPTO-EVIDENCE-FAMILY-AUDITED"
 APP_TITLE = "Universal Futures Trading Bot V8.4.1 - Hardened Adaptive Evidence Engine"
-AUDIT_BUILD = "V8.4.1-ENGINE-AUDIT-2026-09-21"
-
-# V8.3.3 full engine/strategy/configuration audit and orphan-order recovery hardening.
+AUDIT_BUILD = "V8.4.1-ENGINE-AUDIT-2026-09-21-FINAL"
+# V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -59,7 +58,7 @@ MASTER_DB_FILE = str(APP_DIR / "universal_bot_master.db")
 MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 7
+CONFIG_SCHEMA_VERSION = 8
 RUNTIME_SCHEMA_VERSION = 5  # V8.3.3 runtime adds persistent retired managed-order IDs.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
@@ -79,10 +78,26 @@ ADAPTIVE_MODULE_WEIGHTS = {
 }
 ADAPTIVE_DEFAULT_EDGE = 0.18
 ADAPTIVE_DEFAULT_MIN_WEIGHT = 3.50
+
+# V8.4 Evidence-Family contract. Core indicator functions are retained in this live file so the strategy is self-contained.
+# REGIME is deliberately a gate family, not a directional voting family:
+# ATR/ADX must pass, but never count as independent directional confirmation.
+EVIDENCE_FAMILIES = {
+    "TREND": ("ST", "EMA", "EMA_CROSS", "MACD", "VIDYA", "NWE"),
+    "MOMENTUM": ("RSI", "STOCH", "DIVERGENCE"),
+    "FLOW": ("VWAP", "VWAP_DELTA", "VOL", "VOL_SR"),
+    "STRUCTURE": ("LIQ_SWING", "TRENDLINE", "MTF"),
+    "REGIME": ("ATR", "ADX"),
+}
+EVIDENCE_FAMILY_ORDER = ("TREND", "MOMENTUM", "FLOW", "STRUCTURE")
 EVIDENCE_DEFAULT_MIN_FAMILIES = 2
 EVIDENCE_DEFAULT_FAMILY_MIN_SCORE = 0.35
 EVIDENCE_DEFAULT_REQUIRE_TREND = True
 EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT = True
+
+# V8.3.2 requested default trading profile.
+# These are GUI defaults for a NEW/unsaved profile; an existing saved profile
+# remains authoritative and is not silently overwritten.
 DEFAULT_SIGNAL_MODE = "ADAPTIVE_EVIDENCE"
 DEFAULT_ADAPTIVE_EDGE = "0.18"
 DEFAULT_ADAPTIVE_MIN_WEIGHT = "3.5"
@@ -95,6 +110,10 @@ DEFAULT_RISK_MODE = "EQUITY_RISK_%"
 DEFAULT_RISK_PER_TRADE = "1.0"
 DEFAULT_POST_SL_OPPOSITE_LOCK = True
 DEFAULT_NO_SAME_CANDLE = True
+DEFAULT_USE_DIVERGENCE = False
+DEFAULT_DIV_USE_ALL = True
+DEFAULT_USE_DIVERGENCE = False
+DEFAULT_DIV_USE_ALL = True
 RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
@@ -107,6 +126,479 @@ DIVERGENCE_INDICATORS = (
 
 # V8.2.3: normalize GUI symbols before live checkpoint identity checks.
 
+
+def calculate_rma(series, length):
+    """TradingView-style Wilder RMA with SMA seed."""
+    length = int(length)
+    if length <= 0:
+        raise ValueError("RMA length must be greater than 0.")
+
+    x = pd.Series(series, dtype="float64")
+    out = pd.Series(np.nan, index=x.index, dtype="float64")
+
+    valid_positions = np.flatnonzero(np.isfinite(x.to_numpy(dtype=float)))
+    if len(valid_positions) < length:
+        return out
+
+    # TradingView RMA seeds from the SMA of the first `length` valid values.
+    seed_positions = valid_positions[:length]
+    seed = float(x.iloc[seed_positions].mean())
+    seed_pos = int(seed_positions[-1])
+    out.iloc[seed_pos] = seed
+
+    alpha = 1.0 / length
+    prev = seed
+    for pos in valid_positions[length:]:
+        value = float(x.iloc[pos])
+        prev = alpha * value + (1.0 - alpha) * prev
+        out.iloc[pos] = prev
+
+    return out
+
+def calculate_supertrend(
+    df,
+    length=10,
+    multiplier=3.0,
+    source="CLOSE",
+    change_atr=True,
+):
+    """TradingView/Kivanc-style Supertrend.
+
+    Matches the TradingView Supertrend inputs:
+      - ATR Period
+      - Source (Close or HL2)
+      - ATR Multiplier
+      - Change ATR Calculation Method
+        ON  -> Wilder/RMA ATR (TradingView ta.atr)
+        OFF -> SMA(True Range, Period)
+    """
+    df = df.copy()
+    length = int(length)
+    multiplier = float(multiplier)
+    source = str(source).strip().upper()
+    change_atr = bool(change_atr)
+
+    if length <= 0:
+        raise ValueError("Supertrend ATR Period must be greater than 0.")
+    if multiplier <= 0:
+        raise ValueError("Supertrend ATR Multiplier must be greater than 0.")
+    if source not in ("CLOSE", "HL2"):
+        raise ValueError("Supertrend Source must be CLOSE or HL2.")
+
+    df["tr0"] = (df["high"] - df["low"]).abs()
+    df["tr1"] = (df["high"] - df["close"].shift(1)).abs()
+    df["tr2"] = (df["low"] - df["close"].shift(1)).abs()
+    df["tr"] = df[["tr0", "tr1", "tr2"]].max(axis=1)
+
+    # TradingView/Kivanc Supertrend:
+    # changeATR=True  -> ta.atr(length), i.e. Wilder/RMA ATR
+    # changeATR=False -> sma(tr, length)
+    if change_atr:
+        # TradingView ta.atr() = Wilder RMA of true range.
+        df["atr"] = calculate_rma(df["tr"], length)
+    else:
+        df["atr"] = df["tr"].rolling(length).mean()
+
+    if source == "CLOSE":
+        src = df["close"]
+    else:
+        src = (df["high"] + df["low"]) / 2.0
+
+    # Pine:
+    # up = src - Multiplier * atr
+    # dn = src + Multiplier * atr
+    df["basic_lb"] = src - multiplier * df["atr"]
+    df["basic_ub"] = src + multiplier * df["atr"]
+
+    final_ub = [np.nan] * len(df)
+    final_lb = [np.nan] * len(df)
+    trend = [True] * len(df)
+    supertrend = [np.nan] * len(df)
+
+    for i in range(len(df)):
+        # Pine has na values until ATR becomes available. Keep those bars
+        # neutral rather than manufacturing an early Supertrend state.
+        if not np.isfinite(df["atr"].iloc[i]):
+            continue
+
+        basic_ub = float(df["basic_ub"].iloc[i])
+        basic_lb = float(df["basic_lb"].iloc[i])
+
+        if i == 0 or not np.isfinite(final_ub[i - 1]):
+            up1 = basic_lb
+            dn1 = basic_ub
+        else:
+            up1 = final_lb[i - 1]
+            dn1 = final_ub[i - 1]
+
+        if i == 0 or not np.isfinite(final_lb[i - 1]):
+            final_lb[i] = basic_lb
+            final_ub[i] = basic_ub
+            trend[i] = True
+            supertrend[i] = final_lb[i]
+            continue
+
+        # Exact Kivanc/Pine recurrence:
+        # up := close[1] > up1 ? max(up, up1) : up
+        # dn := close[1] < dn1 ? min(dn, dn1) : dn
+        final_lb[i] = (
+            max(basic_lb, up1)
+            if float(df["close"].iloc[i - 1]) > up1
+            else basic_lb
+        )
+        final_ub[i] = (
+            min(basic_ub, dn1)
+            if float(df["close"].iloc[i - 1]) < dn1
+            else basic_ub
+        )
+
+        prev_trend = trend[i - 1]
+        if prev_trend is False and float(df["close"].iloc[i]) > dn1:
+            trend[i] = True
+        elif prev_trend is True and float(df["close"].iloc[i]) < up1:
+            trend[i] = False
+        else:
+            trend[i] = prev_trend
+
+        supertrend[i] = final_lb[i] if trend[i] else final_ub[i]
+
+    df["supertrend"] = supertrend
+    df["trend"] = trend
+    return df
+
+def calculate_adx(df, length=14):
+    df = df.copy()
+    length = int(length)
+    if length <= 0:
+        raise ValueError("ADX period must be greater than 0.")
+
+    # Keep ADX self-contained.  The live loop normally calls Supertrend first,
+    # which leaves tr0/tr1/tr2 on the frame, but callers/tests/backtester helpers
+    # must not depend on that incidental ordering.
+    prev_close = df["close"].shift(1)
+    df["tr0"] = (df["high"] - df["low"]).abs()
+    df["tr1"] = (df["high"] - prev_close).abs()
+    df["tr2"] = (df["low"] - prev_close).abs()
+
+    df["up_move"] = df["high"] - df["high"].shift(1)
+    df["down_move"] = df["low"].shift(1) - df["low"]
+
+    df["plus_dm"] = df.apply(
+        lambda r: (
+            r["up_move"]
+            if r["up_move"] > r["down_move"] and r["up_move"] > 0
+            else 0
+        ),
+        axis=1,
+    )
+
+    df["minus_dm"] = df.apply(
+        lambda r: (
+            r["down_move"]
+            if r["down_move"] > r["up_move"] and r["down_move"] > 0
+            else 0
+        ),
+        axis=1,
+    )
+
+    tr_max = df[["tr0", "tr1", "tr2"]].max(axis=1)
+    df["atr_adx"] = calculate_rma(tr_max, length)
+    plus_rma = calculate_rma(df["plus_dm"], length)
+    minus_rma = calculate_rma(df["minus_dm"], length)
+
+    df["plus_di"] = 100 * (plus_rma / df["atr_adx"])
+    df["minus_di"] = 100 * (minus_rma / df["atr_adx"])
+
+    denominator = (df["plus_di"] + df["minus_di"]).replace(0, float("nan"))
+    df["dx"] = 100 * abs(df["plus_di"] - df["minus_di"]) / denominator
+    df["adx"] = calculate_rma(df["dx"], length)
+
+    return df
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """Calculate MACD line, signal line and histogram."""
+    df = df.copy()
+
+    fast = int(fast)
+    slow = int(slow)
+    signal = int(signal)
+
+    if fast <= 0 or slow <= 0 or signal <= 0:
+        raise ValueError("MACD periods must be greater than 0.")
+    if fast >= slow:
+        raise ValueError("MACD Fast period must be smaller than Slow period.")
+
+    ema_fast = df["close"].ewm(
+        span=fast,
+        adjust=False,
+    ).mean()
+
+    ema_slow = df["close"].ewm(
+        span=slow,
+        adjust=False,
+    ).mean()
+
+    df["macd"] = ema_fast - ema_slow
+    df["macd_signal"] = df["macd"].ewm(
+        span=signal,
+        adjust=False,
+    ).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    return df
+
+def calculate_rsi(df, length=14):
+    """Wilder-style RSI using exponentially smoothed gains/losses."""
+    df = df.copy()
+
+    length = int(length)
+    if length <= 0:
+        raise ValueError("RSI period must be greater than 0.")
+
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = calculate_rma(gain, length)
+    avg_loss = calculate_rma(loss, length)
+
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    # Handle the zero-loss case as RSI 100 rather than NaN.
+    df.loc[
+        (avg_loss == 0) & (avg_gain > 0),
+        "rsi",
+    ] = 100.0
+
+    # Flat markets have neutral RSI.
+    df.loc[
+        (avg_gain == 0) & (avg_loss == 0),
+        "rsi",
+    ] = 50.0
+
+    return df
+
+def calculate_wma(series, length):
+    """Linear weighted moving average."""
+    length = int(length)
+    if length <= 0:
+        raise ValueError("WMA period must be greater than 0.")
+    weights = list(range(1, length + 1))
+    weight_sum = float(sum(weights))
+
+    def _wma(values):
+        if len(values) < length:
+            return float("nan")
+        return float(sum(v * w for v, w in zip(values, weights)) / weight_sum)
+
+    return series.rolling(length).apply(_wma, raw=True)
+
+def calculate_rsi_ma(df, rsi_ma_type="EMA", length=9):
+    """Calculate selectable SMA/EMA/WMA on RSI."""
+    df = df.copy()
+    length = int(length)
+    ma_type = str(rsi_ma_type).strip().upper()
+    if length <= 0:
+        raise ValueError("RSI MA period must be greater than 0.")
+    if ma_type == "SMA":
+        df["rsi_ma"] = df["rsi"].rolling(length).mean()
+    elif ma_type == "EMA":
+        df["rsi_ma"] = df["rsi"].ewm(span=length, adjust=False).mean()
+    elif ma_type == "WMA":
+        df["rsi_ma"] = calculate_wma(df["rsi"], length)
+    else:
+        raise ValueError("RSI MA type must be SMA, EMA, or WMA.")
+    return df
+
+def calculate_hma(series, length):
+    length = int(length)
+    if length <= 0:
+        raise ValueError("HMA length must be greater than 0.")
+    half = max(1, length // 2)
+    sqrt_len = max(1, int(length ** 0.5))
+    return calculate_wma(
+        2.0 * calculate_wma(series, half) - calculate_wma(series, length),
+        sqrt_len,
+    )
+
+def calculate_vwap_delta(df, smoothing=False, smoothing_length=21, baseline_length=50):
+    df = df.copy()
+    smoothing_length = int(smoothing_length)
+    baseline_length = int(baseline_length)
+    if smoothing_length <= 0 or baseline_length <= 0:
+        raise ValueError("VWAP Delta lengths must be greater than 0.")
+
+    # Session VWAP, reset daily for crypto UTC data.
+    session = pd.to_datetime(df["time"], unit="ms", utc=True).dt.floor("D")
+    typical = (df["high"] + df["low"] + df["close"]) / 3.0
+    pv = typical * df["vol"]
+    vwap = pv.groupby(session).cumsum() / df["vol"].groupby(session).cumsum().replace(0, float("nan"))
+
+    raw_o = df["open"] - vwap
+    raw_h = df["high"] - vwap
+    raw_l = df["low"] - vwap
+    raw_c = df["close"] - vwap
+
+    if smoothing:
+        d_o = calculate_hma(raw_o, smoothing_length)
+        d_h = calculate_hma(raw_h, smoothing_length)
+        d_l = calculate_hma(raw_l, smoothing_length)
+        d_c = calculate_hma(raw_c, smoothing_length)
+    else:
+        d_o, d_h, d_l, d_c = raw_o, raw_h, raw_l, raw_c
+
+    df["vwap_delta"] = d_c
+    df["vwap_delta_open"] = d_o
+    df["vwap_delta_high"] = pd.concat([d_h, d_o, d_c], axis=1).max(axis=1)
+    df["vwap_delta_low"] = pd.concat([d_l, d_o, d_c], axis=1).min(axis=1)
+    df["vwap_delta_baseline"] = d_c.ewm(span=baseline_length, adjust=False).mean()
+    df["vwap_delta_session_vwap"] = vwap
+    return df
+
+def calculate_vidya(df, vidya_length=10, vidya_momentum=20, band_distance=2.0,
+                    atr_length=200, smoothing_length=15):
+    df = df.copy()
+    vidya_length = int(vidya_length)
+    vidya_momentum = int(vidya_momentum)
+    band_distance = float(band_distance)
+    if vidya_length <= 0 or vidya_momentum <= 0 or band_distance <= 0:
+        raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
+
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = calculate_rma(tr, int(atr_length))
+
+    momentum = df["close"].diff()
+    pos = momentum.clip(lower=0.0)
+    neg = (-momentum).clip(lower=0.0)
+    sp = pos.rolling(vidya_momentum).sum()
+    sn = neg.rolling(vidya_momentum).sum()
+    denom = sp + sn
+    cmo = (100.0 * (sp - sn).abs() / denom.replace(0, float("nan"))).fillna(0.0)
+    alpha = 2.0 / (vidya_length + 1.0)
+
+    raw = []
+    previous = None
+    for price, c in zip(df["close"].to_numpy(), cmo.to_numpy()):
+        price = float(price)
+        if previous is None or not np.isfinite(previous):
+            previous = price
+        k = alpha * float(c) / 100.0
+        value = k * price + (1.0 - k) * previous
+        raw.append(value)
+        previous = value
+
+    vidya = pd.Series(raw, index=df.index, dtype="float64").rolling(int(smoothing_length)).mean()
+    upper = vidya + atr * band_distance
+    lower = vidya - atr * band_distance
+
+    trend = False
+    states = []
+    for i in range(len(df)):
+        if i > 0:
+            if (pd.notna(upper.iloc[i]) and pd.notna(upper.iloc[i-1])
+                    and df["close"].iloc[i-1] <= upper.iloc[i-1]
+                    and df["close"].iloc[i] > upper.iloc[i]):
+                trend = True
+            elif (pd.notna(lower.iloc[i]) and pd.notna(lower.iloc[i-1])
+                    and df["close"].iloc[i-1] >= lower.iloc[i-1]
+                    and df["close"].iloc[i] < lower.iloc[i]):
+                trend = False
+        states.append(trend)
+
+    trend_s = pd.Series(states, index=df.index, dtype=bool)
+    previous_trend = trend_s.shift(1, fill_value=False)
+    changed = trend_s.ne(previous_trend)
+    smoothed = lower.where(trend_s, upper).mask(changed)
+    cross_up = (~previous_trend) & trend_s
+    cross_down = previous_trend & (~trend_s)
+
+    up, down = [], []
+    uv = dv = 0.0
+    for i in range(len(df)):
+        if bool(cross_up.iloc[i] or cross_down.iloc[i]):
+            uv = dv = 0.0
+        else:
+            if df["close"].iloc[i] > df["open"].iloc[i]:
+                uv += float(df["vol"].iloc[i])
+            elif df["close"].iloc[i] < df["open"].iloc[i]:
+                dv += float(df["vol"].iloc[i])
+        up.append(uv)
+        down.append(dv)
+
+    up_s = pd.Series(up, index=df.index)
+    down_s = pd.Series(down, index=df.index)
+    avg = (up_s + down_s) / 2.0
+    delta_pct = ((up_s - down_s) / avg.replace(0, float("nan")) * 100.0).fillna(0.0)
+
+    df["vidya"] = vidya
+    df["vidya_atr"] = atr
+    df["vidya_upper"] = upper
+    df["vidya_lower"] = lower
+    df["vidya_smoothed"] = smoothed
+    df["vidya_trend_up"] = trend_s
+    df["vidya_cross_up"] = cross_up
+    df["vidya_cross_down"] = cross_down
+    df["vidya_up_volume"] = up_s
+    df["vidya_down_volume"] = down_s
+    df["vidya_delta_volume_pct"] = delta_pct
+    return df
+
+def calculate_nadaraya_watson_envelope(df, bandwidth=8.0, multiplier=3.0, lookback=500, mae_length=499):
+    """LuxAlgo Nadaraya-Watson Envelope, causal/end-point bot translation.
+
+    Source supplied by the user: Nadaraya-Watson Envelope [LuxAlgo],
+    CC BY-NC-SA 4.0. Visual drawing/repainting objects are omitted.
+    Trading calculations use completed candles and past data only.
+    """
+    df = df.copy()
+    bandwidth = float(bandwidth)
+    multiplier = float(multiplier)
+    lookback = int(lookback)
+    mae_length = int(mae_length)
+    if bandwidth <= 0:
+        raise ValueError("NWE Bandwidth must be greater than 0.")
+    if multiplier < 0:
+        raise ValueError("NWE Multiplier cannot be negative.")
+    if lookback <= 0 or mae_length <= 0:
+        raise ValueError("NWE Lookback and MAE length must be greater than 0.")
+    src = pd.to_numeric(df["close"], errors="coerce").astype(float)
+    values = src.to_numpy(dtype=float)
+    lags = np.arange(lookback, dtype=float)
+    weights = np.exp(-(lags ** 2) / (bandwidth * bandwidth * 2.0))
+    nwe_values = np.full(len(values), np.nan, dtype=float)
+    for i in range(len(values)):
+        length = min(lookback, i + 1)
+        window = values[i - length + 1:i + 1][::-1]
+        valid = np.isfinite(window)
+        if not valid.any():
+            continue
+        w = np.where(valid, weights[:length], 0.0)
+        den = float(w.sum())
+        if den > 0:
+            nwe_values[i] = float(np.nansum(window * w) / den)
+    out = pd.Series(nwe_values, index=df.index, dtype="float64")
+    mae = (src - out).abs().rolling(mae_length).mean() * multiplier
+    df["nwe_out"] = out
+    df["nwe_mae"] = mae
+    df["nwe_upper"] = out + mae
+    df["nwe_lower"] = out - mae
+    df["nwe_crossunder_lower"] = (
+        (src < df["nwe_lower"]) &
+        (src.shift(1) >= df["nwe_lower"].shift(1))
+    )
+    df["nwe_crossover_upper"] = (
+        (src > df["nwe_upper"]) &
+        (src.shift(1) <= df["nwe_upper"].shift(1))
+    )
+    df["nwe_trend_up"] = out > out.shift(1)
+    df["nwe_trend_down"] = out < out.shift(1)
+    return df
 
 # ============================================================
 # V8.3.0 ADVANCED STRATEGY MODULES
@@ -578,10 +1070,10 @@ def _volume_sr_base_series(df, cfg):
     fbcols=[c for c in z.columns if c.startswith("sr_fresh_bull_")]
     fscols=[c for c in z.columns if c.startswith("sr_fresh_bear_")]
     mode=str(cfg.get("sr_vote_mode","MAJORITY")).upper()
-    bv=z[bcols].astype("boolean").fillna(False).sum(axis=1) if bcols else pd.Series(0,index=z.index)
-    sv=z[scols].astype("boolean").fillna(False).sum(axis=1) if scols else pd.Series(0,index=z.index)
-    fb=z[fbcols].astype("boolean").fillna(False).sum(axis=1) if fbcols else pd.Series(0,index=z.index)
-    fs=z[fscols].astype("boolean").fillna(False).sum(axis=1) if fscols else pd.Series(0,index=z.index)
+    bv=z[bcols].fillna(False).sum(axis=1) if bcols else pd.Series(0,index=z.index)
+    sv=z[scols].fillna(False).sum(axis=1) if scols else pd.Series(0,index=z.index)
+    fb=z[fbcols].fillna(False).sum(axis=1) if fbcols else pd.Series(0,index=z.index)
+    fs=z[fscols].fillna(False).sum(axis=1) if fscols else pd.Series(0,index=z.index)
     n=max(len(bcols),len(scols),1)
     if mode=="ALL":
         bull=(bv==n)&(sv==0); bear=(sv==n)&(bv==0)
@@ -600,7 +1092,7 @@ def _volume_sr_base_series(df, cfg):
 
 
 class StrategyEngine:
-    """V8.3 hardened adaptive, pure strategy-decision engine.
+    """V8.4 Evidence-Family strategy decision engine.
 
     Indicator calculations remain in the existing functions; this class owns
     only the final directional vote contract. It is GUI/exchange independent.
@@ -789,6 +1281,417 @@ class StrategyEngine:
         return f"UNKNOWN_SIGNAL_MODE_{mode}"
 
 
+def calculate_liquidity_swings(
+    df,
+    length=14,
+    area="Wick Extremity",
+    filter_options="Count",
+    filter_value=0.0,
+):
+    """LuxAlgo Liquidity Swings [LuxAlgo] calculation for the trading bot.
+
+    Source supplied by the user: Liquidity Swings [LuxAlgo], © LuxAlgo,
+    CC BY-NC-SA 4.0. Visual lines/boxes/labels and lower-timeframe
+    intrabar-precision drawing are omitted. The trading signal is based on
+    confirmed swing-high/swing-low liquidity levels and their price breaks.
+
+    A swing high/low is only known after `length` bars have closed to its
+    right, matching ta.pivothigh(length, length) / ta.pivotlow(length, length).
+    Break signals are evaluated only on completed candles.
+    """
+    df = df.copy()
+    length = int(length)
+    area = str(area).strip()
+    filter_options = str(filter_options).strip().title()
+    filter_value = float(filter_value)
+
+    if length <= 0:
+        raise ValueError("Liquidity Swing Pivot Lookback must be greater than 0.")
+    if area not in ("Wick Extremity", "Full Range"):
+        raise ValueError("Liquidity Swing Swing Area must be Wick Extremity or Full Range.")
+    if filter_options not in ("Count", "Volume"):
+        raise ValueError("Liquidity Swing Filter must be Count or Volume.")
+    if filter_value < 0:
+        raise ValueError("Liquidity Swing Filter Value cannot be negative.")
+
+    n = len(df)
+    highs = pd.to_numeric(df["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(df["low"], errors="coerce").to_numpy(dtype=float)
+    opens = pd.to_numeric(df["open"], errors="coerce").to_numpy(dtype=float)
+    closes = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float)
+    vols = pd.to_numeric(df["vol"], errors="coerce").to_numpy(dtype=float)
+
+    swing_high_event = np.zeros(n, dtype=bool)
+    swing_low_event = np.zeros(n, dtype=bool)
+    swing_high_level = np.full(n, np.nan, dtype=float)
+    swing_low_level = np.full(n, np.nan, dtype=float)
+    swing_high_area_bottom = np.full(n, np.nan, dtype=float)
+    swing_low_area_top = np.full(n, np.nan, dtype=float)
+    swing_high_count = np.zeros(n, dtype=float)
+    swing_low_count = np.zeros(n, dtype=float)
+    swing_high_volume = np.zeros(n, dtype=float)
+    swing_low_volume = np.zeros(n, dtype=float)
+    swing_high_break = np.zeros(n, dtype=bool)
+    swing_low_break = np.zeros(n, dtype=bool)
+
+    active_high = np.nan
+    active_high_bottom = np.nan
+    active_high_count = 0.0
+    active_high_volume = 0.0
+    active_low = np.nan
+    active_low_top = np.nan
+    active_low_count = 0.0
+    active_low_volume = 0.0
+
+    for i in range(n):
+        # IMPORTANT: detect breaks against the level that was already known
+        # before this candle. A newly confirmed pivot is not allowed to break
+        # on the same candle it becomes known.
+        prev_high = active_high
+        prev_low = active_low
+        prev_high_count = active_high_count
+        prev_high_volume = active_high_volume
+        prev_low_count = active_low_count
+        prev_low_volume = active_low_volume
+
+        if i >= 2 * length:
+            p = i - length
+            high_window = highs[p - length:p + length + 1]
+            low_window = lows[p - length:p + length + 1]
+            if (
+                np.isfinite(highs[p])
+                and np.isfinite(high_window).all()
+                and highs[p] >= np.max(high_window)
+            ):
+                swing_high_event[i] = True
+                active_high = highs[p]
+                active_high_bottom = (
+                    max(closes[p], opens[p])
+                    if area == "Wick Extremity"
+                    else lows[p]
+                )
+                active_high_count = 0.0
+                active_high_volume = 0.0
+
+            if (
+                np.isfinite(lows[p])
+                and np.isfinite(low_window).all()
+                and lows[p] <= np.min(low_window)
+            ):
+                swing_low_event[i] = True
+                active_low = lows[p]
+                active_low_top = (
+                    min(closes[p], opens[p])
+                    if area == "Wick Extremity"
+                    else highs[p]
+                )
+                active_low_count = 0.0
+                active_low_volume = 0.0
+
+        # Count/volume filtering follows the supplied LuxAlgo concept:
+        # measure candles whose range overlaps the swing area.
+        if not swing_high_event[i] and np.isfinite(prev_high) and np.isfinite(active_high_bottom):
+            if i >= length:
+                j = i - length
+                overlaps = lows[j] < prev_high and highs[j] > active_high_bottom
+                if overlaps:
+                    active_high_count += 1.0
+                    active_high_volume += vols[j] if np.isfinite(vols[j]) else 0.0
+
+        if not swing_low_event[i] and np.isfinite(prev_low) and np.isfinite(active_low_top):
+            if i >= length:
+                j = i - length
+                overlaps = lows[j] < active_low_top and highs[j] > prev_low
+                if overlaps:
+                    active_low_count += 1.0
+                    active_low_volume += vols[j] if np.isfinite(vols[j]) else 0.0
+
+        # A liquidity break is a close crossing the latest confirmed swing
+        # level. Filter value must also be passed, matching the indicator's
+        # Count/Volume filtering purpose.
+        high_target = prev_high_count if filter_options == "Count" else prev_high_volume
+        low_target = prev_low_count if filter_options == "Count" else prev_low_volume
+
+        if np.isfinite(prev_high) and np.isfinite(closes[i]) and i > 0:
+            swing_high_break[i] = (
+                closes[i] > prev_high
+                and closes[i - 1] <= prev_high
+                and high_target > filter_value
+            )
+
+        if np.isfinite(prev_low) and np.isfinite(closes[i]) and i > 0:
+            swing_low_break[i] = (
+                closes[i] < prev_low
+                and closes[i - 1] >= prev_low
+                and low_target > filter_value
+            )
+
+        # Store the current active levels/statistics after this candle.
+        swing_high_level[i] = active_high
+        swing_high_area_bottom[i] = active_high_bottom
+        swing_high_count[i] = active_high_count
+        swing_high_volume[i] = active_high_volume
+        swing_low_level[i] = active_low
+        swing_low_area_top[i] = active_low_top
+        swing_low_count[i] = active_low_count
+        swing_low_volume[i] = active_low_volume
+
+    # Current-trend interpretation: after a confirmed breakout, keep the
+    # directional state until the opposite liquidity level breaks.
+    liq_trend = 0
+    liq_trend_state = np.zeros(n, dtype=int)
+    for i in range(n):
+        if swing_high_break[i]:
+            liq_trend = 1
+        elif swing_low_break[i]:
+            liq_trend = -1
+        liq_trend_state[i] = liq_trend
+
+    df["liq_swing_high"] = swing_high_level
+    df["liq_swing_low"] = swing_low_level
+    df["liq_swing_high_area_bottom"] = swing_high_area_bottom
+    df["liq_swing_low_area_top"] = swing_low_area_top
+    df["liq_swing_high_count"] = swing_high_count
+    df["liq_swing_low_count"] = swing_low_count
+    df["liq_swing_high_volume"] = swing_high_volume
+    df["liq_swing_low_volume"] = swing_low_volume
+    df["liq_swing_high_break"] = swing_high_break
+    df["liq_swing_low_break"] = swing_low_break
+    df["liq_swing_trend"] = liq_trend_state
+    return df
+
+
+
+def calculate_trendline_breakout(
+    df,
+    length=14,
+    min_pivot_distance=5,
+    breakout_buffer_pct=0.0,
+    retest_candles=3,
+):
+    """Confirmed-pivot trendline breakout calculation.
+
+    Trendlines are built only from confirmed swing highs/lows. A pivot at p is
+    known only after `length` candles have closed to its right, so the current
+    candle never uses future information. Breakouts are evaluated on completed
+    candles by the caller (normally iloc[-2]).
+
+    Resistance uses the two latest confirmed swing highs; support uses the two
+    latest confirmed swing lows.  The latest two highs must slope downward for
+    resistance and the latest two lows must slope upward for support.
+
+    `FRESH_BREAK` is a one-candle crossing event. `CURRENT_TREND` is derived by
+    keeping the last breakout direction. `BREAK_RETEST` is represented by the
+    same fresh breakout event plus retest state, so the caller can require a
+    later candle to retest the broken line and close back in the breakout
+    direction.
+    """
+    df = df.copy()
+    length = int(length)
+    min_pivot_distance = int(min_pivot_distance)
+    breakout_buffer_pct = float(breakout_buffer_pct)
+    retest_candles = int(retest_candles)
+    if length <= 0:
+        raise ValueError("Trendline Pivot Lookback must be greater than 0.")
+    if min_pivot_distance <= 0:
+        raise ValueError("Trendline Minimum Pivot Distance must be greater than 0.")
+    if breakout_buffer_pct < 0:
+        raise ValueError("Trendline Breakout Buffer cannot be negative.")
+    if retest_candles <= 0:
+        raise ValueError("Trendline Retest Candles must be greater than 0.")
+
+    n = len(df)
+    highs = pd.to_numeric(df["high"], errors="coerce").to_numpy(dtype=float)
+    lows = pd.to_numeric(df["low"], errors="coerce").to_numpy(dtype=float)
+    closes = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float)
+
+    resistance = np.full(n, np.nan, dtype=float)
+    support = np.full(n, np.nan, dtype=float)
+    resistance_prev = np.full(n, np.nan, dtype=float)
+    support_prev = np.full(n, np.nan, dtype=float)
+    pivot_high_event = np.zeros(n, dtype=bool)
+    pivot_low_event = np.zeros(n, dtype=bool)
+    break_up = np.zeros(n, dtype=bool)
+    break_down = np.zeros(n, dtype=bool)
+    trend_state = np.zeros(n, dtype=int)
+    retest_up = np.zeros(n, dtype=bool)
+    retest_down = np.zeros(n, dtype=bool)
+
+    high_pivots = []
+    low_pivots = []
+    state = 0
+    pending_retest = 0
+    pending_line = np.nan
+    pending_age = 0
+
+    def line_at(points, x, required_slope=None):
+        if len(points) < 2:
+            return np.nan
+        p1, p2 = points[-2], points[-1]
+        if p2[0] == p1[0]:
+            return np.nan
+        slope = (p2[1] - p1[1]) / float(p2[0] - p1[0])
+        # Resistance must be descending; support must be ascending.
+        if required_slope == "DOWN" and slope >= 0:
+            return np.nan
+        if required_slope == "UP" and slope <= 0:
+            return np.nan
+        return p1[1] + (p2[1] - p1[1]) * ((x - p1[0]) / (p2[0] - p1[0]))
+
+    for i in range(n):
+        # Use only trendlines that were already known before this candle.
+        r_prev = line_at(high_pivots, i, "DOWN")
+        s_prev = line_at(low_pivots, i, "UP")
+        resistance_prev[i] = r_prev
+        support_prev[i] = s_prev
+
+        close_prev = closes[i - 1] if i > 0 else np.nan
+        buffer_r = r_prev * (1.0 + breakout_buffer_pct / 100.0) if np.isfinite(r_prev) else np.nan
+        buffer_s = s_prev * (1.0 - breakout_buffer_pct / 100.0) if np.isfinite(s_prev) else np.nan
+
+        if np.isfinite(r_prev) and np.isfinite(closes[i]):
+            break_up[i] = bool(closes[i] > buffer_r and (not np.isfinite(close_prev) or close_prev <= buffer_r))
+        if np.isfinite(s_prev) and np.isfinite(closes[i]):
+            break_down[i] = bool(closes[i] < buffer_s and (not np.isfinite(close_prev) or close_prev >= buffer_s))
+
+        # Track a retest after a breakout. The broken line is frozen so a
+        # later pivot cannot silently move the retest target.
+        if pending_retest != 0:
+            pending_age += 1
+            if pending_age <= retest_candles and np.isfinite(pending_line):
+                if pending_retest > 0:
+                    touched = lows[i] <= pending_line <= highs[i]
+                    if touched and closes[i] > pending_line:
+                        retest_up[i] = True
+                        pending_retest = 0
+                else:
+                    touched = lows[i] <= pending_line <= highs[i]
+                    if touched and closes[i] < pending_line:
+                        retest_down[i] = True
+                        pending_retest = 0
+            if pending_age >= retest_candles and pending_retest != 0:
+                pending_retest = 0
+
+        if break_up[i]:
+            state = 1
+            pending_retest = 1
+            pending_line = r_prev
+            pending_age = 0
+        elif break_down[i]:
+            state = -1
+            pending_retest = -1
+            pending_line = s_prev
+            pending_age = 0
+
+        trend_state[i] = state
+
+        # Confirm a pivot only after `length` candles to its right have closed.
+        if i >= 2 * length:
+            p = i - length
+            hw = highs[p - length:p + length + 1]
+            lw = lows[p - length:p + length + 1]
+            if np.isfinite(hw).all() and np.isfinite(highs[p]) and highs[p] >= np.max(hw):
+                if not high_pivots or p - high_pivots[-1][0] >= min_pivot_distance:
+                    high_pivots.append((p, float(highs[p])))
+                    high_pivots = high_pivots[-4:]
+                    pivot_high_event[i] = True
+            if np.isfinite(lw).all() and np.isfinite(lows[p]) and lows[p] <= np.min(lw):
+                if not low_pivots or p - low_pivots[-1][0] >= min_pivot_distance:
+                    low_pivots.append((p, float(lows[p])))
+                    low_pivots = low_pivots[-4:]
+
+        resistance[i] = line_at(high_pivots, i, "DOWN")
+        support[i] = line_at(low_pivots, i, "UP")
+
+    # Recalculate the displayed line only after each pivot becomes known. The
+    # breakout arrays above intentionally remain based on pre-candle state.
+    df["trendline_resistance"] = resistance
+    df["trendline_support"] = support
+    df["trendline_resistance_prev"] = resistance_prev
+    df["trendline_support_prev"] = support_prev
+    df["trendline_pivot_high"] = pivot_high_event
+    df["trendline_pivot_low"] = pivot_low_event
+    df["trendline_break_up"] = break_up
+    df["trendline_break_down"] = break_down
+    df["trendline_retest_up"] = retest_up
+    df["trendline_retest_down"] = retest_down
+    df["trendline_state"] = trend_state
+    return df
+
+def calculate_bollinger(df, length=20, std_mult=2.0):
+    """Calculate Bollinger middle/upper/lower bands."""
+    df = df.copy()
+
+    length = int(length)
+    std_mult = float(std_mult)
+
+    if length <= 0:
+        raise ValueError("Bollinger period must be greater than 0.")
+    if std_mult <= 0:
+        raise ValueError("Bollinger standard deviation must be greater than 0.")
+
+    df["bb_mid"] = df["close"].rolling(length).mean()
+    df["bb_std"] = df["close"].rolling(length).std(ddof=0)
+    df["bb_upper"] = df["bb_mid"] + std_mult * df["bb_std"]
+    df["bb_lower"] = df["bb_mid"] - std_mult * df["bb_std"]
+
+    return df
+
+
+def calculate_stochastic(df, k_length=14, k_smooth=3, d_length=3):
+    """Calculate Stochastic %K and %D."""
+    df = df.copy()
+
+    k_length = int(k_length)
+    k_smooth = int(k_smooth)
+    d_length = int(d_length)
+
+    if k_length <= 0 or k_smooth <= 0 or d_length <= 0:
+        raise ValueError("Stochastic periods must be greater than 0.")
+
+    lowest_low = df["low"].rolling(k_length).min()
+    highest_high = df["high"].rolling(k_length).max()
+
+    denominator = (highest_high - lowest_low).replace(0, float("nan"))
+
+    raw_k = (
+        100
+        * (df["close"] - lowest_low)
+        / denominator
+    )
+
+    df["stoch_k"] = raw_k.rolling(k_smooth).mean()
+    df["stoch_d"] = df["stoch_k"].rolling(d_length).mean()
+
+    return df
+
+
+def calculate_vwap(df, length=50):
+    """Calculate a rolling volume-weighted average price."""
+    df = df.copy()
+
+    length = int(length)
+    if length <= 0:
+        raise ValueError("VWAP period must be greater than 0.")
+
+    typical_price = (
+        df["high"] + df["low"] + df["close"]
+    ) / 3.0
+
+    pv = typical_price * df["vol"]
+
+    volume_sum = df["vol"].rolling(length).sum()
+
+    df["vwap"] = (
+        pv.rolling(length).sum()
+        / volume_sum.replace(0, float("nan"))
+    )
+
+    return df
+
+
+# -------------------- GUI BOT -------------------------------
+
 class UniversalFuturesBotGUI:
 
     def __init__(self, root):
@@ -855,6 +1758,10 @@ class UniversalFuturesBotGUI:
         self.session_max_trades = 0
 
         self.last_protected_position = None
+        # Order IDs from completed/externally-closed bot positions are retained in
+        # the recovery checkpoint until the next flat-session startup proves they
+        # are stale. This prevents orphan SL/TP orders from becoming "unknown" after
+        # last_protected_position is cleared.
         self.retired_managed_order_ids = set()
         self.tp1_be_enabled = True
         self.tp1_be_done = False
@@ -1188,7 +2095,8 @@ class UniversalFuturesBotGUI:
         try:
             self.daily_start_date = (
                 datetime.fromisoformat(saved_date).date()
-                if saved_date else datetime.now().date()            )
+                if saved_date else datetime.now().date()
+            )
         except Exception:
             self.daily_start_date = datetime.now().date()
 
@@ -1449,6 +2357,7 @@ class UniversalFuturesBotGUI:
                         self.reentry_direction_lock = side
                         self.reentry_lock_reason = "RECOVERY_EXTERNAL_CLOSE"
                 self.last_protected_position = None
+                self.retired_managed_order_ids = set()
                 self.tp1_be_done = False
                 self.hold_sl_wait_reversal = False
                 self.hold_sl_threshold_hit = False
@@ -1629,6 +2538,8 @@ class UniversalFuturesBotGUI:
             ("use_liq_swings", "Liquidity"),
             ("use_trendline", "Trendline"),
             ("use_mtf", "4H MTF"),
+            ("use_divergence", "Divergence"),
+            ("use_vol_sr", "Volume S/R"),
             ("use_vol", "Volume"),
             ("use_adx", "ADX"),
             ("use_atr", "ATR"),
@@ -1774,6 +2685,7 @@ class UniversalFuturesBotGUI:
             "STRATEGY",
             f"Signal Mode    : {cfg.get('signal_mode', '')}",
             f"Minimum Score  : {cfg.get('min_score', '')}",
+            f"Evidence Families: min={cfg.get('evidence_min_families', 2)} | score={cfg.get('evidence_family_min_score', 0.35)} | trend={cfg.get('evidence_require_trend', True)} | independent={cfg.get('evidence_require_independent', True)}",
             f"Strategy Modules: {self._profile_strategy_summary(cfg)}",
             f"Hold All Reverse: {cfg.get('hold_until_all_reverse', '')}",
             f"Post-SL Lock   : {cfg.get('require_opposite_after_exit', cfg.get('require_opposite_after_sl', ''))}",
@@ -2189,6 +3101,7 @@ class UniversalFuturesBotGUI:
                 db.commit()
         except Exception as e:
             self.log(f"MASTER DB SESSION START WARNING: {e}")
+
     def _db_session_end(self, status, end_balance=None, notes=""):
         try:
             with sqlite3.connect(MASTER_DB_FILE, timeout=30) as db:
@@ -2819,7 +3732,7 @@ class UniversalFuturesBotGUI:
         tk.Label(f_market, text="Estimated Window:").grid(row=1, column=3, sticky="e")
         self.lbl_est_time = tk.Label(f_market, text="10 min", font=("Arial", 9, "bold"))
         self.lbl_est_time.grid(row=1, column=4, columnspan=2, padx=5, sticky="w")
-        self.v_no_same_candle = tk.BooleanVar(value=True)
+        self.v_no_same_candle = tk.BooleanVar(value=DEFAULT_NO_SAME_CANDLE)
         tk.Checkbutton(f_market, text="Safety: No Re-Entry Same Candle", variable=self.v_no_same_candle).grid(row=2, column=0, columnspan=3, sticky="w")
         tk.Label(f_market, text="Prevents instant re-entry after SL/TP/reversal.", fg="#444444").grid(row=2, column=3, columnspan=3, sticky="w")
         tk.Label(f_market, text="Cooldown (min):").grid(row=3, column=0, sticky="w")
@@ -2827,7 +3740,7 @@ class UniversalFuturesBotGUI:
         self.e_cooldown_min.insert(0, "0")
         self.e_cooldown_min.grid(row=3, column=1, padx=5, sticky="w")
         tk.Label(f_market, text="0 = OFF", fg="#444444").grid(row=3, column=2, sticky="w")
-        self.v_require_opposite_after_exit = tk.BooleanVar(value=True)
+        self.v_require_opposite_after_exit = tk.BooleanVar(value=DEFAULT_POST_SL_OPPOSITE_LOCK)
         tk.Checkbutton(
             f_market,
             text="Safety: After SL, Require Opposite Signal",
@@ -2842,654 +3755,485 @@ class UniversalFuturesBotGUI:
         self.e_max_trades.bind("<KeyRelease>", lambda _e: self.update_estimated_window())
         self.v_tf.trace_add("write", lambda *_args: self.update_estimated_window())
 
-        # 3. Strategy
+        # 3. Strategy — V8.4 Evidence-Family GUI
+        # The crypto GUI now mirrors the V8.4 Evidence-Family organization:
+        # TREND / MOMENTUM / FLOW / STRUCTURE / REGIME / OPTIONAL-LEGACY /
+        # DECISION ENGINE.  The underlying variable names are kept compatible
+        # with the existing crypto save/load, runtime and strategy code.
         f_strat = tk.LabelFrame(
             self.tab_strategy,
-            text=" 3. Strategy & Indicators ",
+            text=" 3. Strategy Engine — V8.4 Evidence Families ",
         )
         f_strat.pack(fill="x", padx=10, pady=5)
 
-        self.v_use_st = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            f_strat,
-            text="Supertrend",
-            variable=self.v_use_st,
-        ).grid(row=0, column=0, sticky="w")
+        def _family(title):
+            fr = tk.LabelFrame(f_strat, text=f" {title} ", padx=6, pady=4)
+            fr.pack(fill="x", padx=6, pady=4)
+            return fr
 
-        tk.Label(
-            f_strat,
-            text="ATR Period:",
-        ).grid(row=0, column=1, sticky="e")
-        self.e_st_len = tk.Entry(
-            f_strat,
-            width=6,
+        def _entry(parent, label, var_name, default, row, col, width=6):
+            tk.Label(parent, text=label).grid(
+                row=row, column=col, sticky="e", padx=2, pady=2
+            )
+            ent = tk.Entry(parent, width=width)
+            ent.insert(0, str(default))
+            ent.grid(row=row, column=col + 1, sticky="w", padx=2, pady=2)
+            setattr(self, var_name, ent)
+            return ent
+
+        def _check(parent, text, var_name, default, row, col=0, colspan=1):
+            var = tk.BooleanVar(value=default)
+            setattr(self, var_name, var)
+            tk.Checkbutton(
+                parent,
+                text=text,
+                variable=var,
+            ).grid(
+                row=row,
+                column=col,
+                columnspan=colspan,
+                sticky="w",
+                padx=2,
+                pady=2,
+            )
+            return var
+
+        def _option(parent, label, var_name, default, values, row, col, colspan=1):
+            tk.Label(parent, text=label).grid(
+                row=row, column=col, sticky="e", padx=2, pady=2
+            )
+            var = tk.StringVar(value=default)
+            setattr(self, var_name, var)
+            ttk.OptionMenu(
+                parent,
+                var,
+                default,
+                *values,
+            ).grid(
+                row=row,
+                column=col + 1,
+                columnspan=colspan,
+                sticky="w",
+                padx=2,
+                pady=2,
+            )
+            return var
+
+        # ---------------- TREND ----------------
+        fr = _family("TREND — direction / trend continuation")
+
+        _check(fr, "Supertrend", "v_use_st", True, 0, 0)
+        _entry(fr, "ATR Period", "e_st_len", "10", 0, 2)
+        _entry(fr, "ATR Mult", "e_st_mult", "2.0", 0, 4)
+        _option(fr, "Source", "v_st_source", "CLOSE", ("CLOSE", "HL2"), 0, 6)
+
+        _option(
+            fr, "Entry", "v_st_entry_mode", "FRESH_FLIP",
+            ("FRESH_FLIP", "CURRENT_TREND"), 1, 0, 2
         )
-        self.e_st_len.insert(0, "10")
-        self.e_st_len.grid(row=0, column=2, padx=2)
-
-        tk.Label(
-            f_strat,
-            text="ATR Mult:",
-        ).grid(row=0, column=3, sticky="e")
-        self.e_st_mult = tk.Entry(
-            f_strat,
-            width=6,
-        )
-        # TradingView screenshot supplied by the user uses 2.0.
-        self.e_st_mult.insert(0, "2.0")
-        self.e_st_mult.grid(row=0, column=4, padx=2)
-
-        tk.Label(
-            f_strat,
-            text="Source:",
-        ).grid(row=0, column=5, sticky="e")
-        self.v_st_source = tk.StringVar(value="CLOSE")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_st_source,
-            "CLOSE",
-            "CLOSE",
-            "HL2",
-        ).grid(row=0, column=6, padx=2, sticky="w")
-
-        tk.Label(
-            f_strat,
-            text="ST Entry:",
-        ).grid(row=1, column=3, sticky="e")
-        self.v_st_entry_mode = tk.StringVar(value="FRESH_FLIP")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_st_entry_mode,
-            "FRESH_FLIP",
-            "FRESH_FLIP",
-            "CURRENT_TREND",
-        ).grid(row=1, column=4, padx=5, sticky="w")
-
-        self.v_st_change_atr = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            f_strat,
-            text="Change ATR Calculation Method ? (ON=RMA, OFF=SMA)",
-            variable=self.v_st_change_atr,
-        ).grid(row=1, column=5, columnspan=3, sticky="w")
-
-        self.v_use_ema = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            f_strat,
-            text="EMA Filter",
-            variable=self.v_use_ema,
-        ).grid(row=1, column=0, sticky="w")
-
-        self.e_ema_len = tk.Entry(
-            f_strat,
-            width=6,
-        )
-        self.e_ema_len.insert(0, "200")
-        self.e_ema_len.grid(row=1, column=1, padx=2)
-
-        # Optional EMA 9/20 crossover filter.
-        # This is independent of the existing EMA Filter above.
-        self.v_use_ema_cross = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="EMA 9/20 Crossover Filter",
-            variable=self.v_use_ema_cross,
-        ).grid(row=2, column=0, sticky="w")
-
-        tk.Label(
-            f_strat,
-            text="Fast:",
-        ).grid(row=2, column=1, sticky="e")
-
-        self.e_ema_fast = tk.Entry(
-            f_strat,
-            width=6,
-        )
-        self.e_ema_fast.insert(0, "9")
-        self.e_ema_fast.grid(row=2, column=2, padx=2)
-
-        tk.Label(
-            f_strat,
-            text="Slow:",
-        ).grid(row=2, column=3, sticky="e")
-
-        self.e_ema_slow = tk.Entry(
-            f_strat,
-            width=6,
-        )
-        self.e_ema_slow.insert(0, "20")
-        self.e_ema_slow.grid(row=2, column=4, padx=2)
-
-        tk.Label(
-            f_strat,
-            text="Entry:",
-        ).grid(row=2, column=5, sticky="e")
-        self.v_ema_cross_entry_mode = tk.StringVar(value="FRESH_CROSS")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_ema_cross_entry_mode,
-            "FRESH_CROSS",
-            "FRESH_CROSS",
-            "CURRENT_TREND",
-        ).grid(row=2, column=6, columnspan=2, padx=2, sticky="w")
-
-        # Optional MACD fresh crossover filter.
-        self.v_use_macd = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="MACD Crossover Filter",
-            variable=self.v_use_macd,
-        ).grid(row=3, column=0, sticky="w")
-
-        tk.Label(
-            f_strat,
-            text="Fast/Slow/Signal:",
-        ).grid(row=3, column=1, sticky="e")
-
-        self.e_macd_fast = tk.Entry(
-            f_strat,
-            width=5,
-        )
-        self.e_macd_fast.insert(0, "12")
-        self.e_macd_fast.grid(row=3, column=2, padx=2)
-
-        self.e_macd_slow = tk.Entry(
-            f_strat,
-            width=5,
-        )
-        self.e_macd_slow.insert(0, "26")
-        self.e_macd_slow.grid(row=3, column=3, padx=2)
-
-        self.e_macd_signal = tk.Entry(
-            f_strat,
-            width=5,
-        )
-        self.e_macd_signal.insert(0, "9")
-        self.e_macd_signal.grid(row=3, column=4, padx=2)
-
-        # RSI filter: reversal zones or fresh RSI/MA crossover.
-        self.v_use_rsi = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat, text="RSI Filter", variable=self.v_use_rsi
-        ).grid(row=4, column=0, sticky="w")
-        tk.Label(f_strat, text="Period:").grid(row=4, column=1, sticky="e")
-        self.e_rsi_len = tk.Entry(f_strat, width=5)
-        self.e_rsi_len.insert(0, "14")
-        self.e_rsi_len.grid(row=4, column=2, padx=2)
-        tk.Label(f_strat, text="OB:").grid(row=4, column=3, sticky="e")
-        self.e_rsi_ob = tk.Entry(f_strat, width=5)
-        self.e_rsi_ob.insert(0, "80")
-        self.e_rsi_ob.grid(row=4, column=4, padx=2)
-        tk.Label(f_strat, text="OS:").grid(row=4, column=5, sticky="e")
-        self.e_rsi_os = tk.Entry(f_strat, width=5)
-        self.e_rsi_os.insert(0, "20")
-        self.e_rsi_os.grid(row=4, column=6, padx=2)
-
-        tk.Label(f_strat, text="RSI Logic:").grid(row=5, column=0, sticky="w")
-        self.v_rsi_logic = tk.StringVar(value="REVERSAL_ZONE")
-        ttk.OptionMenu(
-            f_strat, self.v_rsi_logic, "REVERSAL_ZONE",
-            "REVERSAL_ZONE", "CROSS_MA", "EITHER"
-        ).grid(row=5, column=1, padx=2, sticky="w")
-        tk.Label(f_strat, text="MA Type:").grid(row=5, column=2, sticky="e")
-        self.v_rsi_ma_type = tk.StringVar(value="EMA")
-        ttk.OptionMenu(
-            f_strat, self.v_rsi_ma_type, "EMA", "SMA", "EMA", "WMA"
-        ).grid(row=5, column=3, padx=2, sticky="w")
-        tk.Label(f_strat, text="MA Period:").grid(row=5, column=4, sticky="e")
-        self.e_rsi_ma_len = tk.Entry(f_strat, width=5)
-        self.e_rsi_ma_len.insert(0, "9")
-        self.e_rsi_ma_len.grid(row=5, column=5, padx=2, sticky="w")
-        tk.Label(f_strat, text="CROSS_MA = RSI crosses above/below MA").grid(
-            row=5, column=6, padx=2, sticky="w"
+        _check(
+            fr,
+            "Change ATR Method (ON=RMA / OFF=SMA)",
+            "v_st_change_atr",
+            True,
+            1,
+            4,
+            4,
         )
 
-        # Optional Bollinger breakout filter.
-        self.v_use_bb = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="Bollinger Breakout",
-            variable=self.v_use_bb,
-        ).grid(row=6, column=0, sticky="w")
+        _check(fr, "EMA", "v_use_ema", True, 2, 0)
+        _entry(fr, "Period", "e_ema_len", "200", 2, 2)
 
-        tk.Label(
-            f_strat,
-            text="Period:",
-        ).grid(row=6, column=1, sticky="e")
-
-        self.e_bb_len = tk.Entry(
-            f_strat,
-            width=5,
+        _check(fr, "EMA Cross", "v_use_ema_cross", False, 3, 0)
+        _entry(fr, "Fast", "e_ema_fast", "9", 3, 2)
+        _entry(fr, "Slow", "e_ema_slow", "20", 3, 4)
+        _option(
+            fr, "Entry", "v_ema_cross_entry_mode", "FRESH_CROSS",
+            ("FRESH_CROSS", "CURRENT_TREND"), 3, 6
         )
-        self.e_bb_len.insert(0, "20")
-        self.e_bb_len.grid(row=6, column=2, padx=2)
 
-        tk.Label(
-            f_strat,
-            text="StdDev:",
-        ).grid(row=6, column=3, sticky="e")
+        _check(fr, "MACD", "v_use_macd", False, 4, 0)
+        _entry(fr, "Fast", "e_macd_fast", "12", 4, 2, 5)
+        _entry(fr, "Slow", "e_macd_slow", "26", 4, 4, 5)
+        _entry(fr, "Signal", "e_macd_signal", "9", 4, 6, 5)
 
-        self.e_bb_std = tk.Entry(
-            f_strat,
-            width=5,
+        _check(fr, "VIDYA", "v_use_vidya", False, 5, 0)
+        _entry(fr, "Length", "e_vidya_len", "10", 5, 2)
+        _entry(fr, "Momentum", "e_vidya_momentum", "20", 5, 4)
+        _entry(fr, "Band", "e_vidya_band", "2", 5, 6)
+        _option(
+            fr, "Entry", "v_vidya_entry_mode", "CURRENT_TREND",
+            ("CURRENT_TREND", "FRESH_FLIP"), 6, 0, 2
         )
-        self.e_bb_std.insert(0, "2")
-        self.e_bb_std.grid(row=6, column=4, padx=2)
 
-        # Optional Stochastic fresh crossover filter.
-        self.v_use_stoch = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="Stochastic Crossover",
-            variable=self.v_use_stoch,
-        ).grid(row=7, column=0, sticky="w")
-
-        tk.Label(
-            f_strat,
-            text="K/D:",
-        ).grid(row=7, column=1, sticky="e")
-
-        self.e_stoch_k = tk.Entry(
-            f_strat,
-            width=5,
+        _check(fr, "NWE", "v_use_nwe", False, 7, 0)
+        _entry(fr, "Bandwidth", "e_nwe_bandwidth", "8", 7, 2)
+        _entry(fr, "Mult", "e_nwe_mult", "3", 7, 4)
+        _option(
+            fr, "Entry", "v_nwe_entry_mode", "FRESH_CROSS",
+            ("FRESH_CROSS", "CURRENT_TREND"), 7, 6
         )
-        self.e_stoch_k.insert(0, "14")
-        self.e_stoch_k.grid(row=7, column=2, padx=2)
 
-        self.e_stoch_smooth = tk.Entry(
-            f_strat,
-            width=5,
-        )
-        self.e_stoch_smooth.insert(0, "3")
-        self.e_stoch_smooth.grid(row=7, column=3, padx=2)
-
-        self.e_stoch_d = tk.Entry(
-            f_strat,
-            width=5,
-        )
-        self.e_stoch_d.insert(0, "3")
-        self.e_stoch_d.grid(row=7, column=4, padx=2)
-
-        # Optional rolling VWAP trend filter.
-        self.v_use_vwap = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="VWAP Trend Filter",
-            variable=self.v_use_vwap,
-        ).grid(row=8, column=0, sticky="w")
-
+        _check(fr, "NWE Repainting", "v_nwe_repaint", False, 8, 0, 2)
         tk.Label(
-            f_strat,
-            text="Period:",
-        ).grid(row=8, column=1, sticky="e")
-
-        self.e_vwap_len = tk.Entry(
-            f_strat,
-            width=5,
-        )
-        self.e_vwap_len.insert(0, "50")
-        self.e_vwap_len.grid(row=8, column=2, padx=2)
-
-        self.v_use_vwap_delta = tk.BooleanVar(value=False)
-        tk.Checkbutton(f_strat, text="VWAP Delta", variable=self.v_use_vwap_delta).grid(row=8, column=3, sticky="w")
-        tk.Label(f_strat, text="Smooth:").grid(row=8, column=4, sticky="e")
-        self.v_vwap_delta_smooth = tk.BooleanVar(value=False)
-        tk.Checkbutton(f_strat, variable=self.v_vwap_delta_smooth).grid(row=8, column=5, sticky="w")
-        tk.Label(f_strat, text="HMA:").grid(row=8, column=6, sticky="e")
-        self.e_vwap_delta_smooth_len = tk.Entry(f_strat, width=5)
-        self.e_vwap_delta_smooth_len.insert(0, "21")
-        self.e_vwap_delta_smooth_len.grid(row=8, column=7, padx=2)
-
-        tk.Label(f_strat, text="Baseline:").grid(row=9, column=3, sticky="e")
-        self.e_vwap_delta_baseline = tk.Entry(f_strat, width=5)
-        self.e_vwap_delta_baseline.insert(0, "50")
-        self.e_vwap_delta_baseline.grid(row=9, column=4, padx=2)
-        tk.Label(f_strat, text="Logic:").grid(row=9, column=5, sticky="e")
-        self.v_vwap_delta_logic = tk.StringVar(value="CURRENT_TREND")
-        ttk.OptionMenu(f_strat, self.v_vwap_delta_logic, "CURRENT_TREND", "CURRENT_TREND", "CROSS_BASELINE").grid(row=9, column=6, columnspan=2, sticky="w")
-
-        self.v_use_vidya = tk.BooleanVar(value=False)
-        tk.Checkbutton(f_strat, text="Volumatic VIDYA", variable=self.v_use_vidya).grid(row=10, column=3, sticky="w")
-        tk.Label(f_strat, text="Length:").grid(row=10, column=4, sticky="e")
-        self.e_vidya_len = tk.Entry(f_strat, width=5)
-        self.e_vidya_len.insert(0, "10")
-        self.e_vidya_len.grid(row=10, column=5, padx=2)
-        tk.Label(f_strat, text="Momentum:").grid(row=10, column=6, sticky="e")
-        self.e_vidya_momentum = tk.Entry(f_strat, width=5)
-        self.e_vidya_momentum.insert(0, "20")
-        self.e_vidya_momentum.grid(row=10, column=7, padx=2)
-
-        tk.Label(f_strat, text="Band:").grid(row=11, column=3, sticky="e")
-        self.e_vidya_band = tk.Entry(f_strat, width=5)
-        self.e_vidya_band.insert(0, "2")
-        self.e_vidya_band.grid(row=11, column=4, padx=2)
-        tk.Label(f_strat, text="Entry:").grid(row=11, column=5, sticky="e")
-        self.v_vidya_entry_mode = tk.StringVar(value="CURRENT_TREND")
-        ttk.OptionMenu(f_strat, self.v_vidya_entry_mode, "CURRENT_TREND", "CURRENT_TREND", "FRESH_FLIP").grid(row=11, column=6, columnspan=2, sticky="w")
-
-        # Optional LuxAlgo Nadaraya-Watson Envelope (NWE).
-        # Trading uses the non-repainting/causal calculation by default.
-        self.v_use_nwe = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="Nadaraya-Watson Envelope [LuxAlgo]",
-            variable=self.v_use_nwe,
-        ).grid(row=12, column=0, columnspan=2, sticky="w")
-
-        tk.Label(f_strat, text="Bandwidth:").grid(row=12, column=2, sticky="e")
-        self.e_nwe_bandwidth = tk.Entry(f_strat, width=5)
-        self.e_nwe_bandwidth.insert(0, "8")
-        self.e_nwe_bandwidth.grid(row=12, column=3, padx=2)
-
-        tk.Label(f_strat, text="Mult:").grid(row=12, column=4, sticky="e")
-        self.e_nwe_mult = tk.Entry(f_strat, width=5)
-        self.e_nwe_mult.insert(0, "3")
-        self.e_nwe_mult.grid(row=12, column=5, padx=2)
-
-        tk.Label(f_strat, text="Entry:").grid(row=12, column=6, sticky="e")
-        self.v_nwe_entry_mode = tk.StringVar(value="FRESH_CROSS")
-        ttk.OptionMenu(            f_strat, self.v_nwe_entry_mode, "FRESH_CROSS",
-            "FRESH_CROSS", "CURRENT_TREND"
-        ).grid(row=12, column=7, padx=2, sticky="w")
-
-        tk.Label(f_strat, text="NWE Mode:").grid(row=13, column=2, sticky="e")
-        self.v_nwe_repaint = tk.BooleanVar(value=False)
-        self.nwe_repaint_check = tk.Checkbutton(
-            f_strat,
-            variable=self.v_nwe_repaint,
-            text="Non-Repainting (fixed)",
-            state=tk.DISABLED,
-        )
-        self.nwe_repaint_check.grid(row=13, column=3, columnspan=3, sticky="w")
-        tk.Label(
-            f_strat,
-            text="NWE is always causal/non-repainting; only completed candles and past data are used.",
-            fg="#444444",
-        ).grid(row=13, column=6, columnspan=2, sticky="w")
-
-        # Optional ATR volatility filter using the ATR already calculated
-        # by the Supertrend engine. Requires ATR/close >= threshold.
-        self.v_use_atr = tk.BooleanVar(value=DEFAULT_USE_ATR)
-        tk.Checkbutton(
-            f_strat,
-            text="ATR Volatility Filter",
-            variable=self.v_use_atr,
-        ).grid(row=14, column=0, sticky="w")
-        tk.Label(f_strat, text="Min ATR %:").grid(row=14, column=1, sticky="e")
-        self.e_atr_min_pct = tk.Entry(f_strat, width=6)
-        self.e_atr_min_pct.insert(0, "0.30")
-        self.e_atr_min_pct.grid(row=14, column=2, padx=2)
-
-        self.v_use_vol = tk.BooleanVar(value=DEFAULT_USE_VOLUME)
-        tk.Checkbutton(
-            f_strat, text="Vol Filter", variable=self.v_use_vol
-        ).grid(row=15, column=0, sticky="w")
-        self.e_vol_len = tk.Entry(f_strat, width=6)
-        self.e_vol_len.insert(0, "20")
-        self.e_vol_len.grid(row=15, column=1, padx=2)
-
-        self.v_use_adx = tk.BooleanVar(value=DEFAULT_USE_ADX)
-        tk.Checkbutton(
-            f_strat, text="ADX Filter", variable=self.v_use_adx
-        ).grid(row=16, column=0, sticky="w")
-        self.e_adx_thresh = tk.Entry(f_strat, width=6)
-        self.e_adx_thresh.insert(0, "20")
-        self.e_adx_thresh.grid(row=16, column=1, padx=2)
-
-        self.v_use_mtf = tk.BooleanVar(value=DEFAULT_USE_MTF)
-        tk.Checkbutton(
-            f_strat,
-            text="Multi-TF (4h Confluence)",
-            variable=self.v_use_mtf,
-        ).grid(row=17, column=0, columnspan=2, sticky="w")
-
-        # Confirmed-pivot Trendline Breakout module.
-        # Dedicated rows prevent explanatory labels from covering the controls.
-        tk.Label(
-            f_strat,
-            text="── Trendline Breakout ──",
-            font=("Arial", 9, "bold"),
-        ).grid(row=24, column=0, columnspan=8, sticky="w", pady=(6, 2))
-
-        self.v_use_trendline = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="Trendline Breakout",
-            variable=self.v_use_trendline,
-        ).grid(row=25, column=0, columnspan=2, sticky="w")
-
-        tk.Label(f_strat, text="Pivot Lookback:").grid(row=25, column=2, sticky="e")
-        self.e_trendline_length = tk.Entry(f_strat, width=6)
-        self.e_trendline_length.insert(0, "14")
-        self.e_trendline_length.grid(row=25, column=3, padx=2)
-
-        tk.Label(f_strat, text="Min Pivot Distance:").grid(row=25, column=4, sticky="e")
-        self.e_trendline_min_distance = tk.Entry(f_strat, width=6)
-        self.e_trendline_min_distance.insert(0, "5")
-        self.e_trendline_min_distance.grid(row=25, column=5, padx=2)
-
-        tk.Label(f_strat, text="Mode:").grid(row=25, column=6, sticky="e")
-        self.v_trendline_entry_mode = tk.StringVar(value="FRESH_BREAK")
-        ttk.OptionMenu(
-            f_strat, self.v_trendline_entry_mode, "FRESH_BREAK",
-            "FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"
-        ).grid(row=25, column=7, padx=2, sticky="w")
-
-        tk.Label(f_strat, text="Breakout Buffer %:").grid(row=26, column=2, sticky="e")
-        self.e_trendline_buffer = tk.Entry(f_strat, width=6)
-        self.e_trendline_buffer.insert(0, "0")
-        self.e_trendline_buffer.grid(row=26, column=3, padx=2)
-
-        tk.Label(f_strat, text="Retest Candles:").grid(row=26, column=4, sticky="e")
-        self.e_trendline_retest = tk.Entry(f_strat, width=6)
-        self.e_trendline_retest.insert(0, "3")
-        self.e_trendline_retest.grid(row=26, column=5, padx=2)
-
-        tk.Label(
-            f_strat,
-            text="BUY = completed candle closes above descending resistance | SELL = completed candle closes below ascending support",
-            fg="#444444",
-        ).grid(row=27, column=0, columnspan=8, sticky="w", pady=1)
-
-        tk.Label(
-            f_strat,
-            text="Confirmed pivots only; no look-ahead. FRESH_BREAK = new break | CURRENT_TREND = stay with break direction | BREAK_RETEST = break + retest.",
-            fg="#444444",
-        ).grid(row=28, column=0, columnspan=8, sticky="w", pady=(0, 2))
-
-        tk.Label(
-            f_strat,
-            text="Liquidity Swings uses selected timeframe OHLCV and completed candles; its Pine Intrabar Precision option is not used.",
-            fg="#666666",
-        ).grid(row=29, column=0, columnspan=8, sticky="w")
-
-
-        # Signal decision mode.
-        # Kept below the Trendline Breakout block so the Strategy & Indicators
-        # tab follows the requested visual order.
-        self.v_signal_mode = tk.StringVar(value=DEFAULT_SIGNAL_MODE)
-        tk.Label(f_strat, text="Signal Mode:").grid(row=31, column=0, sticky="w")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_signal_mode,
-            "SINGLE_SIGNAL",
-            "SINGLE_SIGNAL",
-            "ANY_NON_CONFLICTING",
-            "2_SIGNALS",
-            "3_SIGNALS",
-            "4_SIGNALS",
-            "SCORE",
-            "ADAPTIVE_SCORE",
-            "ADAPTIVE_EVIDENCE",
-            "STRICT_ALL_FILTERS",
-        ).grid(row=31, column=1, padx=5, sticky="w")
-        tk.Label(
-            f_strat,
-            text="ANY_NON_CONFLICTING: any enabled module may trigger; BUY/SELL conflicts are blocked.",
+            fr,
+            text=(
+                "Trading calculation remains causal/completed-candle; "
+                "repaint option is retained for compatibility."
+            ),
             fg="#555555",
-        ).grid(row=30, column=0, columnspan=8, sticky="w")
+        ).grid(row=8, column=2, columnspan=7, sticky="w")
 
-        tk.Label(f_strat, text="Score (SCORE mode):").grid(row=31, column=2, sticky="e")
-        self.e_min_score = tk.Entry(f_strat, width=5)
-        self.e_min_score.insert(0, "1")
-        self.e_min_score.grid(row=31, column=3, padx=2)
-        tk.Label(f_strat, text="Adaptive Edge:").grid(row=32, column=4, sticky="e")
-        self.e_adaptive_edge = tk.Entry(f_strat, width=6)
-        self.e_adaptive_edge.insert(0, DEFAULT_ADAPTIVE_EDGE)
-        self.e_adaptive_edge.grid(row=32, column=5, padx=2)
-        tk.Label(f_strat, text="Adaptive Min Weight:").grid(row=32, column=6, sticky="e")
-        self.e_adaptive_min_weight = tk.Entry(f_strat, width=6)
-        self.e_adaptive_min_weight.insert(0, DEFAULT_ADAPTIVE_MIN_WEIGHT)
-        self.e_adaptive_min_weight.grid(row=32, column=7, padx=2)
-        tk.Label(f_strat, text="Evidence Min Families:").grid(row=35, column=0, sticky="e")
-        self.evidence_min_families = tk.Entry(f_strat, width=5)
-        self.evidence_min_families.insert(0, str(EVIDENCE_DEFAULT_MIN_FAMILIES))
-        self.evidence_min_families.grid(row=35, column=1, padx=2, sticky="w")
-        tk.Label(f_strat, text="Family Evidence Min:").grid(row=35, column=2, sticky="e")
-        self.evidence_family_min_score = tk.Entry(f_strat, width=6)
-        self.evidence_family_min_score.insert(0, str(EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
-        self.evidence_family_min_score.grid(row=35, column=3, padx=2, sticky="w")
-        self.evidence_require_trend = tk.BooleanVar(value=EVIDENCE_DEFAULT_REQUIRE_TREND)
-        tk.Checkbutton(f_strat, text="Require Trend Family", variable=self.evidence_require_trend).grid(row=35, column=4, sticky="w")
-        self.evidence_require_independent = tk.BooleanVar(value=EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)
-        tk.Checkbutton(f_strat, text="Require Independent Family", variable=self.evidence_require_independent).grid(row=35, column=6, columnspan=2, sticky="w")
-        tk.Label(f_strat, text="Evidence: TREND | MOMENTUM | FLOW | STRUCTURE. ATR/ADX are regime gates and are not counted as directional evidence.", fg="#555555").grid(row=36, column=0, columnspan=8, sticky="w")
+        # ---------------- MOMENTUM ----------------
+        fr = _family("MOMENTUM — reversal / acceleration")
 
-        self.v_hold_until_all_reverse = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            f_strat,
-            text="Hold Position Until ALL Active Signals Reverse",
-            variable=self.v_hold_until_all_reverse,
-        ).grid(row=33, column=0, columnspan=4, sticky="w")
+        _check(fr, "RSI", "v_use_rsi", False, 0, 0)
+        _entry(fr, "Period", "e_rsi_len", "14", 0, 2)
+        _entry(fr, "OB", "e_rsi_ob", "80", 0, 4)
+        _entry(fr, "OS", "e_rsi_os", "20", 0, 6)
+
+        _option(
+            fr, "Logic", "v_rsi_logic", "REVERSAL_ZONE",
+            ("REVERSAL_ZONE", "CROSS_MA", "EITHER"), 1, 0, 2
+        )
+        _option(
+            fr, "MA Type", "v_rsi_ma_type", "EMA",
+            ("SMA", "EMA", "WMA"), 1, 4
+        )
+        _entry(fr, "MA Period", "e_rsi_ma_len", "9", 1, 6)
+
+        _check(fr, "Stochastic", "v_use_stoch", False, 2, 0)
+        _entry(fr, "K", "e_stoch_k", "14", 2, 2, 5)
+        _entry(fr, "Smooth", "e_stoch_smooth", "3", 2, 4, 5)
+        _entry(fr, "D", "e_stoch_d", "3", 2, 6, 5)
+
+        _check(fr, "Confirmed Divergence", "v_use_divergence", DEFAULT_USE_DIVERGENCE, 3, 0, 2)
+        _entry(fr, "Pivot", "e_div_pivot", "5", 3, 2, 5)
+        _entry(fr, "Min Div", "e_div_min_count", "1", 3, 4, 5)
+        _entry(fr, "Max Pivots", "e_div_max_pivots", "10", 3, 6, 5)
+        _entry(fr, "Max Bars", "e_div_max_bars", "100", 5, 4, 5)
+
+        _option(
+            fr, "Type", "v_div_type", "Regular",
+            ("Regular", "Hidden", "Regular/Hidden"), 4, 0, 2
+        )
+        _option(
+            fr, "Source", "v_div_source", "Close",
+            ("Close", "High/Low"), 4, 4
+        )
+        _check(fr, "Use all divergence sources", "v_div_use_all", DEFAULT_DIV_USE_ALL, 4, 6, 2)
+
+        _entry(fr, "CCI Len", "e_div_cci_len", "10", 5, 0, 5)
+        _entry(fr, "Momentum Len", "e_div_mom_len", "10", 5, 2, 5)
+
+        # The crypto implementation exposes these source toggles as individual
+        # BooleanVars. Keep them inside MOMENTUM, matching the Forex V8.4 GUI.
+        div_names = [
+            ("div_use_macd", "MACD"),
+            ("div_use_macd_hist", "Hist"),
+            ("div_use_rsi", "RSI"),
+            ("div_use_stoch", "Stoch"),
+            ("div_use_cci", "CCI"),
+            ("div_use_momentum", "MOM"),
+            ("div_use_obv", "OBV"),
+            ("div_use_vwmacd", "VWMACD"),
+            ("div_use_cmf", "CMF"),
+            ("div_use_mfi", "MFI"),
+        ]
+        def _sync_divergence_all():
+            self.v_div_use_all.set(
+                all(bool(getattr(self, key).get()) for key, _label in div_names)
+            )
+
+        def _apply_divergence_all(*_args):
+            if bool(self.v_div_use_all.get()):
+                for key, _label in div_names:
+                    getattr(self, key).set(True)
+
+        for j, (key, label) in enumerate(div_names):
+            var = tk.BooleanVar(value=True)
+            setattr(self, key, var)
+            tk.Checkbutton(
+                fr,
+                text=label,
+                variable=var,
+                command=_sync_divergence_all,
+            ).grid(
+                row=6 + j // 5,
+                column=(j % 5) * 2,
+                sticky="w",
+                padx=2,
+                pady=1,
+            )
+        self.v_div_use_all.trace_add("write", _apply_divergence_all)
+
+        _option(
+            fr, "Divergence Entry", "v_div_entry_mode", "FRESH",
+            ("FRESH", "CURRENT_STATE"), 8, 0, 2
+        )
+        tk.Label(
+            fr,
+            text="Confirmed pivots only; no look-ahead.",
+            fg="#555555",
+        ).grid(row=8, column=4, columnspan=4, sticky="w")
+
+        # ---------------- FLOW ----------------
+        fr = _family("FLOW — price / volume participation")
+
+        _check(fr, "VWAP", "v_use_vwap", False, 0, 0)
+        _entry(fr, "Period", "e_vwap_len", "50", 0, 2)
+
+        _check(fr, "VWAP Delta", "v_use_vwap_delta", False, 1, 0)
+        _check(fr, "HMA Smoothing", "v_vwap_delta_smooth", False, 1, 2)
+        _entry(fr, "Smooth Len", "e_vwap_delta_smooth_len", "21", 1, 4)
+        _entry(fr, "Baseline", "e_vwap_delta_baseline", "50", 1, 6)
+
+        _option(
+            fr, "Logic", "v_vwap_delta_logic", "CURRENT_TREND",
+            ("CURRENT_TREND", "CROSS_BASELINE"), 2, 0, 2
+        )
+
+        _check(fr, "Volume", "v_use_vol", DEFAULT_USE_VOLUME, 3, 0)
+        _entry(fr, "Volume MA", "e_vol_len", "20", 3, 2)
+
+        _check(fr, "Volume S/R", "v_use_vol_sr", False, 4, 0)
+        _entry(fr, "Vol MA", "e_sr_volume_ma", "6", 4, 2)
+        _option(
+            fr, "Vote", "v_sr_vote_mode", "MAJORITY",
+            ("MAJORITY", "ALL", "ANY"), 4, 4
+        )
+        _option(
+            fr, "Entry", "v_sr_entry_mode", "CURRENT_ZONE",
+            ("CURRENT_ZONE", "FRESH_BREAK"), 4, 6
+        )
+
+        for idx, (attr, label, default) in enumerate([
+            ("sr_tf1", "TF1", "Chart"),
+            ("sr_tf2", "TF2", "4h"),
+            ("sr_tf3", "TF3", "D"),
+            ("sr_tf4", "TF4", "W"),
+        ]):
+            tk.Label(fr, text=label).grid(
+                row=5, column=idx * 2, sticky="e", padx=2, pady=2
+            )
+            var = tk.StringVar(value=default)
+            setattr(self, "v_" + attr, var)
+            ttk.OptionMenu(
+                fr,
+                var,
+                default,
+                "Chart", "4h", "D", "W", "1h", "15m", "30m", "Disable",
+            ).grid(
+                row=5, column=idx * 2 + 1, sticky="w", padx=2, pady=2
+            )
 
         tk.Label(
-            f_strat,
-            text="ON: open trade waits until every enabled directional module shows the opposite direction. OFF: normal reversal.",
+            fr,
+            text=(
+                "Volume S/R uses volume-confirmed fractal zones; chart-only "
+                "drawing objects are represented as numerical states for trading/backtesting."
+            ),
+            fg="#555555",
+        ).grid(row=6, column=0, columnspan=8, sticky="w", pady=2)
+
+        # ---------------- STRUCTURE ----------------
+        fr = _family("STRUCTURE — market geometry / location")
+
+        _check(fr, "Liquidity Swings", "v_use_liq_swings", False, 0, 0)
+        _entry(fr, "Pivot", "e_liq_length", "14", 0, 2)
+        _option(
+            fr, "Swing Area", "v_liq_area", "Wick Extremity",
+            ("Wick Extremity", "Full Range"), 0, 4
+        )
+        _option(
+            fr, "Filter", "v_liq_filter", "Count",
+            ("Count", "Volume"), 0, 6
+        )
+        _entry(fr, "Filter Value", "e_liq_filter_value", "0", 1, 0)
+
+        _option(
+            fr, "Entry", "v_liq_entry_mode", "FRESH_BREAK",
+            ("FRESH_BREAK", "CURRENT_TREND"), 1, 4
+        )
+
+        _check(fr, "Trendline Breakout", "v_use_trendline", False, 2, 0)
+        _entry(fr, "Pivot", "e_trendline_length", "14", 2, 2)
+        _entry(fr, "Min Dist", "e_trendline_min_distance", "5", 2, 4)
+        _option(
+            fr, "Mode", "v_trendline_entry_mode", "FRESH_BREAK",
+            ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"), 2, 6
+        )
+
+        _entry(fr, "Breakout Buffer %", "e_trendline_buffer", "0", 3, 0)
+        _entry(fr, "Retest Candles", "e_trendline_retest", "3", 3, 2)
+
+        _check(fr, "Multi-TF (4h Confluence)", "v_use_mtf", DEFAULT_USE_MTF, 4, 0, 3)
+        tk.Label(
+            fr,
+            text="4H EMA200 confluence",
+            fg="#555555",
+        ).grid(row=4, column=4, columnspan=4, sticky="w")
+
+        tk.Label(
+            fr,
+            text=(
+                "BUY = completed candle closes above descending resistance | "
+                "SELL = completed candle closes below ascending support"
+            ),
             fg="#444444",
-        ).grid(row=34, column=0, columnspan=8, sticky="w")
+        ).grid(row=5, column=0, columnspan=8, sticky="w", pady=1)
+
+        # ---------------- REGIME ----------------
+        fr = _family(
+            "REGIME — tradeability gates; never counted as duplicate directional votes"
+        )
+
+        _check(fr, "ATR", "v_use_atr", DEFAULT_USE_ATR, 0, 0)
+        _entry(fr, "Minimum ATR %", "e_atr_min_pct", "0.30", 0, 2)
+
+        _check(fr, "ADX", "v_use_adx", DEFAULT_USE_ADX, 0, 4)
+        _entry(fr, "ADX Threshold", "e_adx_thresh", "20", 0, 6)
+
+        tk.Label(
+            fr,
+            text=(
+                "ATR + ADX validate market regime; in ADAPTIVE_EVIDENCE they "
+                "are gates only and do not count as independent directional families."
+            ),
+            fg="#555555",
+        ).grid(row=1, column=0, columnspan=8, sticky="w")
+
+        # ---------------- OPTIONAL / LEGACY ----------------
+        fr = _family(
+            "OPTIONAL / LEGACY MODULE — preserved for backward compatibility"
+        )
+
+        _check(fr, "Bollinger Breakout (BB)", "v_use_bb", False, 0, 0)
+        _entry(fr, "Period", "e_bb_len", "20", 0, 2)
+        _entry(fr, "StdDev", "e_bb_std", "2", 0, 4)
+
+        tk.Label(
+            fr,
+            text=(
+                "BB remains available but is outside the five Evidence-Family "
+                "groups so existing configurations do not lose functionality."
+            ),
+            fg="#555555",
+        ).grid(row=0, column=6, columnspan=2, sticky="w")
+
+        # ---------------- DECISION ENGINE ----------------
+        fr = _family("DECISION ENGINE — family-aware adaptive mode")
+
+        _option(
+            fr,
+            "Signal Mode",
+            "v_signal_mode",
+            DEFAULT_SIGNAL_MODE,
+            (
+                "SINGLE_SIGNAL",
+                "ANY_NON_CONFLICTING",
+                "2_SIGNALS",
+                "3_SIGNALS",
+                "4_SIGNALS",
+                "SCORE",
+                "ADAPTIVE_SCORE",
+                "ADAPTIVE_EVIDENCE",
+                "STRICT_ALL_FILTERS",
+            ),
+            0,
+            0,
+            2,
+        )
+        _entry(fr, "Min Score (legacy)", "e_min_score", "1", 0, 4)
+        _entry(fr, "Adaptive Edge", "e_adaptive_edge", DEFAULT_ADAPTIVE_EDGE, 0, 6)
+        _entry(
+            fr,
+            "Adaptive Min Weight",
+            "e_adaptive_min_weight",
+            DEFAULT_ADAPTIVE_MIN_WEIGHT,
+            1,
+            0,
+        )
+        _entry(
+            fr,
+            "Minimum Families",
+            "e_evidence_min_families",
+            EVIDENCE_DEFAULT_MIN_FAMILIES,
+            1,
+            2,
+        )
+        _entry(
+            fr,
+            "Family Minimum Score",
+            "e_evidence_family_min_score",
+            EVIDENCE_DEFAULT_FAMILY_MIN_SCORE,
+            1,
+            4,
+        )
+        _check(
+            fr,
+            "Require Trend Family",
+            "v_evidence_require_trend",
+            EVIDENCE_DEFAULT_REQUIRE_TREND,
+            1,
+            6,
+            2,
+        )
+        _check(
+            fr,
+            "Require Independent Non-Trend Family",
+            "v_evidence_require_independent",
+            EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT,
+            2,
+            0,
+            3,
+        )
+        _check(
+            fr,
+            "Hold Position Until ALL Active Signals Reverse",
+            "v_hold_until_all_reverse",
+            True,
+            3,
+            0,
+            4,
+        )
+
+        tk.Label(
+            fr,
+            text=(
+                "ADAPTIVE_EVIDENCE: weighted evidence is normalized inside "
+                "each family. Minimum independent families prevents correlated "
+                "Trend indicators from acting as separate confirmations. "
+                "REGIME is gating only."
+            ),
+            fg="#444444",
+            wraplength=1100,
+            justify="left",
+        ).grid(row=4, column=0, columnspan=8, sticky="w", pady=3)
+
+        tk.Label(
+            fr,
+            text=(
+                "SINGLE_SIGNAL = one enabled directional module; 2/3/4_SIGNALS = "
+                "required directional votes; SCORE = custom minimum votes; "
+                "ADAPTIVE_SCORE = legacy weighted mode; STRICT_ALL_FILTERS = strict mode."
+            ),
+            fg="#444444",
+            wraplength=1100,
+            justify="left",
+        ).grid(row=5, column=0, columnspan=8, sticky="w")
 
         tk.Label(
             f_strat,
             text=(
-                "SINGLE_SIGNAL = any ONE enabled signal can trade; "
-                "2/3/4_SIGNALS = required directional votes; SCORE = custom minimum votes; "
-                "STRICT_ALL_FILTERS = original strict mode."
+                "V8.4.1: strategy formulas and existing crypto runtime contracts are "
+                "preserved; this GUI reorganizes the controls by Evidence Family and "
+                "keeps all existing save/load variable names."
             ),
             fg="#444444",
-        ).grid(row=35, column=0, columnspan=8, sticky="w", pady=3)
-
-        # Optional LuxAlgo Liquidity Swings directional module.
-        self.v_use_liq_swings = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_strat,
-            text="Liquidity Swings [LuxAlgo]",
-            variable=self.v_use_liq_swings,
-        ).grid(row=22, column=0, columnspan=2, sticky="w")
-
-        tk.Label(f_strat, text="Pivot Lookback:").grid(row=22, column=2, sticky="e")
-        self.e_liq_length = tk.Entry(f_strat, width=6)
-        self.e_liq_length.insert(0, "14")
-        self.e_liq_length.grid(row=22, column=3, padx=2)
-
-        tk.Label(f_strat, text="Swing Area:").grid(row=22, column=4, sticky="e")
-        self.v_liq_area = tk.StringVar(value="Wick Extremity")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_liq_area,
-            "Wick Extremity",
-            "Wick Extremity",
-            "Full Range",
-        ).grid(row=22, column=5, padx=2, sticky="w")
-
-        tk.Label(f_strat, text="Filter:").grid(row=22, column=6, sticky="e")
-        self.v_liq_filter = tk.StringVar(value="Count")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_liq_filter,
-            "Count",
-            "Count",
-            "Volume",
-        ).grid(row=22, column=7, padx=2, sticky="w")
-
-        tk.Label(f_strat, text="Filter Value:").grid(row=23, column=2, sticky="e")
-        self.e_liq_filter_value = tk.Entry(f_strat, width=6)
-        self.e_liq_filter_value.insert(0, "0")
-        self.e_liq_filter_value.grid(row=23, column=3, padx=2)
-
-        tk.Label(f_strat, text="Entry:").grid(row=23, column=4, sticky="e")
-        self.v_liq_entry_mode = tk.StringVar(value="FRESH_BREAK")
-        ttk.OptionMenu(
-            f_strat,
-            self.v_liq_entry_mode,
-            "FRESH_BREAK",
-            "FRESH_BREAK",
-            "CURRENT_TREND",
-        ).grid(row=23, column=5, padx=2, sticky="w")
-
-
-        # 3B. Advanced Divergence + Volume S/R modules
-        adv = tk.LabelFrame(
-            f_strat,
-            text="── Advanced Strategy Modules: Divergence + Volume S/R Zones ──",
-        )
-        adv.grid(row=36, column=0, columnspan=10, sticky="ew", pady=(8, 3))
-
-        self.v_use_divergence = tk.BooleanVar(value=False)
-        tk.Checkbutton(adv, text="Divergence Engine", variable=self.v_use_divergence).grid(row=0, column=0, sticky="w")
-        tk.Label(adv, text="Pivot:").grid(row=0, column=1, sticky="e")
-        self.e_div_pivot = tk.Entry(adv, width=5); self.e_div_pivot.insert(0, "5"); self.e_div_pivot.grid(row=0, column=2)
-        tk.Label(adv, text="Source:").grid(row=0, column=3, sticky="e")
-        self.v_div_source = tk.StringVar(value="Close")
-        ttk.OptionMenu(adv, self.v_div_source, "Close", "Close", "High/Low").grid(row=0, column=4, sticky="w")
-        tk.Label(adv, text="Type:").grid(row=0, column=5, sticky="e")
-        self.v_div_type = tk.StringVar(value="Regular")
-        ttk.OptionMenu(adv, self.v_div_type, "Regular", "Regular", "Hidden", "Regular/Hidden").grid(row=0, column=6, sticky="w")
-        tk.Label(adv, text="Min Div:").grid(row=0, column=7, sticky="e")
-        self.e_div_min_count = tk.Entry(adv, width=5); self.e_div_min_count.insert(0, "1"); self.e_div_min_count.grid(row=0, column=8)
-        tk.Label(adv, text="Max Pivots:").grid(row=0, column=9, sticky="e")
-        self.e_div_max_pivots = tk.Entry(adv, width=5); self.e_div_max_pivots.insert(0, "10"); self.e_div_max_pivots.grid(row=0, column=10)
-
-        tk.Label(adv, text="Max Bars:").grid(row=1, column=1, sticky="e")
-        self.e_div_max_bars = tk.Entry(adv, width=5); self.e_div_max_bars.insert(0, "100"); self.e_div_max_bars.grid(row=1, column=2)
-        tk.Label(adv, text="CCI:").grid(row=1, column=3, sticky="e")
-        self.e_div_cci_len = tk.Entry(adv, width=5); self.e_div_cci_len.insert(0, "10"); self.e_div_cci_len.grid(row=1, column=4)
-        tk.Label(adv, text="Momentum:").grid(row=1, column=5, sticky="e")
-        self.e_div_mom_len = tk.Entry(adv, width=5); self.e_div_mom_len.insert(0, "10"); self.e_div_mom_len.grid(row=1, column=6)
-        tk.Label(adv, text="Entry:").grid(row=1, column=7, sticky="e")
-        self.v_div_entry_mode = tk.StringVar(value="FRESH")
-        ttk.OptionMenu(adv, self.v_div_entry_mode, "FRESH", "FRESH", "CURRENT_STATE").grid(row=1, column=8, sticky="w")
-        tk.Label(adv, text="Confirmed pivots only; no look-ahead.", fg="#555555").grid(row=1, column=9, columnspan=3, sticky="w")
-
-        div_names = [
-            ("div_use_macd","MACD"),("div_use_macd_hist","Hist"),("div_use_rsi","RSI"),
-            ("div_use_stoch","Stoch"),("div_use_cci","CCI"),("div_use_momentum","MOM"),
-            ("div_use_obv","OBV"),("div_use_vwmacd","VWMACD"),("div_use_cmf","CMF"),("div_use_mfi","MFI"),
-        ]
-        for j,(key,label) in enumerate(div_names):
-            setattr(self, key, tk.BooleanVar(value=True))
-            tk.Checkbutton(adv, text=label, variable=getattr(self,key)).grid(row=2+j//5, column=(j%5)*2, sticky="w")
-
-        self.v_use_vol_sr = tk.BooleanVar(value=False)
-        tk.Checkbutton(adv, text="Volume S/R Zones", variable=self.v_use_vol_sr).grid(row=4, column=0, sticky="w")
-        tk.Label(adv, text="Vote:").grid(row=4, column=1, sticky="e")
-        self.v_sr_vote_mode = tk.StringVar(value="MAJORITY")
-        ttk.OptionMenu(adv, self.v_sr_vote_mode, "MAJORITY", "MAJORITY", "ANY", "ALL").grid(row=4, column=2, sticky="w")
-        tk.Label(adv, text="Entry:").grid(row=4, column=3, sticky="e")
-        self.v_sr_entry_mode = tk.StringVar(value="CURRENT_ZONE")
-        ttk.OptionMenu(adv, self.v_sr_entry_mode, "CURRENT_ZONE", "CURRENT_ZONE", "FRESH_BREAK").grid(row=4, column=4, sticky="w")
-        tk.Label(adv, text="Vol MA threshold:").grid(row=4, column=5, sticky="e")
-        self.e_sr_volume_ma = tk.Entry(adv, width=5); self.e_sr_volume_ma.insert(0, "6"); self.e_sr_volume_ma.grid(row=4, column=6)
-
-        for idx, (attr, label, default) in enumerate([
-            ("sr_tf1","TF1","Chart"),("sr_tf2","TF2","4h"),("sr_tf3","TF3","D"),("sr_tf4","TF4","W")
-        ]):
-            tk.Label(adv, text=label).grid(row=5, column=idx*3, sticky="e")
-            setattr(self, "v_"+attr, tk.StringVar(value=default))
-            ttk.OptionMenu(adv, getattr(self, "v_"+attr), default, "Chart","4h","D","W","1h","15m","30m","Disable").grid(row=5, column=idx*3+1, sticky="w")
-        tk.Label(
-            adv,
-            text="V2 parity: volume-confirmed 5-bar fractal S/R zones; chart-only lines/labels are represented as numerical levels/votes for trading and backtesting.",
-            fg="#555555",
-        ).grid(row=6, column=0, columnspan=12, sticky="w", pady=2)
+            wraplength=1100,
+            justify="left",
+        ).pack(fill="x", padx=10, pady=(2, 6))
 
         # 4. Grid Trading Engine
         f_grid = tk.LabelFrame(self.tab_grid, text=" 4. Grid Trading Engine ")
@@ -3576,7 +4320,9 @@ class UniversalFuturesBotGUI:
             justify="left",
         ).grid(row=3, column=0, columnspan=6, sticky="w", pady=(3, 0))
 
-        self.v_size_mode = tk.StringVar(value=DEFAULT_RISK_MODE)
+        self.v_size_mode = tk.StringVar(
+            value=DEFAULT_RISK_MODE
+        )
 
         ttk.OptionMenu(
             f_risk,
@@ -4087,6 +4833,7 @@ class UniversalFuturesBotGUI:
             "div_use_vwmacd": self.div_use_vwmacd.get(),
             "div_use_cmf": self.div_use_cmf.get(),
             "div_use_mfi": self.div_use_mfi.get(),
+            "div_use_all": self.v_div_use_all.get(),
 
             "use_vol_sr": self.v_use_vol_sr.get(),
             "sr_tf1": self.v_sr_tf1.get(),
@@ -4128,10 +4875,10 @@ class UniversalFuturesBotGUI:
             "min_score": self.e_min_score.get().strip(),
             "adaptive_edge": self.e_adaptive_edge.get().strip(),
             "adaptive_min_weight": self.e_adaptive_min_weight.get().strip(),
-            "evidence_min_families": self.evidence_min_families.get().strip(),
-            "evidence_family_min_score": self.evidence_family_min_score.get().strip(),
-            "evidence_require_trend": self.evidence_require_trend.get(),
-            "evidence_require_independent": self.evidence_require_independent.get(),
+            "evidence_min_families": self.e_evidence_min_families.get().strip(),
+            "evidence_family_min_score": self.e_evidence_family_min_score.get().strip(),
+            "evidence_require_trend": self.v_evidence_require_trend.get(),
+            "evidence_require_independent": self.v_evidence_require_independent.get(),
             "hold_until_all_reverse": self.v_hold_until_all_reverse.get(),
 
             "size_mode": self.v_size_mode.get(),
@@ -4202,7 +4949,8 @@ class UniversalFuturesBotGUI:
 
             # The profile folder is the authoritative identity.  Never let a
             # mismatched/stale bot_id stored inside config.json silently move a
-            # profile into another profile's namespace.            selected_profile = self._sanitize_profile_id(self.bot_profile_id)
+            # profile into another profile's namespace.
+            selected_profile = self._sanitize_profile_id(self.bot_profile_id)
             stored_profile = self._sanitize_profile_id(cfg.get("bot_id", selected_profile))
             if stored_profile != selected_profile:
                 self.log(
@@ -4586,14 +5334,21 @@ class UniversalFuturesBotGUI:
             self.v_div_source.set(cfg.get("div_source", "Close"))
             self.v_div_type.set(cfg.get("div_type", "Regular"))
             self.v_div_entry_mode.set(cfg.get("div_entry_mode", "FRESH"))
-            for attr, key in (
+            div_source_controls = (
                 ("div_use_macd","div_use_macd"),("div_use_macd_hist","div_use_macd_hist"),
                 ("div_use_rsi","div_use_rsi"),("div_use_stoch","div_use_stoch"),
                 ("div_use_cci","div_use_cci"),("div_use_momentum","div_use_momentum"),
                 ("div_use_obv","div_use_obv"),("div_use_vwmacd","div_use_vwmacd"),
                 ("div_use_cmf","div_use_cmf"),("div_use_mfi","div_use_mfi")
-            ):
+            )
+            for attr, key in div_source_controls:
                 getattr(self, attr).set(cfg.get(key, True))
+            self.v_div_use_all.set(
+                bool(cfg.get(
+                    "div_use_all",
+                    all(bool(getattr(self, attr).get()) for attr, _key in div_source_controls)
+                ))
+            )
 
             self.v_use_vol_sr.set(cfg.get("use_vol_sr", False))
             self.v_sr_tf1.set(cfg.get("sr_tf1", "Chart"))
@@ -4613,7 +5368,7 @@ class UniversalFuturesBotGUI:
             self.v_use_atr.set(
                 cfg.get(
                     "use_atr",
-                    DEFAULT_USE_ATR,
+                    False,
                 )
             )
 
@@ -4629,7 +5384,7 @@ class UniversalFuturesBotGUI:
             self.v_use_vol.set(
                 cfg.get(
                     "use_vol",
-                    DEFAULT_USE_VOLUME,
+                    True,
                 )
             )
             self.e_vol_len.delete(
@@ -4647,7 +5402,7 @@ class UniversalFuturesBotGUI:
             self.v_use_adx.set(
                 cfg.get(
                     "use_adx",
-                    DEFAULT_USE_ADX,
+                    True,
                 )
             )
             self.e_adx_thresh.delete(
@@ -4665,14 +5420,14 @@ class UniversalFuturesBotGUI:
             self.v_use_mtf.set(
                 cfg.get(
                     "use_mtf",
-                    DEFAULT_USE_MTF,
+                    True,
                 )
             )
 
             saved_signal_mode = str(
                 cfg.get(
                     "signal_mode",
-                    "ADAPTIVE_SCORE",
+                    DEFAULT_SIGNAL_MODE,
                 )
             ).strip().upper()
 
@@ -4717,12 +5472,12 @@ class UniversalFuturesBotGUI:
             self.e_adaptive_edge.insert(0, cfg.get("adaptive_edge", DEFAULT_ADAPTIVE_EDGE))
             self.e_adaptive_min_weight.delete(0, tk.END)
             self.e_adaptive_min_weight.insert(0, cfg.get("adaptive_min_weight", DEFAULT_ADAPTIVE_MIN_WEIGHT))
-            self.evidence_min_families.delete(0, tk.END)
-            self.evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
-            self.evidence_family_min_score.delete(0, tk.END)
-            self.evidence_family_min_score.insert(0, cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
-            self.evidence_require_trend.set(bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)))
-            self.evidence_require_independent.set(bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
+            self.e_evidence_min_families.delete(0, tk.END)
+            self.e_evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
+            self.e_evidence_family_min_score.delete(0, tk.END)
+            self.e_evidence_family_min_score.insert(0, cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
+            self.v_evidence_require_trend.set(bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)))
+            self.v_evidence_require_independent.set(bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
 
             self.v_size_mode.set(
                 cfg.get(
@@ -4739,7 +5494,7 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "risk_pct",
-                    DEFAULT_RISK_PER_TRADE,
+                    "1.0",
                 ),
             )
 
@@ -5207,7 +5962,8 @@ class UniversalFuturesBotGUI:
             pass
 
     def fetch_position(self, symbol):
-        positions = self.exchange.fetch_positions(            [symbol]
+        positions = self.exchange.fetch_positions(
+            [symbol]
         )
 
         active_positions = []
@@ -5343,6 +6099,10 @@ class UniversalFuturesBotGUI:
                 rows = self.exchange.fetch_open_orders(symbol, limit=OPEN_ORDER_PAGE_LIMIT)
             else:
                 rows = self.exchange.fetch_open_orders(symbol)
+            # CCXT/venue pagination can return only the first page. In a
+            # safety-critical strict read, a full page is not proof that there
+            # are no additional orders. Refuse to make a cleanup/start decision
+            # from a potentially truncated snapshot.
             if strict and self.exchange_id == "bybit" and len(rows) >= OPEN_ORDER_PAGE_LIMIT:
                 raise RuntimeError(
                     f"Open-order snapshot for {symbol} reached the {OPEN_ORDER_PAGE_LIMIT}-order page limit; "
@@ -5433,7 +6193,12 @@ class UniversalFuturesBotGUI:
             return None
 
     def _remember_managed_order_ids(self, ids):
-        """Persist exact exchange order IDs previously created/tracked by this bot."""
+        """Persist exchange order IDs that this bot created or tracked.
+
+        These IDs are intentionally retained after a position becomes flat so a
+        later NEW session can distinguish stale bot protection from manual orders.
+        The IDs are opaque exchange identifiers; no order attributes are inferred.
+        """
         for oid in (ids or set()):
             if oid:
                 self.retired_managed_order_ids.add(str(oid))
@@ -5453,18 +6218,26 @@ class UniversalFuturesBotGUI:
 
     @staticmethod
     def _checkpoint_managed_order_ids(state):
-        """Extract only exact order IDs persisted by this bot profile."""
+        """Extract only order IDs previously persisted by this bot profile.
+
+        This is intentionally narrower than matching order attributes such as
+        reduceOnly/side/type. A manual order must never be treated as bot-owned
+        merely because it looks like a protection order.
+        """
         ids = set()
         if not isinstance(state, dict):
             return ids
+
         ps = state.get("position_state") or {}
         lp = ps.get("last_protected_position")
         if isinstance(lp, dict):
             for key in ("sl_id", "tp1_id", "tp2_id"):
                 if lp.get(key):
                     ids.add(str(lp[key]))
+
         retired = ps.get("retired_managed_order_ids") or []
         ids.update(str(x) for x in retired if x)
+
         gs = state.get("grid_state") or {}
         for key in ("tp_order_id", "sl_order_id"):
             if gs.get(key):
@@ -5472,6 +6245,7 @@ class UniversalFuturesBotGUI:
         for meta in (gs.get("entry_orders") or {}).values():
             if isinstance(meta, dict) and meta.get("id"):
                 ids.add(str(meta["id"]))
+
         return ids
 
     def _cancel_known_managed_orders_from_ids(self, symbol, ids):
@@ -5483,10 +6257,12 @@ class UniversalFuturesBotGUI:
                 self.log(f"MANAGED ORDER CANCEL WARNING | ID={oid} | {e}")
         if ids:
             time.sleep(0.25)
-            remaining = []
+            remaining=[]
             for oid in sorted(ids):
-                state = self._order_is_still_open(symbol, oid, unknown_is_open=False)
-                if state is None or state:
+                try:
+                    if self._order_is_still_open(symbol, oid, unknown_is_open=False):
+                        remaining.append(oid)
+                except Exception:
                     remaining.append(oid)
             if remaining:
                 raise RuntimeError(
@@ -5495,22 +6271,10 @@ class UniversalFuturesBotGUI:
                 )
 
     def _cancel_known_managed_orders(self, symbol):
-        ids=self._known_managed_order_ids(symbol)
-        for oid in sorted(ids):
-            try:
-                self.exchange.cancel_order(oid, symbol)
-            except Exception as e:
-                self.log(f"MANAGED ORDER CANCEL WARNING | ID={oid} | {e}")
-        if ids:
-            time.sleep(0.25)
-            remaining=[]
-            for oid in sorted(ids):
-                try:
-                    if self._order_is_still_open(symbol, oid, unknown_is_open=False): remaining.append(oid)
-                except Exception:
-                    remaining.append(oid)
-            if remaining:
-                raise RuntimeError("Managed orders could not be verified cancelled: " + ",".join(remaining[:20]))
+        self._cancel_known_managed_orders_from_ids(
+            symbol,
+            self._known_managed_order_ids(symbol),
+        )
 
     def cancel_all_open_orders(self, symbol):
         """Cancel all exchange orders for one symbol, including large order books."""
@@ -6263,7 +7027,8 @@ class UniversalFuturesBotGUI:
                 try:
                     self.exchange.cancel_order(
                         order["id"],
-                        symbol,                    )
+                        symbol,
+                    )
                 except Exception:
                     pass
             raise
@@ -6289,12 +7054,24 @@ class UniversalFuturesBotGUI:
 
         for label, order in created_orders:
             oid = str(order.get("id") or "")
-            active = self._order_is_still_open(symbol, oid)
+            if not oid:
+                active = False
+            else:
+                # Protection verification is safety-critical: an inconclusive
+                # exchange response must NOT be interpreted as "active".
+                state = self._order_is_still_open(
+                    symbol,
+                    oid,
+                    unknown_is_open=False,
+                )
+                active = bool(state) if state is not None else False
 
             if active:
                 self.log(f"{label} VERIFIED ACTIVE. ID={oid}")
             else:
-                self.log(f"{label} NOT FOUND / NOT ACTIVE. ID={oid}")
+                self.log(
+                    f"{label} NOT VERIFIED ACTIVE. ID={oid or 'MISSING_ID'}"
+                )
 
             results.append((label, active))
 
@@ -6660,7 +7437,7 @@ class UniversalFuturesBotGUI:
         sl_pct = float(self.e_grid_sl.get())
         max_exp = float(self.e_grid_max_exposure.get())
         max_dd_pct = float(self.e_grid_max_dd.get())
-        grid_score_min = float(self.e_grid_score_min.get())
+        grid_score_min = int(self.e_grid_score_min.get())
         rec_pct = float(self.e_grid_recenter.get())
         cooldown = float(self.e_grid_cooldown.get())
         filt = self.v_grid_trend_filter.get().strip().upper()
@@ -6735,18 +7512,7 @@ class UniversalFuturesBotGUI:
                     "Grid Trend Filter = SCORE requires at least one enabled "
                     "Strategy indicator in Section 3."
                 )
-            if str(self.v_signal_mode.get()).strip().upper() == "ADAPTIVE_SCORE":
-                enabled_names = [
-                    "ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE",
-                    "LIQ_SWING","TRENDLINE","MTF","DIVERGENCE","VOL_SR","VOL","ADX","ATR"
-                ]
-                enabled_flags = [
-                    self.v_use_st.get(),self.v_use_ema.get(),self.v_use_ema_cross.get(),self.v_use_macd.get(),self.v_use_rsi.get(),self.v_use_bb.get(),self.v_use_stoch.get(),self.v_use_vwap.get(),self.v_use_vwap_delta.get(),self.v_use_vidya.get(),self.v_use_nwe.get(),self.v_use_liq_swings.get(),self.v_use_trendline.get(),self.v_use_mtf.get(),self.v_use_divergence.get(),self.v_use_vol_sr.get(),self.v_use_vol.get(),self.v_use_adx.get(),self.v_use_atr.get()
-                ]
-                adaptive_max = sum(ADAPTIVE_MODULE_WEIGHTS.get(n,1.0) for n,e in zip(enabled_names,enabled_flags) if bool(e) and n not in ("VOL","ATR"))
-                if grid_score_min > adaptive_max:
-                    raise ValueError(f"Grid Score Min cannot be greater than adaptive weighted module capacity ({adaptive_max:.2f}).")
-            elif grid_score_min > enabled_strategy_count:
+            if grid_score_min > enabled_strategy_count:
                 raise ValueError(
                     f"Grid Score Min cannot be greater than the number of enabled "
                     f"Section 3 Strategy indicators ({enabled_strategy_count})."
@@ -6779,11 +7545,7 @@ class UniversalFuturesBotGUI:
                         "NEUTRAL_GRID requires at least one enabled Section 3 Strategy indicator "
                         "when Trend Filter is OFF/SCORE."
                     )
-                if str(self.v_signal_mode.get()).strip().upper() == "ADAPTIVE_SCORE":
-                    adaptive_min = float(self.e_adaptive_min_weight.get())
-                    if grid_score_min < adaptive_min:
-                        grid_score_min = adaptive_min
-                elif grid_score_min > enabled_strategy_count:
+                if grid_score_min > enabled_strategy_count:
                     raise ValueError(
                         f"Grid Score Min cannot be greater than the number of enabled "
                         f"Section 3 Strategy indicators ({enabled_strategy_count}) for NEUTRAL_GRID."
@@ -6795,8 +7557,6 @@ class UniversalFuturesBotGUI:
             "tp_pct": tp_pct / 100.0, "sl_pct": sl_pct / 100.0,
             "max_exposure": max_exp, "max_dd": max_dd_pct / 100.0,
             "score_min": grid_score_min,
-            "adaptive_score": str(self.v_signal_mode.get()).strip().upper() == "ADAPTIVE_SCORE",
-            "adaptive_min_weight": float(self.e_adaptive_min_weight.get()),
             "trend_filter": filt, "recenter": bool(self.v_grid_recenter.get()),
             "recenter_distance": rec_pct / 100.0, "cooldown": cooldown * 60.0,
         }
@@ -6816,9 +7576,7 @@ class UniversalFuturesBotGUI:
             return True, True
         if cfg["trend_filter"] == "SUPERTREND":
             return bool(st_bull), bool(st_bear)
-        score_min = float(cfg["score_min"])
-        if cfg.get("adaptive_score"):
-            score_min = max(score_min, float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
+        score_min = int(cfg["score_min"])
         return (
             buy_score >= score_min and buy_score > sell_score,
             sell_score >= score_min and sell_score > buy_score,
@@ -7117,6 +7875,7 @@ class UniversalFuturesBotGUI:
     def _grid_stop(self, symbol, reason, cooldown_seconds=0):
         """Stop Grid safely: close inventory before removing its protection."""
         self.log(f"GRID STOP: {reason}")
+        # Capture all known Grid order IDs before any cleanup clears local state.
         self._remember_managed_order_ids(self._known_managed_order_ids(symbol))
         self._grid_cancel_entry_orders(symbol)
         pos = self.fetch_position(symbol)
@@ -7166,9 +7925,7 @@ class UniversalFuturesBotGUI:
                 return "SHORT"
             return None
 
-        score_min = float(cfg["score_min"])
-        if cfg.get("adaptive_score"):
-            score_min = max(score_min, float(cfg.get("adaptive_min_weight", ADAPTIVE_DEFAULT_MIN_WEIGHT)))
+        score_min = int(cfg["score_min"])
         if buy_score >= score_min and buy_score > sell_score:
             return "LONG"
         if sell_score >= score_min and sell_score > buy_score:
@@ -7248,7 +8005,7 @@ class UniversalFuturesBotGUI:
                 return False
 
         # Only after the symbol is confirmed flat is it safe to remove old
-        # basket TP/SL protection. Retain exact IDs in recovery state first.
+        # basket TP/SL protection. Retain IDs in recovery state before clearing them.
         self._remember_managed_order_ids(self._known_managed_order_ids(symbol))
         self._grid_cancel_managed_orders(symbol)
         if self.fetch_position(symbol):
@@ -7541,6 +8298,19 @@ class UniversalFuturesBotGUI:
         exchange_id = str(self.v_exchange.get()).strip().lower()
         if exchange_id not in SUPPORTED_EXCHANGES:
             raise ValueError(f"Unsupported exchange: {exchange_id}")
+        account_mode = str(self.v_account_mode.get()).strip().upper()
+        allowed_account_modes = {
+            "bybit": {"BYBIT_DEMO", "BYBIT_TESTNET", "LIVE"},
+            "binance": {"TESTNET", "LIVE"},
+            "gate": {"TESTNET", "LIVE"},
+            "bitget": {"DEMO", "LIVE"},
+            "weex": {"DEMO", "LIVE"},
+        }
+        if account_mode not in allowed_account_modes[exchange_id]:
+            raise ValueError(
+                f"Account Mode '{account_mode}' is invalid for {exchange_id.upper()}. "
+                f"Allowed: {', '.join(sorted(allowed_account_modes[exchange_id]))}."
+            )
         signal_mode = str(self.v_signal_mode.get()).strip().upper()
         if signal_mode not in SUPPORTED_SIGNAL_MODES:
             raise ValueError(f"Unsupported signal mode: {signal_mode}")
@@ -7559,12 +8329,12 @@ class UniversalFuturesBotGUI:
             raise ValueError("Adaptive Edge must be between 0 and 1.")
         if adaptive_min_weight <= 0:
             raise ValueError("Adaptive Min Weight must be greater than 0.")
-        evidence_min_families = int(str(self.evidence_min_families.get()).strip())
-        evidence_family_min_score = float(str(self.evidence_family_min_score.get()).strip())
-        if evidence_min_families < 1 or evidence_min_families > 4:
-            raise ValueError("Evidence Min Families must be between 1 and 4.")
+        evidence_min_families = int(str(self.e_evidence_min_families.get()).strip())
+        evidence_family_min_score = float(str(self.e_evidence_family_min_score.get()).strip())
+        if evidence_min_families < 1 or evidence_min_families > len(EVIDENCE_FAMILY_ORDER):
+            raise ValueError("Evidence Minimum Families must be between 1 and 4.")
         if not 0.0 < evidence_family_min_score <= 1.0:
-            raise ValueError("Family Evidence Min must be greater than 0 and at most 1.")
+            raise ValueError("Family Minimum Score must be greater than 0 and at most 1.")
         size_mode = str(self.v_size_mode.get()).strip().upper()
         if size_mode not in ("EQUITY_RISK_%", "FIXED_QTY"):
             raise ValueError("Sizing Mode must be EQUITY_RISK_% or FIXED_QTY.")
@@ -7696,7 +8466,6 @@ class UniversalFuturesBotGUI:
                 self.trade_pnls = []
                 self.active_trade = None
                 self.last_protected_position = None
-                self.retired_managed_order_ids = set()
                 self.tp1_be_done = False
                 self.reentry_direction_lock = None
                 self.reentry_lock_reason = ""
@@ -7722,8 +8491,12 @@ class UniversalFuturesBotGUI:
                 )
 
                 # A genuinely new session must never silently adopt an existing
-                # position or unknown/manual orders. Exact IDs from the previous
-                # checkpoint are the only orders eligible for automatic cleanup.
+                # position or unknown/manual orders. However, if the account is
+                # flat and the only open orders are exact IDs persisted by this
+                # bot's previous checkpoint (typically stale reduce-only SL/TP
+                # orders left behind after a crash/forced close), they are
+                # provably bot-managed and can be cancelled safely before the
+                # new session starts.
                 if grid_cfg["mode"] in ("OFF", "DIRECT_SHOT"):
                     existing_position = self.fetch_position(self.symbol)
                     existing_orders = self.fetch_open_orders_safe(self.symbol, strict=True)
@@ -7733,27 +8506,49 @@ class UniversalFuturesBotGUI:
                             "Choose Resume if this inventory belongs to this bot, or "
                             "close/clean the position before starting a new session."
                         )
+
                     if existing_orders:
-                        checkpoint_ids = self._checkpoint_managed_order_ids(self.resume_candidate)
-                        open_ids = {str(order.get("id")) for order in existing_orders if order.get("id")}
+                        checkpoint_ids = self._checkpoint_managed_order_ids(
+                            self.resume_candidate
+                        )
+                        open_ids = {
+                            str(order.get("id"))
+                            for order in existing_orders
+                            if order.get("id")
+                        }
                         orphan_bot_orders = open_ids & checkpoint_ids
                         unknown_orders = open_ids - checkpoint_ids
+
                         if orphan_bot_orders and not unknown_orders:
                             self.log(
-                                "START CLEANUP: account is flat and all existing open orders "
-                                f"are verified as previous bot-managed orders ({len(orphan_bot_orders)}). "
-                                "Cancelling them before starting the new session."
+                                "START CLEANUP: account is flat and all existing "
+                                f"open orders are verified as previous bot-managed "
+                                f"orders ({len(orphan_bot_orders)}). Cancelling them "
+                                "before starting the new session."
                             )
-                            self._cancel_known_managed_orders_from_ids(self.symbol, orphan_bot_orders)
-                            existing_orders = self.fetch_open_orders_safe(self.symbol, strict=True)
+                            self._cancel_known_managed_orders_from_ids(
+                                self.symbol,
+                                orphan_bot_orders,
+                            )
+                            existing_orders = self.fetch_open_orders_safe(
+                                self.symbol,
+                                strict=True,
+                            )
                             if existing_orders:
-                                raise RuntimeError("START BLOCKED: previous bot-managed orders could not be fully cancelled.")
-                            self.log("START CLEANUP VERIFIED: previous bot-managed orders removed; account is flat.")
+                                raise RuntimeError(
+                                    "START BLOCKED: previous bot-managed orders "
+                                    "could not be fully cancelled."
+                                )
+                            self.log(
+                                "START CLEANUP VERIFIED: previous bot-managed "
+                                "orders removed; account is flat."
+                            )
                         else:
                             raise RuntimeError(
-                                "START BLOCKED: existing position/open orders found on this symbol. "
-                                "Unknown/manual orders will never be adopted automatically. "
-                                "Cancel/clean them before starting a new session."
+                                "START BLOCKED: existing position/open orders found "
+                                "on this symbol. Unknown/manual orders will never "
+                                "be adopted automatically. Cancel/clean them "
+                                "before starting a new session."
                             )
 
             # Never change leverage on a resumed live position. Use the exchange
@@ -7960,7 +8755,7 @@ class UniversalFuturesBotGUI:
             }
             if signal_mode in preset_scores:
                 min_score = preset_scores[signal_mode]
-            elif signal_mode == "ADAPTIVE_SCORE":
+            elif signal_mode in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE"):
                 min_score = 1
             else:
                 min_score = int(self.e_min_score.get().strip())
@@ -7980,6 +8775,12 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Adaptive Edge must be between 0 and 1.")
             if adaptive_min_weight <= 0:
                 raise ValueError("Adaptive Min Weight must be greater than 0.")
+            evidence_min_families = int(self.e_evidence_min_families.get().strip())
+            evidence_family_min_score = float(self.e_evidence_family_min_score.get().strip())
+            if evidence_min_families < 1 or evidence_min_families > 4:
+                raise ValueError("Evidence Minimum Families must be between 1 and 4.")
+            if not 0.0 < evidence_family_min_score <= 1.0:
+                raise ValueError("Family Minimum Score must be greater than 0 and at most 1.")
 
             # Startup/configuration logging must not depend on _run_bot_logic()
             # locals, because those are parsed later in the worker thread.
@@ -8004,6 +8805,20 @@ class UniversalFuturesBotGUI:
                 f"SIGNAL MODE: {signal_mode} | "
                 f"Minimum Score={min_score}"
             )
+            self.log(
+                "DEFAULT PROFILE CONTRACT: "
+                f"Adaptive Edge={adaptive_edge:.2f} | MinWeight={adaptive_min_weight:.2f} | "
+                f"Evidence Families={evidence_min_families} | FamilyScore={evidence_family_min_score:.2f} | "
+                f"TrendReq={'ON' if self.v_evidence_require_trend.get() else 'OFF'} | "
+                f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
+                f"MTF={'ON' if self.v_use_mtf.get() else 'OFF'} | "
+                f"ADX={'ON' if self.v_use_adx.get() else 'OFF'} | "
+                f"Volume={'ON' if self.v_use_vol.get() else 'OFF'} | "
+                f"ATR={'ON' if self.v_use_atr.get() else 'OFF'} | "
+                f"Grid={self.v_grid_mode.get().strip().upper()} | "
+                f"Post-SL Lock={'ON' if self.v_require_opposite_after_exit.get() else 'OFF'} | "
+                f"No-Same-Candle={'ON' if self.v_no_same_candle.get() else 'OFF'}"
+            )
             if signal_mode == "SINGLE_SIGNAL":
                 self.log(
                     "SINGLE SIGNAL MODE: ONE enabled signal is enough; "
@@ -8013,6 +8828,14 @@ class UniversalFuturesBotGUI:
                 self.log(
                     f"ADAPTIVE SCORE: correlation-aware weights | Edge>={adaptive_edge:.2f} | "
                     f"MinWeight>={adaptive_min_weight:.2f} | VOL/ATR/ADX/MTF act as regime gates."
+                )
+            elif signal_mode == "ADAPTIVE_EVIDENCE":
+                self.log(
+                    f"ADAPTIVE EVIDENCE: MinFamilies={evidence_min_families} | "
+                    f"FamilyScore>={evidence_family_min_score:.2f} | "
+                    f"TrendReq={'ON' if self.v_evidence_require_trend.get() else 'OFF'} | "
+                    f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
+                    "REGIME ATR/ADX are gates only."
                 )
             self.log(
                 "REVERSAL HOLD: "
@@ -8618,8 +9441,20 @@ class UniversalFuturesBotGUI:
         mtf_pass_bear=True,
         adaptive_edge=None,
         adaptive_min_weight=None,
+        evidence_min_families=None,
+        evidence_family_min_score=None,
+        evidence_require_trend=None,
+        evidence_require_independent=None,
     ):
-        """Compatibility wrapper around the modular strategy engine."""
+        """Compatibility wrapper around the V8.4 evidence-family engine."""
+        if evidence_min_families is None:
+            evidence_min_families = int(self.e_evidence_min_families.get())
+        if evidence_family_min_score is None:
+            evidence_family_min_score = float(self.e_evidence_family_min_score.get())
+        if evidence_require_trend is None:
+            evidence_require_trend = bool(self.v_evidence_require_trend.get())
+        if evidence_require_independent is None:
+            evidence_require_independent = bool(self.v_evidence_require_independent.get())
         return StrategyEngine.decide_signal(
             directional_modules,
             signal_mode,
@@ -8631,6 +9466,10 @@ class UniversalFuturesBotGUI:
             mtf_pass_bear,
             adaptive_edge,
             adaptive_min_weight,
+            evidence_min_families,
+            evidence_family_min_score,
+            evidence_require_trend,
+            evidence_require_independent,
         )
 
     # -------------------- MAIN LOOP --------------------------
@@ -8922,8 +9761,8 @@ class UniversalFuturesBotGUI:
             if not 0.0 < adaptive_edge < 1.0 or adaptive_min_weight <= 0:
                 raise ValueError("Adaptive strategy settings are invalid.")
 
-            # Keep the selected adaptive values visible to the pure engine.
-            # The engine uses these values through temporary constants below.
+            # Adaptive thresholds are passed explicitly to the pure engine;
+            # no mutable StrategyEngine/class-level state is used.
             allowed_signal_modes = SUPPORTED_SIGNAL_MODES
 
             if signal_mode not in allowed_signal_modes:
@@ -9328,7 +10167,8 @@ class UniversalFuturesBotGUI:
                             df,
                             length=trendline_length,
                             min_pivot_distance=trendline_min_distance,
-                            breakout_buffer_pct=trendline_buffer,                            retest_candles=trendline_retest_candles,
+                            breakout_buffer_pct=trendline_buffer,
+                            retest_candles=trendline_retest_candles,
                         )
 
                     df["vol_ma"] = (
@@ -9968,23 +10808,13 @@ class UniversalFuturesBotGUI:
                     # Min is independent from the normal Strategy Signal Mode.
                     grid_directional_modules = list(directional_modules)
 
-                    if signal_mode == "ADAPTIVE_SCORE":
-                        grid_buy_score = sum(
-                            ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0)
-                            for name, bull, bear in grid_directional_modules if bull and not bear
-                        )
-                        grid_sell_score = sum(
-                            ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0)
-                            for name, bull, bear in grid_directional_modules if bear and not bull
-                        )
-                        grid_score_count = sum(
-                            ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0)
-                            for name, _, _ in grid_directional_modules
-                        )
-                    else:
-                        grid_buy_score = sum(1 for _, bull, _ in grid_directional_modules if bull)
-                        grid_sell_score = sum(1 for _, _, bear in grid_directional_modules if bear)
-                        grid_score_count = len(grid_directional_modules)
+                    grid_buy_score = sum(
+                        1 for _, bull, _ in grid_directional_modules if bull
+                    )
+                    grid_sell_score = sum(
+                        1 for _, _, bear in grid_directional_modules if bear
+                    )
+                    grid_score_count = len(grid_directional_modules)
 
                     # Centralized, pure signal decision. Adaptive thresholds
                     # are explicit per-call parameters, preventing cross-profile
@@ -10030,6 +10860,10 @@ class UniversalFuturesBotGUI:
                         atr_pass=atr_pass, vol_pass=vol_pass, adx_pass=adx_pass,
                         mtf_pass_bull=mtf_pass_bull, mtf_pass_bear=mtf_pass_bear,
                         adaptive_edge=adaptive_edge, adaptive_min_weight=adaptive_min_weight,
+                        evidence_min_families=evidence_min_families,
+                        evidence_family_min_score=evidence_family_min_score,
+                        evidence_require_trend=evidence_require_trend,
+                        evidence_require_independent=evidence_require_independent,
                     )
 
                     signal = "NONE"
@@ -10167,6 +11001,9 @@ class UniversalFuturesBotGUI:
                                 reason="PROTECTION/EXTERNAL CLOSE",
                                 balance=flat_balance,
                             )
+                        # Preserve the exact protection IDs in the recovery checkpoint
+                        # BEFORE clearing the live position state. This is what lets a later
+                        # NEW session safely identify stale bot-created SL/TP orders.
                         self._remember_managed_order_ids(
                             self._known_managed_order_ids(self.symbol)
                         )
