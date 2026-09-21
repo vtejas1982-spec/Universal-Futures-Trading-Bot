@@ -46,8 +46,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.0-FOREX-EVIDENCE-HARDENED"
-APP_TITLE = "Universal Forex Trading Bot V8.4.0 - MT5 Forex Evidence Hardened"
+APP_VERSION = "V8.4.1-FOREX-EVIDENCE-AUDITED"
+APP_TITLE = "Universal Forex Trading Bot V8.4.1 - MT5 Forex Evidence Audited"
+AUDIT_BUILD = "V8.4.1-ENGINE-AUDIT-2026-09-21-FOREX-R2"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -57,6 +58,7 @@ LOG_FILE = str(APP_DIR / "universal_trade_logs_fixed.csv")
 
 # V8.3.3 Forex-only strategy contract. No crypto/futures exchange is used.
 RUNTIME_SCHEMA_VERSION = 7
+CONFIG_SCHEMA_VERSION = 8
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
 ADAPTIVE_MODULE_WEIGHTS = {
     "ST":1.50,"EMA":1.00,"EMA_CROSS":1.25,"MACD":1.25,"RSI":1.00,"BB":0.75,"STOCH":0.75,
@@ -1193,11 +1195,14 @@ class StrategyEngine:
         count = len(modules)
 
         if signal_mode == "SINGLE_SIGNAL":
-            for _, bull, bear in modules:
-                if bool(bull) and not bool(bear):
-                    return True, False, buy_score, sell_score
-                if bool(bear) and not bool(bull):
-                    return False, True, buy_score, sell_score
+            # V8.2 contract: a single unambiguous direction is valid, but
+            # simultaneous BUY+SELL evidence is a conflict and must return NONE.
+            has_bull = any(bool(bull) and not bool(bear) for _, bull, bear in modules)
+            has_bear = any(bool(bear) and not bool(bull) for _, bull, bear in modules)
+            if has_bull and not has_bear:
+                return True, False, buy_score, sell_score
+            if has_bear and not has_bull:
+                return False, True, buy_score, sell_score
             return False, False, buy_score, sell_score
 
         if signal_mode == "ANY_NON_CONFLICTING":
@@ -1282,7 +1287,15 @@ class StrategyEngine:
             if sell > 0 and buy == 0: return "SELL_ANY_NON_CONFLICTING"
             return f"CONFLICTING_OR_NEUTRAL_B{buy}_S{sell}"
         if mode == "SINGLE_SIGNAL":
-            return "SINGLE_SIGNAL_MATCH" if any(bool(bull) != bool(bear) for _, bull, bear in modules) else "NO_UNAMBIGUOUS_SIGNAL"
+            has_bull = any(bool(bull) and not bool(bear) for _, bull, bear in modules)
+            has_bear = any(bool(bear) and not bool(bull) for _, bull, bear in modules)
+            if has_bull and has_bear:
+                return f"SINGLE_SIGNAL_CONFLICT_B{buy}_S{sell}"
+            if has_bull:
+                return "SINGLE_SIGNAL_MATCH_BUY"
+            if has_bear:
+                return "SINGLE_SIGNAL_MATCH_SELL"
+            return "NO_UNAMBIGUOUS_SIGNAL"
         if mode in ("2_SIGNALS", "3_SIGNALS", "4_SIGNALS"):
             required = {"2_SIGNALS": 2, "3_SIGNALS": 3, "4_SIGNALS": 4}[mode]
             if buy >= required and buy > sell: return f"BUY_{required}_CONFIRMATIONS"
@@ -1314,8 +1327,18 @@ class StrategyEngine:
             families, bull_families, bear_families, required = StrategyEngine.evidence_summary(modules, evidence_min_families, evidence_family_min_score)
             bt = sum(v["bull_ratio"] for v in families.values()); st = sum(v["bear_ratio"] for v in families.values()); total = bt + st; edge = abs(bt-st)/total if total else 0.0
             threshold = float(ADAPTIVE_DEFAULT_EDGE if adaptive_edge is None else adaptive_edge)
-            if len(bull_families) >= required and bt > st and edge >= threshold and atr_pass and adx_pass: return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
-            if len(bear_families) >= required and st > bt and edge >= threshold and atr_pass and adx_pass: return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
+            trend_required = bool(evidence_require_trend)
+            independent_required = bool(evidence_require_independent)
+            def _gates_ok(side_families):
+                if trend_required and "TREND" not in side_families:
+                    return False
+                if independent_required and not any(f in side_families for f in ("MOMENTUM", "FLOW", "STRUCTURE")):
+                    return False
+                return True
+            if len(bull_families) >= required and bt > st and edge >= threshold and atr_pass and adx_pass and _gates_ok(bull_families):
+                return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
+            if len(bear_families) >= required and st > bt and edge >= threshold and atr_pass and adx_pass and _gates_ok(bear_families):
+                return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
             return f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
         if mode == "STRICT_ALL_FILTERS":
             if buy == len(modules) and sell == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bull: return "STRICT_BUY_ALL_FILTERS_PASS"
@@ -2683,6 +2706,8 @@ class UniversalFuturesBotGUI:
 
     def save_settings(self):
         cfg = {
+            "config_schema_version": CONFIG_SCHEMA_VERSION,
+            "app_version": APP_VERSION,
             "exchange": self.v_exchange.get(),
             "api_key": self.e_api_key.get().strip(),
             "api_secret": self.e_api_secret.get().strip(),
@@ -2833,6 +2858,13 @@ class UniversalFuturesBotGUI:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
+
+            try:
+                loaded_schema = int(cfg.get("config_schema_version", 0))
+            except Exception:
+                loaded_schema = 0
+            if loaded_schema < CONFIG_SCHEMA_VERSION:
+                self.log(f"CONFIG MIGRATION: schema {loaded_schema} -> {CONFIG_SCHEMA_VERSION}; saved values preserved and missing V8.4.1 fields use current defaults.")
 
             self.v_exchange.set(
                 cfg.get("exchange", "bybit")
@@ -4928,12 +4960,154 @@ class UniversalFuturesBotGUI:
 
     # -------------------- START / STOP ----------------------
 
+    def _validate_strategy_preflight(self):
+        """Validate strategy/risk/protection configuration before MT5 startup.
+
+        Worker-side validation remains authoritative; this second gate prevents
+        invalid settings from reaching broker login or order setup.
+        """
+        def _f(widget, name, minimum=None, maximum=None, positive=False):
+            try:
+                value = float(widget.get().strip())
+            except Exception:
+                raise ValueError(f"{name} must be numeric.")
+            if positive and value <= 0:
+                raise ValueError(f"{name} must be greater than 0.")
+            if minimum is not None and value < minimum:
+                raise ValueError(f"{name} must be >= {minimum}.")
+            if maximum is not None and value > maximum:
+                raise ValueError(f"{name} must be <= {maximum}.")
+            return value
+
+        def _i(widget, name, minimum=1):
+            try:
+                value = int(widget.get().strip())
+            except Exception:
+                raise ValueError(f"{name} must be a whole number.")
+            if value < minimum:
+                raise ValueError(f"{name} must be >= {minimum}.")
+            return value
+
+        tf = self.v_tf.get().strip().lower()
+        if tf not in ("1m", "3m", "5m", "15m", "30m", "1h", "4h"):
+            raise ValueError(f"Unsupported MT5 timeframe: {tf}")
+        try:
+            if int(self.e_max_trades.get().strip()) < 0:
+                raise ValueError
+        except Exception:
+            raise ValueError("Max Trades must be a whole number >= 0.")
+        try:
+            if float(self.e_cooldown_min.get().strip()) < 0:
+                raise ValueError
+        except Exception:
+            raise ValueError("Cooldown must be numeric and >= 0.")
+
+        leverage = _i(self.e_lev, "Leverage", 1)
+        if leverage > 1000:
+            raise ValueError("Leverage is unreasonably high; maximum preflight value is 1000.")
+
+        # Validate all indicator fields so a later module toggle cannot reveal
+        # an invalid hidden value.
+        _i(self.e_st_len, "Supertrend ATR Period")
+        _f(self.e_st_mult, "Supertrend ATR Multiplier", positive=True)
+        if self.v_st_source.get().upper() not in ("CLOSE", "HL2"):
+            raise ValueError("Invalid Supertrend source.")
+        if self.v_st_entry_mode.get().upper() not in ("FRESH_FLIP", "CURRENT_TREND"):
+            raise ValueError("Invalid Supertrend entry mode.")
+        _i(self.e_ema_len, "EMA Period"); _i(self.e_ema_fast, "EMA Fast"); _i(self.e_ema_slow, "EMA Slow")
+        if self.v_ema_cross_entry_mode.get().upper() not in ("FRESH_CROSS", "CURRENT_TREND"):
+            raise ValueError("Invalid EMA Cross entry mode.")
+        _i(self.e_macd_fast, "MACD Fast"); _i(self.e_macd_slow, "MACD Slow"); _i(self.e_macd_signal, "MACD Signal")
+        _i(self.e_rsi_len, "RSI Period"); _f(self.e_rsi_ob, "RSI Overbought", 0, 100); _f(self.e_rsi_os, "RSI Oversold", 0, 100)
+        if float(self.e_rsi_os.get()) >= float(self.e_rsi_ob.get()):
+            raise ValueError("RSI Oversold must be below Overbought.")
+        _i(self.e_rsi_ma_len, "RSI MA Period"); _i(self.e_bb_len, "Bollinger Period"); _f(self.e_bb_std, "Bollinger StdDev", positive=True)
+        _i(self.e_stoch_k, "Stochastic K"); _i(self.e_stoch_smooth, "Stochastic Smooth"); _i(self.e_stoch_d, "Stochastic D")
+        _i(self.e_vwap_len, "VWAP Period"); _i(self.e_vwap_delta_smooth_len, "VWAP Delta Smooth Period"); _f(self.e_vwap_delta_baseline, "VWAP Delta Baseline", 0, 100)
+        _i(self.e_vidya_len, "VIDYA Length"); _i(self.e_vidya_momentum, "VIDYA Momentum"); _f(self.e_vidya_band, "VIDYA Band", positive=True)
+        _f(self.e_nwe_bandwidth, "NWE Bandwidth", positive=True); _f(self.e_nwe_mult, "NWE Multiplier", positive=True)
+        _f(self.e_atr_min_pct, "Minimum ATR %", 0, 100); _i(self.e_vol_len, "Volume MA Period"); _f(self.e_adx_thresh, "ADX Threshold", 0, 100)
+        _i(self.e_liq_len, "Liquidity Swing Pivot"); _f(self.e_liq_filter_value, "Liquidity Filter Value", 0)
+        _i(self.e_trend_len, "Trendline Pivot"); _i(self.e_trend_min_dist, "Trendline Min Distance"); _f(self.e_trend_buffer, "Trendline Buffer %", 0); _i(self.e_trend_retest, "Trendline Retest Candles")
+        _i(self.e_div_pivot, "Divergence Pivot"); _i(self.e_div_max_pivots, "Divergence Max Pivots"); _i(self.e_div_max_bars, "Divergence Max Bars", 30)
+        _i(self.e_div_cci, "Divergence CCI Length"); _i(self.e_div_mom, "Divergence Momentum Length"); _i(self.e_div_vwfast, "Divergence VWMACD Fast"); _i(self.e_div_vwslow, "Divergence VWMACD Slow"); _i(self.e_div_cmf, "Divergence CMF Length"); _i(self.e_div_mfi, "Divergence MFI Length")
+        _i(self.e_sr_vol_ma, "Volume S/R MA Period")
+
+        signal_mode = self.v_signal_mode.get().strip().upper()
+        if signal_mode not in SUPPORTED_SIGNAL_MODES:
+            raise ValueError(f"Unknown signal mode: {signal_mode}")
+        preset = {"SINGLE_SIGNAL": 1, "2_SIGNALS": 2, "3_SIGNALS": 3, "4_SIGNALS": 4}
+        if signal_mode in preset:
+            min_score = preset[signal_mode]
+        else:
+            min_score = _i(self.e_min_score, "Minimum Score")
+        if min_score < 1:
+            raise ValueError("Minimum Score must be >= 1.")
+        edge = _f(self.e_adaptive_edge, "Adaptive Edge", 0, 0.999999)
+        min_weight = _f(self.e_adaptive_min_weight, "Adaptive Minimum Weight", positive=True)
+        try:
+            evidence_min_families = int(self.e_evidence_min_families.get().strip())
+        except Exception:
+            raise ValueError("Minimum Families must be a whole number.")
+        if not 1 <= evidence_min_families <= 4:
+            raise ValueError("Minimum Families must be between 1 and 4.")
+        evidence_family_min_score = _f(self.e_evidence_family_min_score, "Family Minimum Score", 0.000001, 1.0)
+
+        size_mode = self.v_size_mode.get().strip().upper()
+        if size_mode not in ("EQUITY_RISK_%", "FIXED_QTY"):
+            raise ValueError(f"Unknown sizing mode: {size_mode}")
+        _f(self.e_risk_pct, "Risk Per Trade %", 0, 100)
+        fixed_qty = _f(self.e_fixed_qty, "Fixed Quantity", positive=True)
+        if size_mode == "FIXED_QTY" and fixed_qty <= 0:
+            raise ValueError("Fixed Quantity must be > 0.")
+        _f(self.e_max_dd, "Max Drawdown %", 0, 100)
+        _f(self.e_emergency_capital_pct, "Emergency Capital Loss %", 0, 99.999999)
+        if self.v_emergency_scope.get().upper() not in ("BOT_ONLY", "ALL_ACCOUNT"):
+            raise ValueError("Invalid emergency scope.")
+
+        sl_mode = self.v_sl_mode.get().strip().upper(); tp_mode = self.v_tp_mode.get().strip().upper()
+        if sl_mode not in ("PRICE_%", "ROI_%", "PIPS") or tp_mode not in ("PRICE_%", "ROI_%", "PIPS"):
+            raise ValueError(f"Invalid SL/TP mode: SL={sl_mode} TP={tp_mode}")
+        _f(self.e_sl_pct, "SL Target %", positive=True); _f(self.e_tp1_pct, "TP1 Target %", positive=True); _f(self.e_tp2_pct, "TP2 Target %", positive=True); _f(self.e_hold_sl_roi, "Hold-All-Reverse SL ROI %", positive=True)
+        tp_qty_mode = self.v_tp_qty_mode.get().strip().upper()
+        if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
+            raise ValueError(f"Invalid TP quantity mode: {tp_qty_mode}")
+        tp1_close = _f(self.e_tp1_close, "TP1 Close", positive=True); tp2_close = _f(self.e_tp2_close, "TP2 Close", positive=True)
+        if tp_qty_mode == "PERCENT_%" and abs((tp1_close + tp2_close) - 100.0) > 1e-9:
+            raise ValueError("TP1 Close + TP2 Close must equal 100%.")
+
+        if self.v_use_session.get():
+            sh, sm = _v2_time_hm(self.e_session_start.get(), (-1, -1)); eh, em = _v2_time_hm(self.e_session_end.get(), (-1, -1))
+            if sh < 0 or eh < 0: raise ValueError("Session start/end must use HH:MM.")
+        fh, fm = _v2_time_hm(self.e_friday_cutoff.get(), (-1, -1))
+        if fh < 0: raise ValueError("Friday cutoff must use HH:MM.")
+        if self.v_use_slippage.get(): _f(self.e_max_slippage_points, "Max Slippage Points", 0)
+        if self.v_use_spread_filter.get(): _f(self.e_max_spread_points, "Max Spread Points", 0)
+        if self.v_use_atr_sl.get(): _f(self.e_atr_sl_mult, "ATR SL Multiplier", positive=True)
+        if self.v_use_trailing.get():
+            _f(self.e_trail_activation, "Trailing Activation", positive=True); _f(self.e_trail_distance, "Trailing Distance", positive=True)
+        if self.v_use_news.get(): _i(self.e_news_minutes, "News Filter Minutes", 1)
+        if self.v_use_correlation.get():
+            _f(self.e_corr_threshold, "Correlation Threshold", 0, 1)
+            if not self.e_corr_symbols.get().strip(): raise ValueError("Correlation symbols cannot be empty.")
+        if self.v_scanner.get() and not self.e_scan_symbols.get().strip():
+            raise ValueError("Scanner symbols cannot be empty when scanner is enabled.")
+
+        return {"signal_mode": signal_mode, "min_score": min_score, "adaptive_edge": edge, "adaptive_min_weight": min_weight, "evidence_min_families": evidence_min_families, "evidence_family_min_score": evidence_family_min_score}
+
     def start_bot(self):
         if self.is_running:
             return
 
         try:
             self.save_settings()
+            preflight = self._validate_strategy_preflight()
+            self.log(
+                "STRATEGY PREFLIGHT PASS: "
+                f"Mode={preflight['signal_mode']} | MinScore={preflight['min_score']} | "
+                f"EvidenceFamilies={preflight['evidence_min_families']} | "
+                f"FamilyMin={preflight['evidence_family_min_score']:.2f}"
+            )
 
             exchange_id = (
                 self.v_exchange.get()
@@ -5862,14 +6036,7 @@ class UniversalFuturesBotGUI:
             else:
                 min_score = int(self.e_min_score.get().strip())
 
-            allowed_signal_modes = (
-                "STRICT_ALL_FILTERS",
-                "SINGLE_SIGNAL",
-                "2_SIGNALS",
-                "3_SIGNALS",
-                "4_SIGNALS",
-                "SCORE",
-            )
+            allowed_signal_modes = SUPPORTED_SIGNAL_MODES
 
             if signal_mode not in allowed_signal_modes:
                 raise ValueError(
@@ -8523,7 +8690,14 @@ def fx_start_bot(self):
     if self.is_running:
         return
     try:
+        preflight = self._validate_strategy_preflight()
         self.save_settings()
+        self.log(
+            "STRATEGY PREFLIGHT PASS: "
+            f"Mode={preflight['signal_mode']} | MinScore={preflight['min_score']} | "
+            f"EvidenceFamilies={preflight['evidence_min_families']} | "
+            f"FamilyMin={preflight['evidence_family_min_score']:.2f}"
+        )
         if mt5 is None:
             raise RuntimeError("MetaTrader5 is not installed. Run: py -m pip install MetaTrader5")
         exchange_id = "mt5_forex"
