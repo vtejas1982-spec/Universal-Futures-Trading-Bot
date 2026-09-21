@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np, pandas as pd
 
 ROOT=Path(__file__).resolve().parents[1]
-LIVE=ROOT/"UniversalFuturesBot_UniversalFuturesBot_CRYPTO.py"
-BT=ROOT/"UniversalFuturesBot_V8_4_2_CRYPTO_BACKTESTER_EVIDENCE_R5.py"
+LIVE=ROOT/"UniversalFuturesBot_CRYPTO.py"
+BT=ROOT/"UniversalFuturesBot_CRYPTO_BACKTESTER.py"
 
 def load(path,name):
     try:
