@@ -46,9 +46,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.1-FOREX-EVIDENCE-AUDITED"
-APP_TITLE = "Universal Forex Trading Bot V8.4.1 - MT5 Forex Evidence Audited"
-AUDIT_BUILD = "V8.4.1-ENGINE-AUDIT-2026-09-21-FOREX-R2"
+APP_VERSION = "V8.4.2-FOREX-EVIDENCE-HARDENED-R5"
+APP_TITLE = "Universal Forex Trading Bot V8.4.2 - MT5 Forex Evidence Hardened R5"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-21-FOREX-R5"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -58,7 +58,7 @@ LOG_FILE = str(APP_DIR / "universal_trade_logs_fixed.csv")
 
 # V8.3.3 Forex-only strategy contract. No crypto/futures exchange is used.
 RUNTIME_SCHEMA_VERSION = 7
-CONFIG_SCHEMA_VERSION = 8
+CONFIG_SCHEMA_VERSION = 9
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
 ADAPTIVE_MODULE_WEIGHTS = {
     "ST":1.50,"EMA":1.00,"EMA_CROSS":1.25,"MACD":1.25,"RSI":1.00,"BB":0.75,"STOCH":0.75,
@@ -70,6 +70,7 @@ ADAPTIVE_DEFAULT_MIN_WEIGHT = 3.50
 DEFAULT_SIGNAL_MODE = "ADAPTIVE_EVIDENCE"
 DEFAULT_ADAPTIVE_EDGE = "0.18"
 DEFAULT_ADAPTIVE_MIN_WEIGHT = "3.5"
+DEFAULT_ADX_LEN = 14
 DIVERGENCE_INDICATORS = ("MACD","MACD_HIST","RSI","STOCH","CCI","MOMENTUM","OBV","VWMACD","CMF","MFI")
 MAX_DATA_STALENESS_MULTIPLIER = 3
 RUNTIME_STATE_FILE = str(APP_DIR / "forex_runtime_state_v834.json")
@@ -1339,7 +1340,18 @@ class StrategyEngine:
                 return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
             if len(bear_families) >= required and st > bt and edge >= threshold and atr_pass and adx_pass and _gates_ok(bear_families):
                 return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
-            return f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
+            dominant = "BUY" if bt > st else "SELL" if st > bt else "NONE"
+            active = bull_families if dominant == "BUY" else bear_families if dominant == "SELL" else []
+            blockers = []
+            if len(active) < required: blockers.append(f"FAMILIES_{len(active)}/{required}")
+            if edge < threshold: blockers.append(f"EDGE_{edge:.2f}<{threshold:.2f}")
+            if trend_required and dominant != "NONE" and "TREND" not in active: blockers.append("TREND_REQUIRED")
+            if independent_required and dominant != "NONE" and not any(f in active for f in ("MOMENTUM","FLOW","STRUCTURE")): blockers.append("INDEPENDENT_REQUIRED")
+            if not atr_pass: blockers.append("ATR_GATE")
+            if not adx_pass: blockers.append("ADX_GATE")
+            return (f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
+                    f"|SIDE={dominant}|BLOCK={','.join(blockers) if blockers else 'CONFLICT_OR_NEUTRAL'}"
+                    f"|ATR={'PASS' if atr_pass else 'FAIL'}|ADX={'PASS' if adx_pass else 'FAIL'}")
         if mode == "STRICT_ALL_FILTERS":
             if buy == len(modules) and sell == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bull: return "STRICT_BUY_ALL_FILTERS_PASS"
             if sell == len(modules) and buy == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bear: return "STRICT_SELL_ALL_FILTERS_PASS"
@@ -2328,7 +2340,8 @@ class UniversalFuturesBotGUI:
         _entry(fr, "Minimum ATR %", "e_atr_min_pct", "0.30", 0, 2)
         _check(fr, "ADX", "v_use_adx", True, 0, 4)
         _entry(fr, "ADX Threshold", "e_adx_thresh", "20", 0, 6)
-        tk.Label(fr, text="ATR + ADX validate market regime; they are not directional confirmation votes in ADAPTIVE_EVIDENCE.", fg="#555555").grid(row=1,column=0,columnspan=8,sticky="w")
+        _entry(fr, "ADX Period", "e_adx_len", str(DEFAULT_ADX_LEN), 1, 4)
+        tk.Label(fr, text="ATR + ADX validate market regime; they are not directional confirmation votes in ADAPTIVE_EVIDENCE.", fg="#555555").grid(row=2,column=0,columnspan=8,sticky="w")
 
         # ---------------- OPTIONAL LEGACY ----------------
         fr = _family("OPTIONAL / LEGACY MODULE — preserved for backward compatibility")
@@ -2786,6 +2799,7 @@ class UniversalFuturesBotGUI:
             "vol_len": self.e_vol_len.get().strip(),
 
             "use_adx": self.v_use_adx.get(),
+            "adx_len": self.e_adx_len.get().strip(),
             "adx_thresh": self.e_adx_thresh.get().strip(),
 
             "use_mtf": self.v_use_mtf.get(),
@@ -3257,6 +3271,8 @@ class UniversalFuturesBotGUI:
                     "20",
                 ),
             )
+            self.e_adx_len.delete(0, tk.END)
+            self.e_adx_len.insert(0, cfg.get("adx_len", DEFAULT_ADX_LEN))
 
             self.v_use_mtf.set(
                 cfg.get(
@@ -6308,7 +6324,7 @@ class UniversalFuturesBotGUI:
                     # the optional 4H MTF confirmation, which always uses
                     # completed 4H candles. 45m is synthesized from 15m data.
 
-                    df = calculate_adx(df)
+                    df = calculate_adx(df, adx_len)
 
                     df["ema"] = (
                         df["close"].ewm(
@@ -6991,7 +7007,10 @@ class UniversalFuturesBotGUI:
                         f"VIDYA={'ON' if use_vidya else 'OFF'}"
                         f"({vidya_state}) "
                         f"ATR={'ON' if use_atr else 'OFF'} "
-                        f"ATR%={atr_pct:.3f} | "
+                        f"ATR%={atr_pct:.3f} "
+                        f"ADX={'ON' if use_adx else 'OFF'} "
+                        f"ADX={float(df['adx'].iloc[-2]):.2f} "
+                        f"ADXGate={'PASS' if adx_pass else 'FAIL'} | "
                         f"Position={pos_type} "
                         f"Qty={pos_qty}"
                     )
@@ -9564,7 +9583,7 @@ AUDIT_BUILD="V8.4.2-ENGINE-AUDIT-2026-09-21-FOREX-R5"
 CONFIG_SCHEMA_VERSION=9
 DEFAULT_MAX_OPEN_TRADES=1
 DEFAULT_ATR_SL_MULTIPLIER=1.5
-DEFAULT_ATR_TP1_MULTIPLIER=1.2
+DEFAULT_ATR_TP1_MULTIPLIER=1.3
 DEFAULT_ATR_TP2_MULTIPLIER=2.2
 
 def _f(self,name,default):
@@ -9594,7 +9613,7 @@ def _add_controls(self):
     tk.Label(f,text="ATR SL ×:").grid(row=1,column=0,sticky="w")
     self.e_atr_sl_r5=tk.Entry(f,width=7); self.e_atr_sl_r5.insert(0,"1.5"); self.e_atr_sl_r5.grid(row=1,column=1)
     tk.Label(f,text="TP1 × SL:").grid(row=1,column=2,sticky="e")
-    self.e_atr_tp1_mult=tk.Entry(f,width=7); self.e_atr_tp1_mult.insert(0,"1.2"); self.e_atr_tp1_mult.grid(row=1,column=3)
+    self.e_atr_tp1_mult=tk.Entry(f,width=7); self.e_atr_tp1_mult.insert(0,"1.3"); self.e_atr_tp1_mult.grid(row=1,column=3)
     tk.Label(f,text="TP2 × SL:").grid(row=1,column=4,sticky="e")
     self.e_atr_tp2_mult=tk.Entry(f,width=7); self.e_atr_tp2_mult.insert(0,"2.2"); self.e_atr_tp2_mult.grid(row=1,column=5)
     tk.Label(f,text="Completed-candle ATR • actual filled entry/quantity • Price % + ROI %",fg="#444").grid(row=2,column=0,columnspan=6,sticky="w")
@@ -9605,8 +9624,11 @@ def _new_profile_defaults(self):
     for name,value in vals.items():
         if hasattr(self,name):
             w=getattr(self,name); w.delete(0,tk.END); w.insert(0,value)
-    for name,value in {"v_use_ema_cross":True,"v_use_macd":True,"v_use_rsi":True,"v_use_stoch":True,"v_use_vwap":True,"v_use_vwap_delta":True,"v_vwap_delta_smooth":True,"v_use_vol":True,"v_use_vol_sr":True,"v_use_mtf":True,"v_use_liq_swing":True,"v_use_trendline":True,"v_use_divergence":True,"v_evidence_require_trend":True,"v_evidence_require_independent":True,"v_hold_until_all_reverse":False,"v_use_atr_sl":True}.items():
+    for name,value in {"v_use_ema_cross":True,"v_use_macd":True,"v_use_rsi":True,"v_use_stoch":True,"v_use_vwap":True,"v_use_vwap_delta":True,"v_vwap_delta_smooth":True,"v_use_vol":True,"v_use_vol_sr":True,"v_use_mtf":True,"v_use_liq_swing":True,"v_use_trendline":True,"v_use_divergence":True,"v_evidence_require_trend":True,"v_evidence_require_independent":True,"v_hold_until_all_reverse":False,"v_use_atr_sl":True,"v_use_atr":True,"v_use_news":True,"v_use_correlation":True,"v_use_session":True,"v_use_daily_loss":True}.items():
         if hasattr(self,name): getattr(self,name).set(value)
+    for name,value in {"e_risk_pct":"0.50","e_max_dd":"5.0","e_daily_loss_pct":"2.0","e_news_minutes":"30","e_corr_threshold":"0.85","e_atr_sl_r5":"1.5","e_atr_tp1_mult":"1.30","e_atr_tp2_mult":"2.20","e_atr_sl_mult":"1.5"}.items():
+        if hasattr(self,name):
+            w=getattr(self,name); w.delete(0,tk.END); w.insert(0,value)
     if hasattr(self,"v_signal_mode"): self.v_signal_mode.set("ADAPTIVE_EVIDENCE")
     if hasattr(self,"v_st_entry_mode"): self.v_st_entry_mode.set("CURRENT_TREND")
     if hasattr(self,"v_ema_cross_entry_mode"): self.v_ema_cross_entry_mode.set("CURRENT_TREND")
@@ -9624,7 +9646,7 @@ def r5_init(self,root):
         with open(CONFIG_FILE,encoding="utf-8") as f:c=json.load(f)
         self.e_max_open_trades.delete(0,tk.END); self.e_max_open_trades.insert(0,c.get("max_open_trades",1))
         self.e_atr_sl_r5.delete(0,tk.END); self.e_atr_sl_r5.insert(0,c.get("atr_sl_mult",1.5))
-        self.e_atr_tp1_mult.delete(0,tk.END); self.e_atr_tp1_mult.insert(0,c.get("atr_tp1_mult",1.2))
+        self.e_atr_tp1_mult.delete(0,tk.END); self.e_atr_tp1_mult.insert(0,c.get("atr_tp1_mult",1.3))
         self.e_atr_tp2_mult.delete(0,tk.END); self.e_atr_tp2_mult.insert(0,c.get("atr_tp2_mult",2.2))
     except:pass
 
@@ -9662,7 +9684,7 @@ def r5_pre(self):
 def r5_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev,**kw):
     dynamic=bool(self.v_use_atr_sl.get()) and not bool(self.v_hold_until_all_reverse.get())
     if not dynamic:return _orig_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev)
-    atr=get_completed_atr(self,symbol); sm=_f(self,"e_atr_sl_r5",1.5); m1=_f(self,"e_atr_tp1_mult",1.2); m2=_f(self,"e_atr_tp2_mult",2.2)
+    atr=get_completed_atr(self,symbol); sm=_f(self,"e_atr_sl_r5",1.5); m1=_f(self,"e_atr_tp1_mult",1.3); m2=_f(self,"e_atr_tp2_mult",2.2)
     sd=atr*sm; d1=sd*m1; d2=sd*m2
     if side=="LONG":sl,tp1,tp2=entry-sd,entry+d1,entry+d2
     else:sl,tp1,tp2=entry+sd,entry-d1,entry-d2
