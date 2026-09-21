@@ -1678,6 +1678,4016 @@ class StrategyEngine:
         return f"UNKNOWN_SIGNAL_MODE_{mode}"
 
 
+class UniversalFuturesBotGUI:
+
+    def __init__(self, root):
+        self.root = root
+        self.root.title(APP_TITLE)
+
+        # Responsive Windows sizing:
+        # Do not force a 1500x950 window because many PCs use 1366x768,
+        # 1440x900, or Windows DPI scaling.  Size the app to the available
+        # screen and leave enough room for the controls + execution log.
+        try:
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            win_w = min(1500, max(900, screen_w - 20))
+            win_h = min(900, max(620, screen_h - 40))
+            pos_x = max(0, (screen_w - win_w) // 2)
+            pos_y = max(0, (screen_h - win_h) // 2)
+            self.root.geometry(f"{win_w}x{win_h}+{pos_x}+{pos_y}")
+        except Exception:
+            self.root.geometry("1280x720")
+
+        self.root.minsize(900, 620)
+
+        self.is_running = False
+        self.bot_thread = None
+
+        # Execution log is configured to auto-follow the newest message.
+        self.log_autoscroll = True
+
+        self.exchange = None
+        self.exchange_id = None
+        self.symbol = None
+
+        self.total_trades = 0          # completed trades
+        self.opened_trades = 0
+        self.winning_trades = 0
+        self.losing_trades = 0
+        self.net_pnl = 0.0
+        self.start_balance = 0.0
+        self.trade_pnls = []
+        self.active_trade = None
+        self.session_started_at = None
+        self.session_max_trades = 0
+
+        self.last_protected_position = None
+        self.tp1_be_enabled = True
+        self.tp1_be_done = False
+        # Exchange-side protection reconciliation.  A position must never
+        # remain live if its protective SL disappears from open orders.
+        self.last_protection_reconcile = 0.0
+        self.protection_reconcile_interval = 10.0
+        self.last_entry_candle_ts = None
+        self.last_flat_time = 0.0
+        # After a stop-loss / break-even stop exit, optionally require the
+        # strategy to produce a valid opposite signal before allowing a
+        # same-direction re-entry. This is independent of the in-position
+        # reversal-hold rule and is signal-mode aware (1/2/3/4/SCORE).
+        self.v_require_opposite_after_exit = None
+        self.reentry_direction_lock = None
+        self.reentry_lock_reason = ""
+        # Optional Hold-All-Reverse SL behavior:
+        # when enabled, the configured ROI threshold is NOT an exchange hard
+        # stop.  Once the threshold is reached, the bot waits for ALL active
+        # directional modules to reverse, then exits by strategy reversal.
+        self.hold_sl_wait_reversal = False
+        self.hold_sl_threshold_hit = False
+        self.hold_sl_threshold_logged = False
+        # ---------------- V2 risk/execution state ----------------
+        self.v2_day_key = None
+        self.v2_day_start_equity = 0.0
+        self.v2_loss_streak = 0
+        self.v2_guard_lock = threading.RLock()
+        self.runtime_state_file = RUNTIME_STATE_FILE
+        self.profile_lock_file = PROFILE_LOCK_FILE
+        self.profile_lock_fd = None
+        self.v2_watchdog_thread = None
+        self.v2_watchdog_running = False
+        self.v2_last_news_check = 0.0
+        self.v2_news_cache = []
+        self.v2_last_scan = 0.0
+        self.v2_trailing_last_log = 0.0
+
+        self._init_csv_log()
+        self._build_ui()
+        self.update_estimated_window()
+        self.load_settings()
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # -------------------- LOGGING ----------------------------
+
+    def _init_csv_log(self):
+        if not os.path.exists(LOG_FILE):
+            df = pd.DataFrame(
+                columns=[
+                    "Timestamp",
+                    "Exchange",
+                    "Symbol",
+                    "Side",
+                    "ActualEntry",
+                    "Qty",
+                    "SL",
+                    "TP1",
+                    "TP2",
+                    "Notes",
+                ]
+            )
+            df.to_csv(LOG_FILE, index=False)
+
+    def log_trade_csv(
+        self,
+        timestamp,
+        exchange,
+        symbol,
+        side,
+        actual_entry,
+        qty,
+        sl,
+        tp1,
+        tp2,
+        notes,
+    ):
+        row = pd.DataFrame(
+            [[
+                timestamp,
+                exchange,
+                symbol,
+                side,
+                actual_entry,
+                qty,
+                sl,
+                tp1,
+                tp2,
+                notes,
+            ]],
+            columns=[
+                "Timestamp",
+                "Exchange",
+                "Symbol",
+                "Side",
+                "ActualEntry",
+                "Qty",
+                "SL",
+                "TP1",
+                "TP2",
+                "Notes",
+            ],
+        )
+        row.to_csv(LOG_FILE, mode="a", header=False, index=False)
+
+    def _scroll_log_to_bottom(self):
+        """Keep the Execution Log pinned to its newest line."""
+        try:
+            self.log_box.update_idletasks()
+            self.log_box.see(tk.END)
+            self.log_box.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def log(self, msg):
+        def write():
+            try:
+                timestamp = time.strftime("[%H:%M:%S]")
+                self.log_box.insert(tk.END, f"{timestamp} {msg}\n")
+
+                if self.log_autoscroll:
+                    # Scroll after Tk processes the insertion/layout.
+                    self.root.after_idle(self._scroll_log_to_bottom)
+                    self.root.after(30, self._scroll_log_to_bottom)
+            except Exception:
+                pass
+
+        try:
+            self.root.after(0, write)
+        except Exception:
+            pass
+
+
+    def send_telegram(self, msg):
+        if not self.v_tele_enable.get():
+            return
+
+        token = self.e_tele_token.get().strip()
+        chat_id = self.e_tele_chat.get().strip()
+
+        if not token or not chat_id:
+            return
+
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": msg},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    # -------------------- UI ---------------------------------
+
+    def _build_ui(self):
+        title = tk.Label(
+            self.root,
+            text="Universal Forex Trading Bot V2 - MT5",
+            font=("Arial", 16, "bold"),
+        )
+        title.pack(pady=5)
+
+        # Main two-column layout: controls on the left, Execution Log on the right.
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(fill="both", expand=True, padx=8, pady=4)
+
+        left_frame = tk.Frame(main_frame)
+        right_frame = tk.LabelFrame(
+            main_frame, text=" Execution Log ", width=320
+        )
+
+        # Execution Log is ALWAYS BELOW the controls.
+        # This preserves the original layout and gives the settings their
+        # full available width on every Windows screen size.
+        left_frame.pack(side="top", fill="both", expand=True)
+        right_frame.configure(height=190)
+        right_frame.pack(side="bottom", fill="x", padx=(0, 0), pady=(6, 0))
+        right_frame.pack_propagate(False)
+
+        canvas = tk.Canvas(left_frame)
+        scrollbar = ttk.Scrollbar(
+            left_frame, orient="vertical", command=canvas.yview
+        )
+        self.scroll_frame = ttk.Frame(canvas)
+        self.scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Let the controls use the available left-panel width rather than
+        # inheriting an oversized fixed canvas width.
+        def _fit_scroll_width(_event=None):
+            try:
+                canvas.itemconfigure("all", width=max(1, canvas.winfo_width()))
+            except Exception:
+                pass
+
+        canvas.bind("<Configure>", _fit_scroll_width)
+
+        # Right-side Execution Log.
+        log_text_frame = tk.Frame(right_frame)
+        log_text_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.log_box = tk.Text(
+            log_text_frame, height=18, bg="#111111", fg="#00ff66",
+            font=("Consolas", 9), wrap="none"
+        )
+        self.log_scrollbar = ttk.Scrollbar(
+            log_text_frame, orient="vertical", command=self.log_box.yview
+        )
+        self.log_box.configure(yscrollcommand=self.log_scrollbar.set)
+        self.log_box.pack(side="left", fill="both", expand=True)
+        self.log_scrollbar.pack(side="right", fill="y")
+        self.log_box.bind(
+            "<Configure>",
+            lambda _event: self.root.after_idle(self._scroll_log_to_bottom),
+        )
+
+        # 1. MT5 / Forex Connection
+        f_api = tk.LabelFrame(
+            self.scroll_frame,
+            text=" 1. MT5 Forex Connection ",
+        )
+        f_api.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(f_api, text="Platform:").grid(row=0, column=0, sticky="w")
+        self.v_exchange = tk.StringVar(value="mt5_forex")
+        ttk.OptionMenu(
+            f_api, self.v_exchange, "mt5_forex", "mt5_forex"
+        ).grid(row=0, column=1, padx=5, pady=2, sticky="w")
+
+        tk.Label(f_api, text="MT5 Login:").grid(row=1, column=0, sticky="w")
+        self.e_api_key = tk.Entry(f_api, width=22)
+        self.e_api_key.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+
+        tk.Label(f_api, text="MT5 Password:").grid(row=1, column=2, sticky="w")
+        self.e_api_secret = tk.Entry(f_api, width=28, show="*")
+        self.e_api_secret.grid(row=1, column=3, padx=5, pady=2, sticky="w")
+
+        tk.Label(f_api, text="Server:").grid(row=2, column=0, sticky="w")
+        self.e_mt5_server = tk.Entry(f_api, width=40)
+        self.e_mt5_server.grid(row=2, column=1, columnspan=2, padx=5, pady=2, sticky="w")
+
+        tk.Label(f_api, text="Account Mode:").grid(row=3, column=0, sticky="w")
+        self.v_account_mode = tk.StringVar(value="MT5_PAPER")
+        ttk.OptionMenu(
+            f_api, self.v_account_mode, "MT5_PAPER",
+            "MT5_PAPER", "MT5_TERMINAL", "MT5_LIVE"
+        ).grid(row=3, column=1, padx=5, pady=2, sticky="w")
+
+        tk.Label(
+            f_api,
+            text=(
+                "MT5_PAPER = no broker order | MT5_TERMINAL = use already logged-in terminal | "
+                "MT5_LIVE = explicit broker login.  REAL orders are never sent in PAPER mode."
+            ),
+            fg="#555555",
+        ).grid(row=4, column=0, columnspan=6, sticky="w")
+
+        # 2. Market
+        f_market = tk.LabelFrame(
+            self.scroll_frame,
+            text=" 2. Market Config ",
+        )
+        f_market.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(
+            f_market,
+            text="Symbol:",
+        ).grid(row=0, column=0, sticky="w")
+
+        self.e_symbol = tk.Entry(
+            f_market,
+            width=15,
+        )
+        self.e_symbol.insert(0, "EURUSD")
+        self.e_symbol.grid(row=0, column=1, padx=5)
+
+        tk.Label(
+            f_market,
+            text="Timeframe:",
+        ).grid(row=0, column=2, sticky="w")
+
+        self.v_tf = tk.StringVar(value="15m")
+        ttk.OptionMenu(
+            f_market,
+            self.v_tf,
+            "15m",
+            "1m",
+            "3m",
+            "5m",
+            "15m",
+            "30m",
+            "45m",
+            "1h",
+            "4h",
+        ).grid(row=0, column=3, padx=5)
+
+        tk.Label(
+            f_market,
+            text="Reference Leverage:",
+        ).grid(row=0, column=4, sticky="w")
+
+        self.e_lev = tk.Entry(
+            f_market,
+            width=7,
+        )
+        self.e_lev.insert(0, "30")
+        self.e_lev.grid(row=0, column=5, padx=5)
+        tk.Label(f_market, text="Paper Start Balance:").grid(row=0, column=6, sticky="e")
+        self.e_paper_balance = tk.Entry(f_market, width=10)
+        self.e_paper_balance.insert(0, "1000")
+        self.e_paper_balance.grid(row=0, column=7, padx=5, sticky="w")
+        tk.Label(f_market, text="USD account / lot sizing test", fg="#444444").grid(row=1, column=6, columnspan=2, sticky="w")
+
+        tk.Label(f_market, text="Max Trades:").grid(row=1, column=0, sticky="w")
+        self.e_max_trades = tk.Entry(f_market, width=8)
+        self.e_max_trades.insert(0, "10")
+        self.e_max_trades.grid(row=1, column=1, padx=5, sticky="w")
+        tk.Label(f_market, text="0 = Unlimited").grid(row=1, column=2, sticky="w")
+        tk.Label(f_market, text="Estimated Window:").grid(row=1, column=3, sticky="e")
+        self.lbl_est_time = tk.Label(f_market, text="10 min", font=("Arial", 9, "bold"))
+        self.lbl_est_time.grid(row=1, column=4, columnspan=2, padx=5, sticky="w")
+        self.v_no_same_candle = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_market, text="Safety: No Re-Entry Same Candle", variable=self.v_no_same_candle).grid(row=2, column=0, columnspan=3, sticky="w")
+        tk.Label(f_market, text="Prevents instant re-entry after SL/TP/reversal.", fg="#444444").grid(row=2, column=3, columnspan=3, sticky="w")
+        self.v_use_spread_filter = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            f_market, text="Forex Spread Filter", variable=self.v_use_spread_filter
+        ).grid(row=3, column=3, sticky="w")
+        tk.Label(f_market, text="Max Spread (points):").grid(row=3, column=4, sticky="e")
+        self.e_max_spread_points = tk.Entry(f_market, width=8)
+        self.e_max_spread_points.insert(0, "30")
+        self.e_max_spread_points.grid(row=3, column=5, padx=5, sticky="w")
+
+        tk.Label(f_market, text="Cooldown (min):").grid(row=4, column=0, sticky="w")
+        self.e_cooldown_min = tk.Entry(f_market, width=6)
+        self.e_cooldown_min.insert(0, "0")
+        self.e_cooldown_min.grid(row=3, column=1, padx=5, sticky="w")
+        tk.Label(f_market, text="0 = OFF", fg="#444444").grid(row=3, column=2, sticky="w")
+        self.v_require_opposite_after_exit = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            f_market,
+            text="Safety: After SL, Require Opposite Signal",
+            variable=self.v_require_opposite_after_exit,
+        ).grid(row=5, column=0, columnspan=3, sticky="w")
+        tk.Label(
+            f_market,
+            text="After SL/BE stop, block same-direction re-entry until a valid opposite signal appears.",
+            fg="#444444",
+        ).grid(row=5, column=3, columnspan=4, sticky="w")
+
+        self.e_max_trades.bind("<KeyRelease>", lambda _e: self.update_estimated_window())
+        self.v_tf.trace_add("write", lambda *_args: self.update_estimated_window())
+
+        # 3. Forex Execution, Session & Risk Guardrails (V2)
+        f_v2 = tk.LabelFrame(
+            self.scroll_frame,
+            text=" 3. Forex V2 Execution, Session & Risk Guardrails ",
+        )
+        f_v2.pack(fill="x", padx=10, pady=5)
+
+        self.v_auto_symbol = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="Broker Symbol Auto-Discovery", variable=self.v_auto_symbol).grid(row=0, column=0, sticky="w")
+        tk.Label(f_v2, text="MT5 will resolve EURUSD / broker suffixes automatically.", fg="#444444").grid(row=0, column=1, columnspan=5, sticky="w")
+
+        self.v_use_slippage = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="Slippage Protection", variable=self.v_use_slippage).grid(row=1, column=0, sticky="w")
+        tk.Label(f_v2, text="Max Slippage (points):").grid(row=1, column=1, sticky="e")
+        self.e_max_slippage_points = tk.Entry(f_v2, width=7)
+        self.e_max_slippage_points.insert(0, "20")
+        self.e_max_slippage_points.grid(row=1, column=2, padx=3, sticky="w")
+
+        self.v_use_session = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="Trading Session Filter (UTC)", variable=self.v_use_session).grid(row=2, column=0, sticky="w")
+        tk.Label(f_v2, text="Start:").grid(row=2, column=1, sticky="e")
+        self.e_session_start = tk.Entry(f_v2, width=7)
+        self.e_session_start.insert(0, "07:00")
+        self.e_session_start.grid(row=2, column=2, padx=3, sticky="w")
+        tk.Label(f_v2, text="End:").grid(row=2, column=3, sticky="e")
+        self.e_session_end = tk.Entry(f_v2, width=7)
+        self.e_session_end.insert(0, "20:00")
+        self.e_session_end.grid(row=2, column=4, padx=3, sticky="w")
+
+        self.v_friday_protect = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="Friday Protection", variable=self.v_friday_protect).grid(row=3, column=0, sticky="w")
+        tk.Label(f_v2, text="Stop new entries after UTC:").grid(row=3, column=1, sticky="e")
+        self.e_friday_cutoff = tk.Entry(f_v2, width=7)
+        self.e_friday_cutoff.insert(0, "18:00")
+        self.e_friday_cutoff.grid(row=3, column=2, padx=3, sticky="w")
+
+        self.v_use_daily_loss = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="Daily Loss Limit", variable=self.v_use_daily_loss).grid(row=4, column=0, sticky="w")
+        tk.Label(f_v2, text="Max Daily Loss %:").grid(row=4, column=1, sticky="e")
+        self.e_daily_loss_pct = tk.Entry(f_v2, width=7)
+        self.e_daily_loss_pct.insert(0, "3.0")
+        self.e_daily_loss_pct.grid(row=4, column=2, padx=3, sticky="w")
+
+        self.v_use_daily_profit = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="Daily Profit Lock", variable=self.v_use_daily_profit).grid(row=4, column=3, sticky="w")
+        tk.Label(f_v2, text="Target %:").grid(row=4, column=4, sticky="e")
+        self.e_daily_profit_pct = tk.Entry(f_v2, width=7)
+        self.e_daily_profit_pct.insert(0, "5.0")
+        self.e_daily_profit_pct.grid(row=4, column=5, padx=3, sticky="w")
+
+        self.v_use_loss_streak = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="Consecutive-Loss Protection", variable=self.v_use_loss_streak).grid(row=5, column=0, sticky="w")
+        tk.Label(f_v2, text="Max consecutive losses:").grid(row=5, column=1, sticky="e")
+        self.e_max_loss_streak = tk.Entry(f_v2, width=7)
+        self.e_max_loss_streak.insert(0, "3")
+        self.e_max_loss_streak.grid(row=5, column=2, padx=3, sticky="w")
+
+        self.v_use_trailing = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="Trailing Stop", variable=self.v_use_trailing).grid(row=6, column=0, sticky="w")
+        tk.Label(f_v2, text="Activation (points):").grid(row=6, column=1, sticky="e")
+        self.e_trail_activation = tk.Entry(f_v2, width=7)
+        self.e_trail_activation.insert(0, "30")
+        self.e_trail_activation.grid(row=6, column=2, padx=3, sticky="w")
+        tk.Label(f_v2, text="Distance (points):").grid(row=6, column=3, sticky="e")
+        self.e_trail_distance = tk.Entry(f_v2, width=7)
+        self.e_trail_distance.insert(0, "20")
+        self.e_trail_distance.grid(row=6, column=4, padx=3, sticky="w")
+
+        self.v_use_atr_sl = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="ATR Dynamic SL", variable=self.v_use_atr_sl).grid(row=7, column=0, sticky="w")
+        tk.Label(f_v2, text="ATR SL Multiplier:").grid(row=7, column=1, sticky="e")
+        self.e_atr_sl_mult = tk.Entry(f_v2, width=7)
+        self.e_atr_sl_mult.insert(0, "1.5")
+        self.e_atr_sl_mult.grid(row=7, column=2, padx=3, sticky="w")
+        tk.Label(f_v2, text="Uses latest completed-candle ATR.", fg="#444444").grid(row=7, column=3, columnspan=3, sticky="w")
+
+        self.v_use_news = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="Economic News Filter", variable=self.v_use_news).grid(row=8, column=0, sticky="w")
+        tk.Label(f_v2, text="Block high-impact news ± minutes:").grid(row=8, column=1, sticky="e")
+        self.e_news_minutes = tk.Entry(f_v2, width=7)
+        self.e_news_minutes.insert(0, "30")
+        self.e_news_minutes.grid(row=8, column=2, padx=3, sticky="w")
+        tk.Label(f_v2, text="Source: Forex Factory calendar JSON", fg="#444444").grid(row=8, column=3, columnspan=3, sticky="w")
+
+        self.v_use_correlation = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="Correlation Protection", variable=self.v_use_correlation).grid(row=9, column=0, sticky="w")
+        tk.Label(f_v2, text="Max abs correlation:").grid(row=9, column=1, sticky="e")
+        self.e_corr_threshold = tk.Entry(f_v2, width=7)
+        self.e_corr_threshold.insert(0, "0.85")
+        self.e_corr_threshold.grid(row=9, column=2, padx=3, sticky="w")
+        tk.Label(f_v2, text="Symbols:").grid(row=9, column=3, sticky="e")
+        self.e_corr_symbols = tk.Entry(f_v2, width=32)
+        self.e_corr_symbols.insert(0, "EURUSD,GBPUSD,USDCHF,USDJPY")
+        self.e_corr_symbols.grid(row=9, column=4, columnspan=2, padx=3, sticky="w")
+
+        self.v_scanner = tk.BooleanVar(value=False)
+        tk.Checkbutton(f_v2, text="Multi-Symbol Signal Scanner (informational)", variable=self.v_scanner).grid(row=10, column=0, sticky="w")
+        tk.Label(f_v2, text="Scan symbols:").grid(row=10, column=1, sticky="e")
+        self.e_scan_symbols = tk.Entry(f_v2, width=45)
+        self.e_scan_symbols.insert(0, "EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD")
+        self.e_scan_symbols.grid(row=10, column=2, columnspan=4, padx=3, sticky="w")
+
+        self.v_reconnect = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="MT5 Reconnect Watchdog", variable=self.v_reconnect).grid(row=11, column=0, sticky="w")
+        self.v_position_recovery = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_v2, text="Position Recovery on Start", variable=self.v_position_recovery).grid(row=11, column=1, columnspan=2, sticky="w")
+        tk.Label(f_v2, text="Magic Number:").grid(row=11, column=3, sticky="e")
+        self.e_magic = tk.Entry(f_v2, width=12)
+        self.e_magic.insert(0, "26091802")
+        self.e_magic.grid(row=11, column=4, padx=3, sticky="w")
+
+        tk.Label(f_v2, text="V2 guardrails are optional and default to conservative safety settings; strategy/indicator formulas remain unchanged.", fg="#444444", wraplength=1150).grid(row=12, column=0, columnspan=6, sticky="w", pady=3)
+
+        # 3. Strategy — V8.4 Evidence-Family GUI
+        f_strat = tk.LabelFrame(self.scroll_frame, text=" 3. Strategy Engine — V8.4 Evidence Families ")
+        f_strat.pack(fill="x", padx=10, pady=5)
+
+        def _family(title):
+            fr = tk.LabelFrame(f_strat, text=f" {title} ", padx=6, pady=4)
+            fr.pack(fill="x", padx=6, pady=4)
+            return fr
+
+        def _entry(parent, label, var_name, default, row, col, width=6):
+            tk.Label(parent, text=label).grid(row=row, column=col, sticky="e", padx=2, pady=2)
+            ent = tk.Entry(parent, width=width)
+            ent.insert(0, str(default))
+            ent.grid(row=row, column=col+1, sticky="w", padx=2, pady=2)
+            setattr(self, var_name, ent)
+            return ent
+
+        def _check(parent, text, var_name, default, row, col=0, colspan=1):
+            var = tk.BooleanVar(value=default); setattr(self, var_name, var)
+            tk.Checkbutton(parent, text=text, variable=var).grid(row=row, column=col, columnspan=colspan, sticky="w", padx=2, pady=2)
+            return var
+
+        def _option(parent, label, var_name, default, values, row, col, colspan=1):
+            tk.Label(parent, text=label).grid(row=row, column=col, sticky="e", padx=2, pady=2)
+            var = tk.StringVar(value=default); setattr(self, var_name, var)
+            ttk.OptionMenu(parent, var, default, *values).grid(row=row, column=col+1, columnspan=colspan, sticky="w", padx=2, pady=2)
+            return var
+
+        # ---------------- TREND ----------------
+        fr = _family("TREND — direction / trend continuation")
+        _check(fr, "Supertrend", "v_use_st", True, 0, 0)
+        _entry(fr, "ATR Period", "e_st_len", "10", 0, 2)
+        _entry(fr, "ATR Mult", "e_st_mult", "2.0", 0, 4)
+        _option(fr, "Source", "v_st_source", "CLOSE", ("CLOSE", "HL2"), 0, 6)
+        _option(fr, "Entry", "v_st_entry_mode", "FRESH_FLIP", ("FRESH_FLIP", "CURRENT_TREND"), 1, 0, 2)
+        _check(fr, "Change ATR Method (ON=RMA / OFF=SMA)", "v_st_change_atr", True, 1, 4, 4)
+        _check(fr, "EMA", "v_use_ema", True, 2, 0)
+        _entry(fr, "Period", "e_ema_len", "200", 2, 2)
+        _check(fr, "EMA Cross", "v_use_ema_cross", False, 3, 0)
+        _entry(fr, "Fast", "e_ema_fast", "9", 3, 2)
+        _entry(fr, "Slow", "e_ema_slow", "20", 3, 4)
+        _option(fr, "Entry", "v_ema_cross_entry_mode", "FRESH_CROSS", ("FRESH_CROSS", "CURRENT_TREND"), 3, 6)
+        _check(fr, "MACD", "v_use_macd", False, 4, 0)
+        _entry(fr, "Fast", "e_macd_fast", "12", 4, 2, 5)
+        _entry(fr, "Slow", "e_macd_slow", "26", 4, 4, 5)
+        _entry(fr, "Signal", "e_macd_signal", "9", 4, 6, 5)
+        _check(fr, "VIDYA", "v_use_vidya", False, 5, 0)
+        _entry(fr, "Length", "e_vidya_len", "10", 5, 2)
+        _entry(fr, "Momentum", "e_vidya_momentum", "20", 5, 4)
+        _entry(fr, "Band", "e_vidya_band", "2", 5, 6)
+        _option(fr, "Entry", "v_vidya_entry_mode", "CURRENT_TREND", ("CURRENT_TREND", "FRESH_FLIP"), 6, 0, 2)
+        _check(fr, "NWE", "v_use_nwe", False, 7, 0)
+        _entry(fr, "Bandwidth", "e_nwe_bandwidth", "8", 7, 2)
+        _entry(fr, "Mult", "e_nwe_mult", "3", 7, 4)
+        _option(fr, "Entry", "v_nwe_entry_mode", "FRESH_CROSS", ("FRESH_CROSS", "CURRENT_TREND"), 7, 6)
+        _check(fr, "NWE Repainting", "v_nwe_repaint", False, 8, 0, 2)
+        tk.Label(fr, text="Trading calculation remains causal/completed-candle; repaint option is retained for compatibility.", fg="#555555").grid(row=8,column=2,columnspan=7,sticky="w")
+
+        # ---------------- MOMENTUM ----------------
+        fr = _family("MOMENTUM — reversal / acceleration")
+        _check(fr, "RSI", "v_use_rsi", False, 0, 0)
+        _entry(fr, "Period", "e_rsi_len", "14", 0, 2)
+        _entry(fr, "OB", "e_rsi_ob", "80", 0, 4)
+        _entry(fr, "OS", "e_rsi_os", "20", 0, 6)
+        _option(fr, "Logic", "v_rsi_logic", "REVERSAL_ZONE", ("REVERSAL_ZONE", "CROSS_MA", "EITHER"), 1, 0, 2)
+        _option(fr, "MA Type", "v_rsi_ma_type", "EMA", ("SMA", "EMA", "WMA"), 1, 4)
+        _entry(fr, "MA Period", "e_rsi_ma_len", "9", 1, 6)
+        _check(fr, "Stochastic", "v_use_stoch", False, 2, 0)
+        _entry(fr, "K", "e_stoch_k", "14", 2, 2, 5)
+        _entry(fr, "Smooth", "e_stoch_smooth", "3", 2, 4, 5)
+        _entry(fr, "D", "e_stoch_d", "3", 2, 6, 5)
+        _check(fr, "Confirmed Divergence", "v_use_divergence", True, 3, 0, 2)
+        _entry(fr, "Pivot", "e_div_pivot", "5", 3, 2, 5)
+        _entry(fr, "Max Pivots", "e_div_max_pivots", "10", 3, 4, 5)
+        _entry(fr, "Max Bars", "e_div_max_bars", "100", 3, 6, 5)
+        _option(fr, "Type", "v_div_type", "Regular/Hidden", ("Regular", "Hidden", "Regular/Hidden"), 4, 0, 2)
+        _option(fr, "Source", "v_div_source", "Close", ("Close", "High/Low"), 4, 4)
+        _check(fr, "Use all divergence sources", "v_div_use_all", True, 4, 6, 2)
+        _entry(fr, "CCI Len", "e_div_cci", "10", 5, 0, 5)
+        _entry(fr, "Momentum Len", "e_div_mom", "10", 5, 2, 5)
+        _entry(fr, "VWMACD Fast", "e_div_vwfast", "12", 5, 4, 5)
+        _entry(fr, "VWMACD Slow", "e_div_vwslow", "26", 5, 6, 5)
+        _entry(fr, "CMF Len", "e_div_cmf", "21", 6, 0, 5)
+        _entry(fr, "MFI Len", "e_div_mfi", "14", 6, 2, 5)
+
+        # ---------------- FLOW ----------------
+        fr = _family("FLOW — price/volume participation")
+        _check(fr, "VWAP", "v_use_vwap", False, 0, 0)
+        _entry(fr, "Period", "e_vwap_len", "50", 0, 2)
+        _check(fr, "VWAP Delta", "v_use_vwap_delta", False, 1, 0)
+        _check(fr, "HMA Smoothing", "v_vwap_delta_smooth", False, 1, 2)
+        _entry(fr, "Smooth Len", "e_vwap_delta_smooth_len", "21", 1, 4)
+        _entry(fr, "Baseline", "e_vwap_delta_baseline", "50", 1, 6)
+        _option(fr, "Logic", "v_vwap_delta_logic", "CURRENT_TREND", ("CURRENT_TREND", "CROSS_BASELINE"), 2, 0, 2)
+        _check(fr, "Volume", "v_use_vol", True, 3, 0)
+        _entry(fr, "Volume MA", "e_vol_len", "20", 3, 2)
+        _check(fr, "Volume S/R", "v_use_vol_sr", True, 4, 0)
+        _entry(fr, "Vol MA", "e_sr_vol_ma", "6", 4, 2)
+        _option(fr, "Vote", "v_sr_vote", "MAJORITY", ("MAJORITY", "ALL", "ANY"), 4, 4)
+        _option(fr, "Entry", "v_sr_entry", "CURRENT_ZONE", ("CURRENT_ZONE", "FRESH_BREAK"), 4, 6)
+        _option(fr, "TF1", "v_sr_tf1", "Chart", ("Chart", "15m", "1h", "4h", "D", "W", "Disable"), 5, 0)
+        _option(fr, "TF2", "v_sr_tf2", "4h", ("Chart", "15m", "1h", "4h", "D", "W", "Disable"), 5, 2)
+        _option(fr, "TF3", "v_sr_tf3", "D", ("Chart", "15m", "1h", "4h", "D", "W", "Disable"), 5, 4)
+        _option(fr, "TF4", "v_sr_tf4", "W", ("Chart", "15m", "1h", "4h", "D", "W", "Disable"), 5, 6)
+
+        # ---------------- STRUCTURE ----------------
+        fr = _family("STRUCTURE — market geometry / location")
+        _check(fr, "Liquidity Swings", "v_use_liq_swing", True, 0, 0)
+        _entry(fr, "Pivot", "e_liq_len", "14", 0, 2)
+        _option(fr, "Area", "v_liq_area", "Wick Extremity", ("Wick Extremity", "Full Range"), 0, 4)
+        _option(fr, "Filter", "v_liq_filter", "Count", ("Count", "Volume"), 0, 6)
+        _entry(fr, "Filter Value", "e_liq_filter_value", "3", 1, 0)
+        _check(fr, "Trendline Breakout", "v_use_trendline", True, 2, 0)
+        _entry(fr, "Pivot", "e_trend_len", "14", 2, 2)
+        _entry(fr, "Min Dist", "e_trend_min_dist", "5", 2, 4)
+        _entry(fr, "Buffer %", "e_trend_buffer", "0.0", 2, 6)
+        _entry(fr, "Retest Candles", "e_trend_retest", "3", 3, 0)
+        _option(fr, "Entry", "v_trend_entry", "FRESH_BREAK", ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"), 3, 2, 2)
+        _check(fr, "MTF", "v_use_mtf", True, 4, 0)
+        tk.Label(fr, text="4H EMA200 confluence", fg="#555555").grid(row=4,column=2,columnspan=4,sticky="w")
+
+        # ---------------- REGIME ----------------
+        fr = _family("REGIME — tradeability gates; never counted as duplicate directional votes")
+        _check(fr, "ATR", "v_use_atr", False, 0, 0)
+        _entry(fr, "Minimum ATR %", "e_atr_min_pct", "0.30", 0, 2)
+        _check(fr, "ADX", "v_use_adx", True, 0, 4)
+        _entry(fr, "ADX Threshold", "e_adx_thresh", "20", 0, 6)
+        tk.Label(fr, text="ATR + ADX validate market regime; they are not directional confirmation votes in ADAPTIVE_EVIDENCE.", fg="#555555").grid(row=1,column=0,columnspan=8,sticky="w")
+
+        # ---------------- OPTIONAL LEGACY ----------------
+        fr = _family("OPTIONAL / LEGACY MODULE — preserved for backward compatibility")
+        _check(fr, "Bollinger Breakout (BB)", "v_use_bb", False, 0, 0)
+        _entry(fr, "Period", "e_bb_len", "20", 0, 2)
+        _entry(fr, "StdDev", "e_bb_std", "2", 0, 4)
+        tk.Label(fr, text="BB remains available but is outside the five evidence families so existing configurations do not lose functionality.", fg="#555555").grid(row=0,column=6,columnspan=2,sticky="w")
+
+        # ---------------- DECISION ENGINE ----------------
+        fr = _family("DECISION ENGINE — family-aware adaptive mode")
+        _option(fr, "Signal Mode", "v_signal_mode", "ADAPTIVE_EVIDENCE", (
+            "SINGLE_SIGNAL", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "SCORE",
+            "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "ANY_NON_CONFLICTING", "STRICT_ALL_FILTERS"), 0, 0, 2)
+        _entry(fr, "Min Score (legacy)", "e_min_score", "1", 0, 4)
+        _entry(fr, "Adaptive Edge", "e_adaptive_edge", "0.18", 0, 6)
+        _entry(fr, "Adaptive Min Weight", "e_adaptive_min_weight", "3.5", 1, 0)
+        _entry(fr, "Min Families", "e_evidence_min_families", "2", 1, 2)
+        _entry(fr, "Family Min Score", "e_evidence_family_min_score", "0.35", 1, 4)
+        _check(fr, "Require Trend Family", "v_evidence_require_trend", True, 1, 6)
+        _check(fr, "Require independent non-Trend family", "v_evidence_require_independent", True, 2, 0, 3)
+        _check(fr, "Hold Position Until ALL Active Signals Reverse", "v_hold_until_all_reverse", True, 3, 0, 4)
+        tk.Label(fr, text="ADAPTIVE_EVIDENCE: weighted module evidence is normalized within each family; Regime is gating only. Minimum independent families prevents correlated Trend indicators from acting as independent confirmations.", fg="#444444", wraplength=900, justify="left").grid(row=4,column=0,columnspan=8,sticky="w",pady=3)
+
+        # ---------------- Compatibility note ----------------
+        tk.Label(f_strat, text="V8.4 preserves all V8.3.4 indicator formulas, entry modes, risk/SLTP controls, config keys and legacy signal modes. Only ADAPTIVE_EVIDENCE uses the new family-aware decision contract.", fg="#444444", wraplength=980, justify="left").pack(fill="x", padx=10, pady=(2,6))
+
+        # 4. Risk
+        f_risk = tk.LabelFrame(
+            self.scroll_frame,
+            text=" 4. Dynamic Risk & Sizing Controls ",
+        )
+        f_risk.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(
+            f_risk,
+            text="Sizing Mode:",
+        ).grid(row=0, column=0, sticky="w")
+
+        self.v_size_mode = tk.StringVar(
+            value="EQUITY_RISK_%"
+        )
+
+        ttk.OptionMenu(
+            f_risk,
+            self.v_size_mode,
+            "EQUITY_RISK_%",
+            "EQUITY_RISK_%",
+            "FIXED_QTY",
+        ).grid(row=0, column=1, padx=5)
+
+        tk.Label(
+            f_risk,
+            text="Risk Per Trade (%):",
+        ).grid(row=0, column=2, sticky="w")
+
+        self.e_risk_pct = tk.Entry(
+            f_risk,
+            width=8,
+        )
+        self.e_risk_pct.insert(0, "1.0")
+        self.e_risk_pct.grid(row=0, column=3, padx=5)
+
+        tk.Label(
+            f_risk,
+            text="Fixed Qty:",
+        ).grid(row=0, column=4, sticky="w")
+
+        self.e_fixed_qty = tk.Entry(
+            f_risk,
+            width=10,
+        )
+        self.e_fixed_qty.insert(0, "0.001")
+        self.e_fixed_qty.grid(row=0, column=5, padx=5)
+
+        tk.Label(
+            f_risk,
+            text="Max Daily Drawdown (%):",
+        ).grid(row=1, column=0, sticky="w")
+
+        self.e_max_dd = tk.Entry(
+            f_risk,
+            width=8,
+        )
+        self.e_max_dd.insert(0, "5.0")
+        self.e_max_dd.grid(row=1, column=1, padx=5)
+
+        tk.Label(f_risk, text="Emergency Capital Loss Stop (%):").grid(row=2, column=0, sticky="w")
+        self.e_emergency_capital_pct = tk.Entry(f_risk, width=8)
+        self.e_emergency_capital_pct.insert(0, "30.0")
+        self.e_emergency_capital_pct.grid(row=2, column=1, padx=5)
+        tk.Label(f_risk, text="Emergency scope:").grid(row=3, column=0, sticky="w")
+        self.v_emergency_scope = tk.StringVar(value="BOT_ONLY")
+        ttk.OptionMenu(f_risk, self.v_emergency_scope, "BOT_ONLY", "BOT_ONLY", "ALL_ACCOUNT").grid(row=3, column=1, padx=5, sticky="w")
+        tk.Label(f_risk, text="BOT_ONLY protects only this bot's magic/symbol; ALL_ACCOUNT is an explicit nuclear option.").grid(row=3, column=2, columnspan=4, sticky="w", padx=5)
+
+        # 5. SL/TP
+        f_sltp = tk.LabelFrame(
+            self.scroll_frame,
+            text=" 5. SL & TP Protection - PRICE % or ROI % ",
+        )
+        f_sltp.pack(fill="x", padx=10, pady=5)
+
+        tk.Label(f_sltp, text="SL Mode:").grid(row=0, column=0, sticky="w")
+        self.v_sl_mode = tk.StringVar(value="PRICE_%")
+        ttk.OptionMenu(f_sltp, self.v_sl_mode, "PRICE_%", "PRICE_%", "ROI_%", "PIPS").grid(row=0, column=1, padx=5, sticky="w")
+
+        tk.Label(f_sltp, text="TP Mode:").grid(row=0, column=2, sticky="w")
+        self.v_tp_mode = tk.StringVar(value="ROI_%")
+        ttk.OptionMenu(f_sltp, self.v_tp_mode, "ROI_%", "PRICE_%", "ROI_%", "PIPS").grid(row=0, column=3, padx=5, sticky="w")
+
+        tk.Label(
+            f_sltp,
+            text="SL Target (%):",
+        ).grid(row=1, column=0, sticky="w")
+
+        self.e_sl_pct = tk.Entry(
+            f_sltp,
+            width=8,
+        )
+        self.e_sl_pct.insert(0, "1.5")
+        self.e_sl_pct.grid(row=1, column=1, padx=5)
+
+        tk.Label(
+            f_sltp,
+            text="TP1 Target (%):",
+        ).grid(row=1, column=2, sticky="w")
+
+        self.e_tp1_pct = tk.Entry(
+            f_sltp,
+            width=8,
+        )
+        self.e_tp1_pct.insert(0, "2.0")
+        self.e_tp1_pct.grid(row=1, column=3, padx=5)
+
+        tk.Label(
+            f_sltp,
+            text="TP2 Target (%):",
+        ).grid(row=1, column=4, sticky="w")
+
+        self.e_tp2_pct = tk.Entry(
+            f_sltp,
+            width=8,
+        )
+        self.e_tp2_pct.insert(0, "4.0")
+        self.e_tp2_pct.grid(row=1, column=5, padx=5)
+
+        self.v_tp1_be = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            f_sltp,
+            text="Move SL to Break-Even after TP1",
+            variable=self.v_tp1_be,
+        ).grid(row=2, column=0, columnspan=3, sticky="w")
+
+        tk.Label(
+            f_sltp,
+            text="TP Close Qty Mode:",
+        ).grid(row=2, column=0, sticky="w")
+
+        self.v_tp_qty_mode = tk.StringVar(value="PERCENT_%")
+        ttk.OptionMenu(
+            f_sltp,
+            self.v_tp_qty_mode,
+            "PERCENT_%",
+            "PERCENT_%",
+            "FIXED_QTY",
+        ).grid(row=2, column=1, padx=5, sticky="w")
+
+        tk.Label(
+            f_sltp,
+            text="TP1 Close (% / Qty):",
+        ).grid(row=2, column=2, sticky="w")
+
+        self.e_tp1_close = tk.Entry(
+            f_sltp,
+            width=8,
+        )
+        self.e_tp1_close.insert(0, "50")
+        self.e_tp1_close.grid(row=2, column=3, padx=5)
+
+        tk.Label(
+            f_sltp,
+            text="TP2 Close (% / Qty):",
+        ).grid(row=2, column=4, sticky="w")
+
+        self.e_tp2_close = tk.Entry(
+            f_sltp,
+            width=8,
+        )
+        self.e_tp2_close.insert(0, "50")
+        self.e_tp2_close.grid(row=2, column=5, padx=5)
+
+        # Dedicated row so the Hold-All-Reverse stop is always clearly visible,
+        # including on smaller screens / higher Windows DPI scaling.
+        tk.Label(
+            f_sltp,
+            text="Hold-All-Reverse SL (ROI %):",
+            font=("Arial", 9, "bold"),
+        ).grid(row=3, column=0, sticky="w", padx=(0, 4))
+
+        self.e_hold_sl_roi = tk.Entry(
+            f_sltp,
+            width=10,
+            justify="center",
+        )
+        self.e_hold_sl_roi.insert(0, "5.0")
+        self.e_hold_sl_roi.grid(row=3, column=1, padx=5, pady=2, sticky="w")
+
+        tk.Label(
+            f_sltp,
+            text="Used ONLY when Hold-All-Reverse = ON",
+            fg="#444444",
+        ).grid(row=3, column=2, columnspan=2, sticky="w", padx=(8, 0))
+
+        self.v_hold_sl_wait_reversal = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            f_sltp,
+            text="After Hold SL threshold: WAIT for ALL active signals to reverse",
+            variable=self.v_hold_sl_wait_reversal,
+        ).grid(row=4, column=0, columnspan=6, sticky="w", pady=(2, 0))
+
+        tk.Label(
+            f_sltp,
+            text=(
+                "OFF = normal exchange SL closes at the ROI threshold.  "
+                "ON = threshold is monitored by the bot; no exchange SL is placed, "
+                "and the position closes only after ALL active directional signals reverse."
+            ),
+            fg="#444444",
+            wraplength=1150,
+            justify="left",
+        ).grid(
+            row=5,
+            column=0,
+            columnspan=6,
+            sticky="w",
+            pady=2,
+        )
+
+        tk.Label(
+            f_sltp,
+            text="PRICE_% = market-price move | ROI_% = position ROI target",
+            fg="#444444",
+        ).grid(row=6, column=0, columnspan=6, sticky="w", pady=(0, 2))
+
+        # 6. Telegram
+        f_tele = tk.LabelFrame(
+            self.scroll_frame,
+            text=" 6. Telegram Integration ",
+        )
+        f_tele.pack(fill="x", padx=10, pady=5)
+
+        self.v_tele_enable = tk.BooleanVar(value=False)
+
+        tk.Checkbutton(
+            f_tele,
+            text="Enable Telegram Alerts",
+            variable=self.v_tele_enable,
+        ).grid(row=0, column=0, sticky="w")
+
+        tk.Label(
+            f_tele,
+            text="Bot Token:",
+        ).grid(row=1, column=0, sticky="w")
+
+        self.e_tele_token = tk.Entry(
+            f_tele,
+            width=45,
+        )
+        self.e_tele_token.grid(
+            row=1,
+            column=1,
+            padx=5,
+        )
+
+        tk.Label(
+            f_tele,
+            text="Chat ID:",
+        ).grid(row=2, column=0, sticky="w")
+
+        self.e_tele_chat = tk.Entry(
+            f_tele,
+            width=45,
+        )
+        self.e_tele_chat.grid(
+            row=2,
+            column=1,
+            padx=5,
+        )
+
+        # Dashboard
+        f_dash = tk.LabelFrame(
+            self.scroll_frame,
+            text=" Live Performance Analytics ",
+        )
+        f_dash.pack(
+            fill="x",
+            padx=10,
+            pady=5,
+        )
+
+        self.lbl_pnl = tk.Label(
+            f_dash,
+            text=(
+                "Start Balance: $0.00 | Current Balance: $0.00 | "
+                "Net PnL: $0.00 | Trades: 0 | Wins: 0 | "
+                "Losses: 0 | Win Rate: 0.0%"
+            ),
+            font=("Arial", 10, "bold"),
+            fg="#00ff66",
+            bg="#111111",
+        )
+        self.lbl_pnl.pack(
+            fill="x",
+            padx=5,
+            pady=5,
+        )
+
+        # Controls
+        btn_frame = tk.Frame(
+            self.scroll_frame
+        )
+        btn_frame.pack(
+            fill="x",
+            padx=10,
+            pady=5,
+        )
+
+        self.btn_save = tk.Button(
+            btn_frame,
+            text="SAVE CONFIG",
+            bg="#007bff",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            command=self.save_settings,
+        )
+        self.btn_save.pack(
+            side="left",
+            expand=True,
+            fill="x",
+            padx=3,
+        )
+
+        self.btn_start = tk.Button(
+            btn_frame,
+            text="START BOT",
+            bg="#28a745",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            command=self.start_bot,
+        )
+        self.btn_start.pack(
+            side="left",
+            expand=True,
+            fill="x",
+            padx=3,
+        )
+
+        self.btn_stop = tk.Button(
+            btn_frame,
+            text="STOP BOT",
+            bg="#dc3545",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            state="disabled",
+            command=self.stop_bot,
+        )
+        self.btn_stop.pack(
+            side="left",
+            expand=True,
+            fill="x",
+            padx=3,
+        )
+
+    # -------------------- SETTINGS ---------------------------
+
+    def save_settings(self):
+        cfg = {
+            "exchange": self.v_exchange.get(),
+            "api_key": self.e_api_key.get().strip(),
+            "api_secret": self.e_api_secret.get().strip(),
+            "account_mode": self.v_account_mode.get(),
+            "symbol": self.e_symbol.get().strip().upper(),
+            "timeframe": self.v_tf.get(),
+            "leverage": self.e_lev.get().strip(),
+            "max_trades": self.e_max_trades.get().strip(),
+            "no_same_candle": self.v_no_same_candle.get(),
+            "cooldown_min": self.e_cooldown_min.get().strip(),
+            "require_opposite_after_sl": self.v_require_opposite_after_exit.get(),
+            # Keep the old key for backward compatibility with existing configs.
+            "require_opposite_after_exit": self.v_require_opposite_after_exit.get(),
+
+            "use_st": self.v_use_st.get(),
+            "st_len": self.e_st_len.get().strip(),
+            "st_mult": self.e_st_mult.get().strip(),
+            "st_source": self.v_st_source.get(),
+            "st_change_atr": self.v_st_change_atr.get(),
+            "st_entry_mode": self.v_st_entry_mode.get(),
+
+            "use_ema": self.v_use_ema.get(),
+            "ema_len": self.e_ema_len.get().strip(),
+
+            "use_ema_cross": self.v_use_ema_cross.get(),
+            "ema_fast": self.e_ema_fast.get().strip(),
+            "ema_slow": self.e_ema_slow.get().strip(),
+            "ema_cross_entry_mode": self.v_ema_cross_entry_mode.get(),
+
+            "use_macd": self.v_use_macd.get(),
+            "macd_fast": self.e_macd_fast.get().strip(),
+            "macd_slow": self.e_macd_slow.get().strip(),
+            "macd_signal": self.e_macd_signal.get().strip(),
+
+            "use_rsi": self.v_use_rsi.get(),
+            "rsi_len": self.e_rsi_len.get().strip(),
+            "rsi_ob": self.e_rsi_ob.get().strip(),
+            "rsi_os": self.e_rsi_os.get().strip(),
+            "rsi_logic": self.v_rsi_logic.get(),
+            "rsi_ma_type": self.v_rsi_ma_type.get(),
+            "rsi_ma_len": self.e_rsi_ma_len.get().strip(),
+
+            "use_bb": self.v_use_bb.get(),
+            "bb_len": self.e_bb_len.get().strip(),
+            "bb_std": self.e_bb_std.get().strip(),
+
+            "use_stoch": self.v_use_stoch.get(),
+            "stoch_k": self.e_stoch_k.get().strip(),
+            "stoch_smooth": self.e_stoch_smooth.get().strip(),
+            "stoch_d": self.e_stoch_d.get().strip(),
+
+            "use_vwap": self.v_use_vwap.get(),
+            "vwap_len": self.e_vwap_len.get().strip(),
+
+            "use_vwap_delta": self.v_use_vwap_delta.get(),
+            "vwap_delta_smooth": self.v_vwap_delta_smooth.get(),
+            "vwap_delta_smooth_len": self.e_vwap_delta_smooth_len.get().strip(),
+            "vwap_delta_baseline": self.e_vwap_delta_baseline.get().strip(),
+            "vwap_delta_logic": self.v_vwap_delta_logic.get(),
+
+            "use_vidya": self.v_use_vidya.get(),
+            "vidya_len": self.e_vidya_len.get().strip(),
+            "vidya_momentum": self.e_vidya_momentum.get().strip(),
+            "vidya_band": self.e_vidya_band.get().strip(),
+            "vidya_entry_mode": self.v_vidya_entry_mode.get(),
+
+            "use_nwe": self.v_use_nwe.get(),
+            "nwe_bandwidth": self.e_nwe_bandwidth.get().strip(),
+            "nwe_mult": self.e_nwe_mult.get().strip(),
+            "nwe_entry_mode": self.v_nwe_entry_mode.get(),
+            "nwe_repaint": self.v_nwe_repaint.get(),
+            "use_atr": self.v_use_atr.get(),
+            "atr_min_pct": self.e_atr_min_pct.get().strip(),
+
+            "use_vol": self.v_use_vol.get(),
+            "vol_len": self.e_vol_len.get().strip(),
+
+            "use_adx": self.v_use_adx.get(),
+            "adx_thresh": self.e_adx_thresh.get().strip(),
+
+            "use_mtf": self.v_use_mtf.get(),
+
+            "signal_mode": self.v_signal_mode.get(),
+            "signal_mode_v2_migrated": True,
+            "min_score": self.e_min_score.get().strip(),
+            "hold_until_all_reverse": self.v_hold_until_all_reverse.get(),
+            "adaptive_edge": self.e_adaptive_edge.get().strip(),
+            "adaptive_min_weight": self.e_adaptive_min_weight.get().strip(),
+            "evidence_min_families": self.e_evidence_min_families.get().strip(),
+            "evidence_family_min_score": self.e_evidence_family_min_score.get().strip(),
+            "evidence_require_trend": self.v_evidence_require_trend.get(),
+            "evidence_require_independent": self.v_evidence_require_independent.get(),
+            "use_liq_swing": self.v_use_liq_swing.get(),
+            "liq_len": self.e_liq_len.get().strip(), "liq_area": self.v_liq_area.get(),
+            "liq_filter": self.v_liq_filter.get(), "liq_filter_value": self.e_liq_filter_value.get().strip(),
+            "use_trendline": self.v_use_trendline.get(), "trend_len": self.e_trend_len.get().strip(),
+            "trend_min_dist": self.e_trend_min_dist.get().strip(), "trend_buffer": self.e_trend_buffer.get().strip(),
+            "trend_retest": self.e_trend_retest.get().strip(), "trend_entry": self.v_trend_entry.get(),
+            "use_divergence": self.v_use_divergence.get(), "div_pivot": self.e_div_pivot.get().strip(),
+            "div_max_pivots": self.e_div_max_pivots.get().strip(), "div_max_bars": self.e_div_max_bars.get().strip(),
+            "div_type": self.v_div_type.get(), "div_source": self.v_div_source.get(),
+            "div_cci_len": self.e_div_cci.get().strip(), "div_mom_len": self.e_div_mom.get().strip(),
+            "div_vwmacd_fast": self.e_div_vwfast.get().strip(), "div_vwmacd_slow": self.e_div_vwslow.get().strip(),
+            "div_cmf_len": self.e_div_cmf.get().strip(), "div_mfi_len": self.e_div_mfi.get().strip(),
+            "div_use_all": self.v_div_use_all.get(),
+            "use_vol_sr": self.v_use_vol_sr.get(), "sr_volume_ma": self.e_sr_vol_ma.get().strip(),
+            "sr_vote_mode": self.v_sr_vote.get(), "sr_entry_mode": self.v_sr_entry.get(),
+            "sr_tf1": self.v_sr_tf1.get(), "sr_tf2": self.v_sr_tf2.get(), "sr_tf3": self.v_sr_tf3.get(), "sr_tf4": self.v_sr_tf4.get(),
+
+            "size_mode": self.v_size_mode.get(),
+            "risk_pct": self.e_risk_pct.get().strip(),
+            "fixed_qty": self.e_fixed_qty.get().strip(),
+            "max_dd": self.e_max_dd.get().strip(),
+            "emergency_capital_pct": self.e_emergency_capital_pct.get().strip(),
+            "emergency_scope": self.v_emergency_scope.get(),
+
+            "sltp_mode": self.v_sl_mode.get(),
+            "sl_mode": self.v_sl_mode.get(),
+            "tp_mode": self.v_tp_mode.get(),
+            "sl_pct": self.e_sl_pct.get().strip(),
+            "tp1_pct": self.e_tp1_pct.get().strip(),
+            "tp2_pct": self.e_tp2_pct.get().strip(),
+            "hold_sl_roi": self.e_hold_sl_roi.get().strip(),
+            "hold_sl_wait_reversal": self.v_hold_sl_wait_reversal.get(),
+            "tp1_be": self.v_tp1_be.get(),
+
+            "tp_qty_mode": self.v_tp_qty_mode.get(),
+            "tp1_close": self.e_tp1_close.get().strip(),
+            "tp2_close": self.e_tp2_close.get().strip(),
+
+            "tele_enable": self.v_tele_enable.get(),
+            "tele_token": self.e_tele_token.get().strip(),
+            "tele_chat": self.e_tele_chat.get().strip(),
+        }
+
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4)
+
+            self.log("Configuration saved.")
+        except Exception as e:
+            self.log(f"Config save error: {e}")
+
+    def load_settings(self):
+        if not os.path.exists(CONFIG_FILE):
+            return
+
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+
+            self.v_exchange.set(
+                cfg.get("exchange", "bybit")
+            )
+
+            self.e_api_key.insert(
+                0,
+                cfg.get("api_key", ""),
+            )
+            self.e_api_secret.insert(
+                0,
+                cfg.get("api_secret", ""),
+            )
+
+            self.v_account_mode.set(
+                cfg.get(
+                    "account_mode",
+                    "MT5_PAPER",
+                )
+            )
+
+            self.e_symbol.delete(
+                0,
+                tk.END,
+            )
+            self.e_symbol.insert(
+                0,
+                cfg.get(
+                    "symbol",
+                    "EURUSD",
+                ),
+            )
+
+            self.v_tf.set(
+                cfg.get(
+                    "timeframe",
+                    "15m",
+                )
+            )
+
+            self.e_lev.delete(
+                0,
+                tk.END,
+            )
+            self.e_lev.insert(
+                0,
+                cfg.get(
+                    "leverage",
+                    "30",
+                ),
+            )
+            self.v_no_same_candle.set(cfg.get("no_same_candle", True))
+            self.e_cooldown_min.delete(0, tk.END)
+            self.e_cooldown_min.insert(0, cfg.get("cooldown_min", "0"))
+            self.v_require_opposite_after_exit.set(
+            cfg.get(
+                "require_opposite_after_sl",
+                cfg.get("require_opposite_after_exit", True),
+            )
+        )
+
+            self.e_max_trades.delete(0, tk.END)
+            self.e_max_trades.insert(0, cfg.get("max_trades", "10"))
+            self.update_estimated_window()
+
+            self.v_use_st.set(
+                cfg.get(
+                    "use_st",
+                    True,
+                )
+            )
+            self.e_st_len.delete(
+                0,
+                tk.END,
+            )
+            self.e_st_len.insert(
+                0,
+                cfg.get(
+                    "st_len",
+                    "10",
+                ),
+            )
+            self.e_st_mult.delete(
+                0,
+                tk.END,
+            )
+            self.e_st_mult.insert(
+                0,
+                cfg.get(
+                    "st_mult",
+                    "2.0",
+                ),
+            )
+
+            self.v_st_source.set(
+                cfg.get(
+                    "st_source",
+                    "CLOSE",
+                )
+            )
+            self.v_st_change_atr.set(
+                cfg.get(
+                    "st_change_atr",
+                    True,
+                )
+            )
+
+            self.v_st_entry_mode.set(
+                cfg.get(
+                    "st_entry_mode",
+                    "FRESH_FLIP",
+                )
+            )
+
+            self.v_use_ema.set(
+                cfg.get(
+                    "use_ema",
+                    True,
+                )
+            )
+            self.e_ema_len.delete(
+                0,
+                tk.END,
+            )
+            self.e_ema_len.insert(
+                0,
+                cfg.get(
+                    "ema_len",
+                    "200",
+                ),
+            )
+
+            self.v_use_ema_cross.set(
+                cfg.get(
+                    "use_ema_cross",
+                    False,
+                )
+            )
+
+            self.e_ema_fast.delete(
+                0,
+                tk.END,
+            )
+            self.e_ema_fast.insert(
+                0,
+                cfg.get(
+                    "ema_fast",
+                    "9",
+                ),
+            )
+
+            self.e_ema_slow.delete(
+                0,
+                tk.END,
+            )
+            self.e_ema_slow.insert(
+                0,
+                cfg.get(
+                    "ema_slow",
+                    "20",
+                ),
+            )
+            self.v_ema_cross_entry_mode.set(
+                cfg.get(
+                    "ema_cross_entry_mode",
+                    "FRESH_CROSS",
+                )
+            )
+
+            self.v_use_macd.set(
+                cfg.get(
+                    "use_macd",
+                    False,
+                )
+            )
+
+            self.e_macd_fast.delete(0, tk.END)
+            self.e_macd_fast.insert(
+                0,
+                cfg.get(
+                    "macd_fast",
+                    "12",
+                ),
+            )
+
+            self.e_macd_slow.delete(0, tk.END)
+            self.e_macd_slow.insert(
+                0,
+                cfg.get(
+                    "macd_slow",
+                    "26",
+                ),
+            )
+
+            self.e_macd_signal.delete(0, tk.END)
+            self.e_macd_signal.insert(
+                0,
+                cfg.get(
+                    "macd_signal",
+                    "9",
+                ),
+            )
+
+            self.v_use_rsi.set(
+                cfg.get(
+                    "use_rsi",
+                    False,
+                )
+            )
+
+            self.e_rsi_len.delete(0, tk.END)
+            self.e_rsi_len.insert(
+                0,
+                cfg.get(
+                    "rsi_len",
+                    "14",
+                ),
+            )
+
+            self.e_rsi_ob.delete(0, tk.END)
+            self.e_rsi_ob.insert(
+                0,
+                cfg.get(
+                    "rsi_ob",
+                    "80",
+                ),
+            )
+
+            self.e_rsi_os.delete(0, tk.END)
+            self.e_rsi_os.insert(
+                0,
+                cfg.get(
+                    "rsi_os",
+                    "20",
+                ),
+            )
+
+            self.v_rsi_logic.set(cfg.get("rsi_logic", "REVERSAL_ZONE"))
+            self.v_rsi_ma_type.set(cfg.get("rsi_ma_type", "EMA"))
+            self.e_rsi_ma_len.delete(0, tk.END)
+            self.e_rsi_ma_len.insert(0, cfg.get("rsi_ma_len", "9"))
+
+            self.v_use_bb.set(
+                cfg.get(
+                    "use_bb",
+                    False,
+                )
+            )
+
+            self.e_bb_len.delete(0, tk.END)
+            self.e_bb_len.insert(
+                0,
+                cfg.get(
+                    "bb_len",
+                    "20",
+                ),
+            )
+
+            self.e_bb_std.delete(0, tk.END)
+            self.e_bb_std.insert(
+                0,
+                cfg.get(
+                    "bb_std",
+                    "2",
+                ),
+            )
+
+            self.v_use_stoch.set(
+                cfg.get(
+                    "use_stoch",
+                    False,
+                )
+            )
+
+            self.e_stoch_k.delete(0, tk.END)
+            self.e_stoch_k.insert(
+                0,
+                cfg.get(
+                    "stoch_k",
+                    "14",
+                ),
+            )
+
+            self.e_stoch_smooth.delete(0, tk.END)
+            self.e_stoch_smooth.insert(
+                0,
+                cfg.get(
+                    "stoch_smooth",
+                    "3",
+                ),
+            )
+
+            self.e_stoch_d.delete(0, tk.END)
+            self.e_stoch_d.insert(
+                0,
+                cfg.get(
+                    "stoch_d",
+                    "3",
+                ),
+            )
+
+            self.v_use_vwap.set(
+                cfg.get(
+                    "use_vwap",
+                    False,
+                )
+            )
+
+            self.e_vwap_len.delete(0, tk.END)
+            self.e_vwap_len.insert(
+                0,
+                cfg.get(
+                    "vwap_len",
+                    "50",
+                ),
+            )
+
+            self.v_use_vwap_delta.set(cfg.get("use_vwap_delta", False))
+            self.v_vwap_delta_smooth.set(cfg.get("vwap_delta_smooth", False))
+            self.e_vwap_delta_smooth_len.delete(0, tk.END)
+            self.e_vwap_delta_smooth_len.insert(0, cfg.get("vwap_delta_smooth_len", "21"))
+            self.e_vwap_delta_baseline.delete(0, tk.END)
+            self.e_vwap_delta_baseline.insert(0, cfg.get("vwap_delta_baseline", "50"))
+            self.v_vwap_delta_logic.set(cfg.get("vwap_delta_logic", "CURRENT_TREND"))
+
+            self.v_use_vidya.set(cfg.get("use_vidya", False))
+            self.e_vidya_len.delete(0, tk.END)
+            self.e_vidya_len.insert(0, cfg.get("vidya_len", "10"))
+            self.e_vidya_momentum.delete(0, tk.END)
+            self.e_vidya_momentum.insert(0, cfg.get("vidya_momentum", "20"))
+            self.e_vidya_band.delete(0, tk.END)
+            self.e_vidya_band.insert(0, cfg.get("vidya_band", "2"))
+            self.v_vidya_entry_mode.set(cfg.get("vidya_entry_mode", "CURRENT_TREND"))
+
+            self.v_use_nwe.set(cfg.get("use_nwe", False))
+            self.e_nwe_bandwidth.delete(0, tk.END)
+            self.e_nwe_bandwidth.insert(0, cfg.get("nwe_bandwidth", "8"))
+            self.e_nwe_mult.delete(0, tk.END)
+            self.e_nwe_mult.insert(0, cfg.get("nwe_mult", "3"))
+            self.v_nwe_entry_mode.set(cfg.get("nwe_entry_mode", "FRESH_CROSS"))
+            self.v_nwe_repaint.set(cfg.get("nwe_repaint", False))
+            self.v_use_atr.set(
+                cfg.get(
+                    "use_atr",
+                    False,
+                )
+            )
+
+            self.e_atr_min_pct.delete(0, tk.END)
+            self.e_atr_min_pct.insert(
+                0,
+                cfg.get(
+                    "atr_min_pct",
+                    "0.30",
+                ),
+            )
+
+            self.v_use_vol.set(
+                cfg.get(
+                    "use_vol",
+                    True,
+                )
+            )
+            self.e_vol_len.delete(
+                0,
+                tk.END,
+            )
+            self.e_vol_len.insert(
+                0,
+                cfg.get(
+                    "vol_len",
+                    "20",
+                ),
+            )
+
+            self.v_use_adx.set(
+                cfg.get(
+                    "use_adx",
+                    True,
+                )
+            )
+            self.e_adx_thresh.delete(
+                0,
+                tk.END,
+            )
+            self.e_adx_thresh.insert(
+                0,
+                cfg.get(
+                    "adx_thresh",
+                    "20",
+                ),
+            )
+
+            self.v_use_mtf.set(
+                cfg.get(
+                    "use_mtf",
+                    True,
+                )
+            )
+
+            saved_signal_mode = str(
+                cfg.get(
+                    "signal_mode",
+                    "SINGLE_SIGNAL",
+                )
+            ).strip().upper()
+
+            legacy_mode_map = {
+                "ALL_FILTERS": "STRICT_ALL_FILTERS",
+                "1_INDICATOR": "SINGLE_SIGNAL",
+                "2_INDICATORS": "2_SIGNALS",
+                "3_INDICATORS": "3_SIGNALS",
+                "4_INDICATORS": "4_SIGNALS",
+            }
+            saved_signal_mode = legacy_mode_map.get(
+                saved_signal_mode,
+                saved_signal_mode,
+            )
+
+            # One-time migration from the previous default. If the existing
+            # config was created by the older bot and still says strict mode,
+            # start the new bot in SINGLE_SIGNAL mode. After the user saves a
+            # new selection, that selection is preserved normally.
+            if (
+                saved_signal_mode == "STRICT_ALL_FILTERS"
+                and not cfg.get("signal_mode_v2_migrated", False)
+            ):
+                saved_signal_mode = "SINGLE_SIGNAL"
+                cfg["signal_mode_v2_migrated"] = True
+
+            self.v_signal_mode.set(saved_signal_mode)
+            self.v_hold_until_all_reverse.set(cfg.get("hold_until_all_reverse", True))
+            for widget,key,default in [
+                (self.e_adaptive_edge,"adaptive_edge","0.18"),(self.e_adaptive_min_weight,"adaptive_min_weight","3.5"),
+                (self.e_evidence_min_families,"evidence_min_families","2"),(self.e_evidence_family_min_score,"evidence_family_min_score","0.35"),
+                (self.e_liq_len,"liq_len","14"),(self.e_liq_filter_value,"liq_filter_value","0"),
+                (self.e_trend_len,"trend_len","14"),(self.e_trend_min_dist,"trend_min_dist","5"),(self.e_trend_buffer,"trend_buffer","0.0"),(self.e_trend_retest,"trend_retest","3"),
+                (self.e_div_pivot,"div_pivot","5"),(self.e_div_max_pivots,"div_max_pivots","10"),(self.e_div_max_bars,"div_max_bars","100"),
+                (self.e_div_cci,"div_cci_len","10"),(self.e_div_mom,"div_mom_len","10"),(self.e_div_vwfast,"div_vwmacd_fast","12"),(self.e_div_vwslow,"div_vwmacd_slow","26"),(self.e_div_cmf,"div_cmf_len","21"),(self.e_div_mfi,"div_mfi_len","14"),(self.e_sr_vol_ma,"sr_volume_ma","6")]:
+                widget.delete(0,tk.END); widget.insert(0,cfg.get(key,default))
+            self.v_use_liq_swing.set(cfg.get("use_liq_swing",True)); self.v_liq_area.set(cfg.get("liq_area","Wick Extremity")); self.v_liq_filter.set(cfg.get("liq_filter","Count"))
+            self.v_use_trendline.set(cfg.get("use_trendline",True)); self.v_trend_entry.set(cfg.get("trend_entry","FRESH_BREAK"))
+            self.v_use_divergence.set(cfg.get("use_divergence",True)); self.v_div_type.set(cfg.get("div_type","Regular/Hidden")); self.v_div_source.set(cfg.get("div_source","Close")); self.v_div_use_all.set(cfg.get("div_use_all",True))
+            self.v_use_vol_sr.set(cfg.get("use_vol_sr",True)); self.v_sr_vote.set(cfg.get("sr_vote_mode","MAJORITY")); self.v_sr_entry.set(cfg.get("sr_entry_mode","CURRENT_ZONE"))
+            self.v_evidence_require_trend.set(cfg.get("evidence_require_trend",True)); self.v_evidence_require_independent.set(cfg.get("evidence_require_independent",True))
+            self.v_sr_tf1.set(cfg.get("sr_tf1","Chart")); self.v_sr_tf2.set(cfg.get("sr_tf2","4h")); self.v_sr_tf3.set(cfg.get("sr_tf3","D")); self.v_sr_tf4.set(cfg.get("sr_tf4","W"))
+
+            self.e_min_score.delete(0, tk.END)
+            self.e_min_score.insert(
+                0,
+                cfg.get(
+                    "min_score",
+                    "4",
+                ),
+            )
+
+            self.v_size_mode.set(
+                cfg.get(
+                    "size_mode",
+                    "EQUITY_RISK_%",
+                )
+            )
+
+            self.e_risk_pct.delete(
+                0,
+                tk.END,
+            )
+            self.e_risk_pct.insert(
+                0,
+                cfg.get(
+                    "risk_pct",
+                    "1.0",
+                ),
+            )
+
+            self.e_fixed_qty.delete(
+                0,
+                tk.END,
+            )
+            self.e_fixed_qty.insert(
+                0,
+                cfg.get(
+                    "fixed_qty",
+                    "0.001",
+                ),
+            )
+
+            self.e_max_dd.delete(
+                0,
+                tk.END,
+            )
+            self.e_max_dd.insert(
+                0,
+                cfg.get(
+                    "max_dd",
+                    "5.0",
+                ),
+            )
+            self.e_emergency_capital_pct.delete(0, tk.END)
+            self.e_emergency_capital_pct.insert(0, cfg.get("emergency_capital_pct", "30.0"))
+            self.v_emergency_scope.set(cfg.get("emergency_scope", "BOT_ONLY"))
+
+            legacy_protection_mode = cfg.get("sltp_mode", "PRICE_%")
+            self.v_sl_mode.set(cfg.get("sl_mode", legacy_protection_mode))
+            self.v_tp_mode.set(cfg.get("tp_mode", legacy_protection_mode))
+
+            self.e_sl_pct.delete(
+                0,
+                tk.END,
+            )
+            self.e_sl_pct.insert(
+                0,
+                cfg.get(
+                    "sl_pct",
+                    "1.5",
+                ),
+            )
+
+            self.e_tp1_pct.delete(
+                0,
+                tk.END,
+            )
+            self.e_tp1_pct.insert(
+                0,
+                cfg.get(
+                    "tp1_pct",
+                    "2.0",
+                ),
+            )
+
+            self.e_tp2_pct.delete(
+                0,
+                tk.END,
+            )
+            self.e_tp2_pct.insert(
+                0,
+                cfg.get(
+                    "tp2_pct",
+                    "4.0",
+                ),
+            )
+
+            self.e_hold_sl_roi.delete(0, tk.END)
+            self.e_hold_sl_roi.insert(
+                0,
+                cfg.get(
+                    "hold_sl_roi",
+                    "5.0",
+                ),
+            )
+            self.v_hold_sl_wait_reversal.set(
+                cfg.get(
+                    "hold_sl_wait_reversal",
+                    False,
+                )
+            )
+
+            self.v_tp1_be.set(
+                cfg.get(
+                    "tp1_be",
+                    True,
+                )
+            )
+
+            self.v_tp_qty_mode.set(
+                cfg.get(
+                    "tp_qty_mode",
+                    "PERCENT_%",
+                )
+            )
+
+            self.e_tp1_close.delete(
+                0,
+                tk.END,
+            )
+            self.e_tp1_close.insert(
+                0,
+                cfg.get(
+                    "tp1_close",
+                    "50",
+                ),
+            )
+
+            self.e_tp2_close.delete(
+                0,
+                tk.END,
+            )
+            self.e_tp2_close.insert(
+                0,
+                cfg.get(
+                    "tp2_close",
+                    "50",
+                ),
+            )
+
+            self.v_tele_enable.set(
+                cfg.get(
+                    "tele_enable",
+                    False,
+                )
+            )
+
+            self.e_tele_token.delete(
+                0,
+                tk.END,
+            )
+            self.e_tele_token.insert(
+                0,
+                cfg.get(
+                    "tele_token",
+                    "",
+                ),
+            )
+
+            self.e_tele_chat.delete(
+                0,
+                tk.END,
+            )
+            self.e_tele_chat.insert(
+                0,
+                cfg.get(
+                    "tele_chat",
+                    "",
+                ),
+            )
+
+            self.log(
+                "Configuration loaded."
+            )
+
+        except Exception as e:
+            self.log(
+                f"Config load error: {e}"
+            )
+
+    # -------------------- EXCHANGE ---------------------------
+
+    def build_exchange(self, exchange_id, api_key, api_secret, account_mode):
+        """Build a CCXT futures/swap client for every V8-supported exchange."""
+        supported = {
+            "bybit": "swap",
+            "binance": "future",
+            "gate": "swap",
+            "bitget": "swap",
+            "weex": "swap",
+        }
+        if exchange_id not in supported:
+            raise RuntimeError(f"Unsupported V8 exchange: {exchange_id}")
+
+        exchange_class = getattr(ccxt, exchange_id)
+
+        config = {
+            "apiKey": api_key,
+            "secret": api_secret,
+            "enableRateLimit": True,
+            "options": {
+                "defaultType": supported[exchange_id],
+            },
+        }
+
+        exchange = exchange_class(config)
+
+        # Sandbox/demo must be enabled immediately after construction.
+        # Bybit has its dedicated Demo API; Bitget and WEEX expose demo trading
+        # through CCXT; Gate exposes a testnet; KuCoin Futures currently has
+        # no CCXT sandbox URL, so it is intentionally LIVE-only here.
+        if exchange_id == "bybit":
+            if account_mode == "MT5_PAPER":
+                if not hasattr(exchange, "enable_demo_trading"):
+                    raise RuntimeError("Installed CCXT does not support Bybit Demo Trading.")
+                exchange.enable_demo_trading(True)
+                self.log("BYBIT DEMO mode enabled.")
+            elif account_mode == "BYBIT_TESTNET":
+                exchange.set_sandbox_mode(True)
+                self.log("BYBIT TESTNET mode enabled.")
+            else:
+                self.log("BYBIT LIVE mode selected.")
+
+        elif exchange_id == "binance":
+            if account_mode == "TESTNET":
+                exchange.set_sandbox_mode(True)
+                self.log("BINANCE FUTURES TESTNET mode enabled.")
+            else:
+                self.log("BINANCE FUTURES LIVE mode selected.")
+
+        elif exchange_id == "gate":
+            if account_mode == "TESTNET":
+                exchange.set_sandbox_mode(True)
+                self.log("GATE.IO FUTURES TESTNET mode enabled.")
+            else:
+                self.log("GATE.IO FUTURES LIVE mode selected.")
+
+        elif exchange_id == "bitget":
+            if account_mode == "DEMO":
+                if hasattr(exchange, "enable_demo_trading"):
+                    exchange.enable_demo_trading(True)
+                else:
+                    exchange.set_sandbox_mode(True)
+                self.log("BITGET DEMO mode enabled.")
+            else:
+                self.log("BITGET LIVE mode selected.")
+
+        elif exchange_id == "weex":
+            if account_mode == "DEMO":
+                exchange.set_sandbox_mode(True)
+                self.log("WEEX DEMO mode enabled.")
+            else:
+                self.log("WEEX LIVE mode selected.")
+
+        exchange.load_markets()
+        return exchange
+
+    def normalize_symbol(self, exchange, exchange_id, raw_symbol):
+        """Resolve a user-entered symbol to the exchange's unified perpetual symbol."""
+        raw_symbol = raw_symbol.strip().upper()
+
+        # Exact match first.
+        if raw_symbol in exchange.markets:
+            market = exchange.markets[raw_symbol]
+            if market.get("swap") or market.get("future") or market.get("contract"):
+                return raw_symbol
+
+        # Normalize common forms: BTCUSDT, BTC/USDT, BTC/USDT:USDT.
+        compact = raw_symbol.replace("/", "").replace(":", "")
+        if compact.endswith("USDT"):
+            base = compact[:-4]
+            candidates = [
+                (sym, market) for sym, market in exchange.markets.items()
+                if str(market.get("base") or "").upper() == base
+                and str(market.get("quote") or "").upper() == "USDT"
+                and (market.get("swap") or market.get("future") or market.get("contract"))
+            ]
+        else:
+            candidates = []
+
+        if not candidates and "/" in raw_symbol:
+            base = raw_symbol.split("/")[0]
+            quote = raw_symbol.split("/")[1].split(":")[0]
+            candidates = [
+                (sym, market) for sym, market in exchange.markets.items()
+                if str(market.get("base") or "").upper() == base
+                and str(market.get("quote") or "").upper() == quote
+                and (market.get("swap") or market.get("future") or market.get("contract"))
+            ]
+
+        if candidates:
+            # Prefer USDT-settled perpetual swaps, then perpetual swaps generally.
+            candidates.sort(
+                key=lambda item: (
+                    0 if item[1].get("swap") else 1,
+                    0 if str(item[1].get("settle") or "").upper() == "USDT" else 1,
+                    item[0],
+                )
+            )
+            return candidates[0][0]
+
+        # Final case-insensitive exact lookup.
+        for sym, market in exchange.markets.items():
+            if sym.upper() == raw_symbol and (
+                market.get("swap") or market.get("future") or market.get("contract")
+            ):
+                return sym
+
+        raise RuntimeError(
+            f"Perpetual/futures symbol not found on {exchange_id}: {raw_symbol}"
+        )
+
+    # -------------------- PRECISION --------------------------
+    def safe_amount(self, symbol, qty):
+        qty = float(qty)
+
+        if qty <= 0:
+            return 0.0
+
+        try:
+            qty = float(
+                self.exchange.amount_to_precision(
+                    symbol,
+                    qty,
+                )
+            )
+        except Exception:
+            pass
+
+        market = self.exchange.market(symbol)
+
+        min_amount = (
+            (market.get("limits") or {})
+            .get("amount", {})
+            .get("min")
+        )
+
+        if (
+            min_amount is not None
+            and qty < float(min_amount)
+        ):
+            return 0.0
+
+        return qty
+
+    def safe_price(self, symbol, price):
+        try:
+            return float(
+                self.exchange.price_to_precision(
+                    symbol,
+                    price,
+                )
+            )
+        except Exception:
+            return float(price)
+
+    # -------------------- ACCOUNT / POSITION -----------------
+
+    def fetch_balance_total(self):
+        balance = self.exchange.fetch_balance()
+
+        try:
+            value = balance["USDT"]["total"]
+            if value is not None:
+                return float(value)
+        except Exception:
+            pass
+
+        try:
+            return float(
+                balance["total"]["USDT"]
+            )
+        except Exception:
+            raise RuntimeError(
+                "Could not read USDT total balance."
+            )
+
+    def fetch_account_equity(self):
+        """Return Bybit account equity; unrealized PnL is included when available."""
+        balance = self.exchange.fetch_balance()
+        try:
+            rows = ((balance.get("info") or {}).get("result") or {}).get("list") or []
+            if rows and rows[0].get("totalEquity") is not None:
+                return float(rows[0]["totalEquity"])
+        except Exception:
+            pass
+        equity = self.fetch_balance_total()
+        try:
+            for pos in self.exchange.fetch_positions():
+                try:
+                    if abs(float(pos.get("contracts") or 0)) <= 0:
+                        continue
+                except Exception:
+                    continue
+                upl = pos.get("unrealizedPnl")
+                if upl is None:
+                    upl = (pos.get("info") or {}).get("unrealisedPnl")
+                if upl is not None:
+                    equity += float(upl)
+        except Exception:
+            pass
+        return float(equity)
+
+    def _emergency_flatten_all_positions(self, reason, equity, threshold):
+        """Hard account-level circuit breaker: cancel orders, flatten all positions, stop bot."""
+        self.log(f"CRITICAL CAPITAL CIRCUIT BREAKER: Equity={equity:.8f} <= Threshold={threshold:.8f} | {reason}")
+        try:
+            self.send_telegram(f"CRITICAL CAPITAL CIRCUIT BREAKER: equity {equity:.4f} <= {threshold:.4f}. All account positions will be closed and bot stopped.")
+        except Exception:
+            pass
+        try:
+            positions = self.exchange.fetch_positions()
+        except Exception as e:
+            positions = []
+            self.log(f"CAPITAL STOP: Could not fetch account positions: {e}")
+        symbols = {p.get("symbol") for p in positions if p.get("symbol")}
+        if self.symbol:
+            symbols.add(self.symbol)
+        for sym in sorted(symbols):
+            try:
+                for order in self.exchange.fetch_open_orders(sym):
+                    oid = order.get("id")
+                    if oid:
+                        try:
+                            self.exchange.cancel_order(oid, sym)
+                        except Exception as e:
+                            self.log(f"CAPITAL STOP: Cancel failed {sym} {oid}: {e}")
+            except Exception as e:
+                self.log(f"CAPITAL STOP: Order cleanup failed {sym}: {e}")
+        for pos in positions:
+            sym = pos.get("symbol")
+            side = str(pos.get("side") or "").upper()
+            try:
+                contracts = abs(float(pos.get("contracts") or 0))
+            except Exception:
+                contracts = 0.0
+            if not sym or contracts <= 0 or side not in ("LONG", "SHORT"):
+                continue
+            qty = self.safe_amount(sym, contracts)
+            if qty <= 0:
+                continue
+            close_side = "sell" if side == "LONG" else "buy"
+            self.log(f"CAPITAL STOP: Closing {side} {sym} Qty={qty}")
+            try:
+                close_params = {"reduceOnly": True}
+                if self.exchange_id == "bybit":
+                    close_params["positionIdx"] = 0
+                self.exchange.create_order(
+                    sym, "market", close_side, qty, None, close_params
+                )
+            except Exception as e:
+                self.log(f"CAPITAL STOP: FAILED to close {side} {sym}: {e}")
+        self.is_running = False
+        self.log("CAPITAL STOP COMPLETE: Emergency equity limit reached. Bot stopped; no new trades will be opened.")
+        try:
+            self.root.after(0, lambda: (self.btn_start.config(state="normal"), self.btn_stop.config(state="disabled")))
+        except Exception:
+            pass
+
+    def fetch_position(self, symbol):
+        positions = self.exchange.fetch_positions(
+            [symbol]
+        )
+
+        for pos in positions:
+            contracts = pos.get("contracts")
+
+            try:
+                contracts = abs(
+                    float(contracts or 0)
+                )
+            except Exception:
+                contracts = 0.0
+
+            if contracts <= 0:
+                continue
+
+            side = str(
+                pos.get("side") or ""
+            ).lower()
+
+            if side not in ("long", "short"):
+                continue
+
+            entry = (
+                pos.get("entryPrice")
+                or pos.get("average")
+                or pos.get("avgPrice")
+            )
+
+            try:
+                entry = float(entry)
+            except Exception:
+                entry = 0.0
+
+            raw_info = pos.get("info") or {}
+
+            leverage_value = (
+                pos.get("leverage")
+                or raw_info.get("leverage")
+            )
+            try:
+                leverage_value = float(leverage_value)
+            except Exception:
+                leverage_value = 0.0
+
+            initial_margin = (
+                pos.get("initialMargin")
+                or pos.get("initialMarginByMp")
+                or raw_info.get("positionIM")
+                or raw_info.get("positionIMByMp")
+            )
+            try:
+                initial_margin = float(initial_margin)
+            except Exception:
+                initial_margin = 0.0
+
+            return {
+                "side": side.upper(),
+                "qty": contracts,
+                "entry": entry,
+                "leverage": leverage_value,
+                "initial_margin": initial_margin,
+                "raw": pos,
+            }
+
+        return None
+
+    def wait_for_position(
+        self,
+        symbol,
+        expected_side,
+        timeout=10,
+    ):
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            try:
+                pos = self.fetch_position(
+                    symbol
+                )
+
+                if (
+                    pos
+                    and pos["side"]
+                    == expected_side
+                    and pos["qty"] > 0
+                    and pos["entry"] > 0
+                ):
+                    return pos
+
+            except Exception as e:
+                self.log(
+                    f"Position read warning: {e}"
+                )
+
+            time.sleep(0.5)
+
+        return None
+
+    # -------------------- OPEN ORDERS -------------------------
+
+    def fetch_open_orders_safe(self, symbol):
+        try:
+            return self.exchange.fetch_open_orders(
+                symbol
+            )
+        except Exception as e:
+            self.log(
+                f"Open-order read warning: {e}"
+            )
+            return []
+
+    def cancel_all_open_orders(self, symbol):
+        orders = self.fetch_open_orders_safe(
+            symbol
+        )
+
+        for order in orders:
+            order_id = order.get("id")
+
+            if not order_id:
+                continue
+
+            try:
+                self.exchange.cancel_order(
+                    order_id,
+                    symbol,
+                )
+                self.log(
+                    f"Cancelled old order: {order_id}"
+                )
+            except Exception as e:
+                self.log(
+                    f"Cancel warning {order_id}: {e}"
+                )
+
+    # -------------------- ENTRY PRICE ------------------------
+
+    def get_actual_order_price(self, order):
+        candidates = [
+            order.get("average"),
+            order.get("price"),
+        ]
+
+        for value in candidates:
+            try:
+                value = float(value)
+                if value > 0:
+                    return value
+            except Exception:
+                pass
+
+        info = order.get("info") or {}
+
+        for key in (
+            "avgPrice",
+            "averagePrice",
+            "avgFillPrice",
+            "price",
+        ):
+            try:
+                value = float(
+                    info.get(key)
+                )
+                if value > 0:
+                    return value
+            except Exception:
+                pass
+
+        return None
+
+    # -------------------- POSITION SIZING --------------------
+
+    def calculate_entry_qty(
+        self,
+        symbol,
+        balance,
+        reference_price,
+        risk_pct,
+        sl_price_fraction,
+        size_mode,
+        fixed_qty,
+    ):
+        if size_mode == "FIXED_QTY":
+            qty = fixed_qty
+        else:
+            if risk_pct <= 0:
+                raise ValueError(
+                    "Risk Per Trade must be greater than 0."
+                )
+
+            if sl_price_fraction <= 0:
+                raise ValueError(
+                    "SL price distance must be greater than 0."
+                )
+
+            risk_amount = (
+                balance * risk_pct
+            )
+
+            stop_distance = (
+                reference_price * sl_price_fraction
+            )
+
+            qty = (
+                risk_amount
+                / stop_distance
+            )
+
+        qty = self.safe_amount(
+            symbol,
+            qty,
+        )
+
+        if qty <= 0:
+            raise RuntimeError(
+                "Calculated quantity is below "
+                "the exchange minimum/precision."
+            )
+
+        return qty
+
+    # -------------------- SL / TP CALCULATION ----------------
+
+    def target_to_price_fraction(
+        self,
+        target_pct,
+        protection_mode,
+        leverage,
+        actual_entry=None,
+        position_qty=None,
+        position_initial_margin=None,
+    ):
+        """
+        Convert the user-entered target into a market-price movement.
+
+        PRICE_%:
+            2.0 means a 2.0% price move from actual entry.
+
+        ROI_%:
+            For linear contracts, ROI = P&L / position margin.
+            When the exchange exposes the actual position margin, use it
+            to calculate the trigger price. This is more accurate than
+            simply dividing ROI by leverage, especially in Bybit cross
+            margin where the displayed position margin can include the
+            closing-fee component.
+
+            Fallback:
+                if position margin is unavailable, use:
+                price_move ~= ROI / leverage.
+
+        Fees, funding and slippage can make the realized/displayed ROI
+        differ slightly from the requested trigger target.
+        """
+        target_pct = float(target_pct)
+        leverage = float(leverage)
+
+        if target_pct <= 0:
+            raise RuntimeError(
+                "SL/TP targets must be greater than zero."
+            )
+
+        if leverage <= 0:
+            raise RuntimeError(
+                "Leverage must be greater than zero."
+            )
+
+        mode = str(protection_mode).upper()
+
+        if mode == "PRICE_%":
+            return target_pct / 100.0
+
+        if mode != "ROI_%":
+            raise RuntimeError(
+                f"Unknown SL/TP protection mode: {protection_mode}"
+            )
+
+        # Preferred: use the actual position margin returned by the
+        # exchange after the position is filled.
+        if (
+            actual_entry is not None
+            and actual_entry > 0
+            and position_qty is not None
+            and position_qty > 0
+            and position_initial_margin is not None
+            and position_initial_margin > 0
+        ):
+            target_pnl = (
+                position_initial_margin
+                * (target_pct / 100.0)
+            )
+            return target_pnl / position_qty / actual_entry
+
+        # Pre-entry sizing fallback.
+        return (target_pct / 100.0) / leverage
+
+    def calculate_protection_prices(
+        self,
+        symbol,
+        side,
+        actual_entry,
+        position_qty,
+        position_initial_margin,
+        sl_target_pct,
+        tp1_target_pct,
+        tp2_target_pct,
+        sl_mode,
+        tp_mode,
+        leverage,
+    ):
+        if actual_entry <= 0:
+            raise RuntimeError(
+                "Actual entry price is invalid."
+            )
+
+        sl_move = self.target_to_price_fraction(
+            sl_target_pct,
+            sl_mode,
+            leverage,
+            actual_entry,
+            position_qty,
+            position_initial_margin,
+        )
+        tp1_move = self.target_to_price_fraction(
+            tp1_target_pct,
+            tp_mode,
+            leverage,
+            actual_entry,
+            position_qty,
+            position_initial_margin,
+        )
+        tp2_move = self.target_to_price_fraction(
+            tp2_target_pct,
+            tp_mode,
+            leverage,
+            actual_entry,
+            position_qty,
+            position_initial_margin,
+        )
+
+        if side == "LONG":
+            sl = actual_entry * (1 - sl_move)
+            tp1 = actual_entry * (1 + tp1_move)
+            tp2 = actual_entry * (1 + tp2_move)
+        else:
+            sl = actual_entry * (1 + sl_move)
+            tp1 = actual_entry * (1 - tp1_move)
+            tp2 = actual_entry * (1 - tp2_move)
+
+        sl = self.safe_price(
+            symbol,
+            sl,
+        )
+        tp1 = self.safe_price(
+            symbol,
+            tp1,
+        )
+        tp2 = self.safe_price(
+            symbol,
+            tp2,
+        )
+
+        # Validate direction.
+        if side == "LONG":
+            if not (
+                sl < actual_entry
+                and tp1 > actual_entry
+                and tp2 > tp1
+            ):
+                raise RuntimeError(
+                    "Calculated LONG SL/TP prices are invalid."
+                )
+        else:
+            if not (
+                sl > actual_entry
+                and tp1 < actual_entry
+                and tp2 < tp1
+            ):
+                raise RuntimeError(
+                    "Calculated SHORT SL/TP prices are invalid."
+                )
+
+        return sl, tp1, tp2, sl_move, tp1_move, tp2_move
+
+    def _current_market_price(self, symbol):
+        """Return the latest exchange price for bot-managed Hold-SL monitoring."""
+        ticker = self.exchange.fetch_ticker(symbol)
+        last = ticker.get("last") or ticker.get("close")
+        if last is None:
+            raise RuntimeError("Exchange returned no current market price.")
+        return float(last)
+
+    def _manage_hold_sl_wait_reversal(self, position):
+        """Monitor the Hold-All-Reverse ROI threshold without an exchange SL.
+
+        When the threshold is reached, the position remains open.  The normal
+        all-active-direction reversal logic is then responsible for closing
+        the position.  This is deliberately separate from the exchange-side
+        SL reconciliation.
+        """
+        if not position or not self.last_protected_position:
+            return False
+
+        protected = self.last_protected_position
+        if not protected.get("hold_sl_wait_reversal"):
+            return False
+        if protected.get("side") != position.get("side"):
+            return False
+        if self.hold_sl_threshold_hit:
+            return True
+
+        threshold = float(protected.get("sl") or 0.0)
+        if threshold <= 0:
+            return False
+
+        try:
+            price = self._current_market_price(self.symbol)
+        except Exception as e:
+            self.log(f"HOLD-SL PRICE NOTICE: {e}")
+            return False
+
+        side = position.get("side")
+        hit = (
+            price <= threshold if side == "LONG"
+            else price >= threshold
+        )
+
+        if hit:
+            self.hold_sl_threshold_hit = True
+            if not self.hold_sl_threshold_logged:
+                self.hold_sl_threshold_logged = True
+                self.log(
+                    f"HOLD-SL THRESHOLD REACHED: {side} | "
+                    f"Current={price:.12g} | Threshold={threshold:.12g} | "
+                    "POSITION REMAINS OPEN. Waiting for ALL active directional signals to reverse."
+                )
+        return self.hold_sl_threshold_hit
+
+    # -------------------- PROTECTION ORDERS ------------------
+
+    def create_bybit_trigger(
+        self,
+        symbol,
+        order_type,
+        side,
+        qty,
+        trigger_price,
+        trigger_direction,
+        label,
+    ):
+        # IMPORTANT: CCXT uses the unified order type "market" plus
+        # triggerPrice for a market trigger/conditional order.
+        # Passing exchange-specific strings such as STOP_MARKET or
+        # TAKE_PROFIT_MARKET as the CCXT `type` can make CCXT build a
+        # regular limit-style request, which Bybit rejects with:
+        # "Price or BBO is required for limit orders".
+        #
+        # Bybit's V5 API then receives a Market order with a triggerPrice,
+        # triggerDirection and reduceOnly, which is the correct structure
+        # for an independent conditional close order.
+        params = {
+            "triggerPrice": trigger_price,
+            "triggerDirection": trigger_direction,
+            "triggerBy": "LastPrice",
+            "reduceOnly": True,
+            "positionIdx": 0,
+        }
+
+        order = self.exchange.create_order(
+            symbol,
+            "market",
+            side,
+            qty,
+            None,
+            params,
+        )
+
+        if not order or not order.get("id"):
+            raise RuntimeError(
+                f"{label} order returned no order ID."
+            )
+
+        self.log(
+            f"{label} submitted. ID={order['id']}"
+        )
+
+        return order
+
+    def create_binance_trigger(
+        self,
+        symbol,
+        order_type,
+        side,
+        qty,
+        trigger_price,
+        label,
+    ):
+        params = {
+            "stopPrice": trigger_price,
+            "reduceOnly": True,
+            "workingType": "CONTRACT_PRICE",
+        }
+
+        order = self.exchange.create_order(
+            symbol,
+            order_type,
+            side,
+            qty,
+            None,
+            params,
+        )
+
+        if not order or not order.get("id"):
+            raise RuntimeError(
+                f"{label} order returned no order ID."
+            )
+
+        self.log(
+            f"{label} submitted. ID={order['id']}"
+        )
+
+        return order
+
+    def calculate_tp_close_quantities(
+        self,
+        symbol,
+        position_qty,
+        tp_qty_mode,
+        tp1_close_value,
+        tp2_close_value,
+    ):
+        """
+        Calculate the quantities closed by TP1 and TP2.
+
+        PERCENT_%:
+            tp1_close_value / tp2_close_value are percentages of the
+            ACTUAL filled position quantity. They must total exactly 100%.
+
+        FIXED_QTY:
+            tp1_close_value / tp2_close_value are exchange quantity units.
+            Their sum must equal the ACTUAL filled position quantity.
+
+        SL always protects 100% of the actual position.
+        """
+        qty = self.safe_amount(symbol, position_qty)
+
+        if qty <= 0:
+            raise RuntimeError(
+                "Actual position quantity is invalid for TP split."
+            )
+
+        mode = str(tp_qty_mode).upper()
+
+        if mode == "PERCENT_%":
+            tp1_pct = float(tp1_close_value)
+            tp2_pct = float(tp2_close_value)
+
+            if tp1_pct <= 0 or tp2_pct <= 0:
+                raise RuntimeError(
+                    "TP1 and TP2 close percentages must both be greater than 0."
+                )
+
+            if abs((tp1_pct + tp2_pct) - 100.0) > 1e-9:
+                raise RuntimeError(
+                    f"TP1 + TP2 close percentages must equal 100%. "
+                    f"Received {tp1_pct:g}% + {tp2_pct:g}%."
+                )
+
+            tp1_qty = self.safe_amount(
+                symbol,
+                qty * tp1_pct / 100.0,
+            )
+
+            # Derive TP2 as the exact remaining quantity after precision
+            # so TP1 + TP2 always equals the actual position quantity.
+            tp2_qty = self.safe_amount(
+                symbol,
+                qty - tp1_qty,
+            )
+
+        elif mode == "FIXED_QTY":
+            requested_tp1 = float(tp1_close_value)
+            requested_tp2 = float(tp2_close_value)
+
+            if requested_tp1 <= 0 or requested_tp2 <= 0:
+                raise RuntimeError(
+                    "TP1 and TP2 fixed quantities must both be greater than 0."
+                )
+
+            tp1_qty = self.safe_amount(
+                symbol,
+                requested_tp1,
+            )
+            tp2_qty = self.safe_amount(
+                symbol,
+                requested_tp2,
+            )
+
+            if tp1_qty <= 0 or tp2_qty <= 0:
+                raise RuntimeError(
+                    "TP1/TP2 quantity is below the exchange minimum/precision."
+                )
+
+            if abs((tp1_qty + tp2_qty) - qty) > 1e-12:
+                raise RuntimeError(
+                    f"TP1 + TP2 quantity must equal actual position quantity "
+                    f"({qty:g}). Received {tp1_qty:g} + {tp2_qty:g}."
+                )
+
+        else:
+            raise RuntimeError(
+                f"Unknown TP quantity mode: {tp_qty_mode}"
+            )
+
+        if tp1_qty <= 0 or tp2_qty <= 0:
+            raise RuntimeError(
+                "Position is too small to split into two TP exits."
+            )
+
+        return tp1_qty, tp2_qty
+
+    def create_generic_trigger(
+        self,
+        symbol,
+        side,
+        qty,
+        trigger_price,
+        label,
+    ):
+        """Best-effort CCXT unified reduce-only trigger for V8 exchanges."""
+        params = {
+            "triggerPrice": trigger_price,
+            "reduceOnly": True,
+        }
+        order = self.exchange.create_order(
+            symbol,
+            "market",
+            side,
+            qty,
+            None,
+            params,
+        )
+        if not order or not order.get("id"):
+            raise RuntimeError(f"{label} order returned no order ID.")
+        self.log(f"{label} submitted. ID={order['id']}")
+        return order
+
+    def create_protection_orders(
+        self,
+        symbol,
+        position_side,
+        position_qty,
+        sl,
+        tp1,
+        tp2,
+        tp_qty_mode,
+        tp1_close_value,
+        tp2_close_value,
+    ):
+        """
+        Creates:
+            SL  = 100% of actual position
+            TP1 = user-selected quantity
+            TP2 = user-selected quantity
+
+        TP quantity can be configured as:
+            PERCENT_%  -> percentages of actual position
+            FIXED_QTY  -> exchange quantity units
+
+        TP1 + TP2 must equal the actual position quantity.
+        """
+        qty = self.safe_amount(
+            symbol,
+            position_qty,
+        )
+
+        if qty <= 0:
+            raise RuntimeError(
+                "Actual position quantity is invalid."
+            )
+
+        hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
+        tp1_qty = 0.0
+        tp2_qty = 0.0
+        if not hold_all_reverse:
+            tp1_qty, tp2_qty = self.calculate_tp_close_quantities(
+                symbol,
+                qty,
+                tp_qty_mode,
+                tp1_close_value,
+                tp2_close_value,
+            )
+            self.log(
+                f"TP CLOSE MODE: {tp_qty_mode} | "
+                f"TP1={tp1_qty:g} | TP2={tp2_qty:g} | "
+                f"Total={qty:g}"
+            )
+        else:
+            self.log(
+                "REVERSAL HOLD ON: Only the hard SL will be placed. "
+                "TP1/TP2 exchange orders are disabled; strategy reversal is the exit."
+            )
+
+        close_side = (
+            "sell"
+            if position_side == "LONG"
+            else "buy"
+        )
+
+        created = []
+
+        try:
+            if self.exchange_id == "bybit":
+                # LONG:
+                # SL below current -> descending = 2
+                # TP above current -> ascending = 1
+                #
+                # SHORT:
+                # SL above current -> ascending = 1
+                # TP below current -> descending = 2
+                if position_side == "LONG":
+                    sl_direction = 2
+                    tp_direction = 1
+                else:
+                    sl_direction = 1
+                    tp_direction = 2
+
+                sl_order = self.create_bybit_trigger(
+                    symbol,
+                    "STOP_MARKET",
+                    close_side,
+                    qty,
+                    sl,
+                    sl_direction,
+                    "SL",
+                )
+                created.append(
+                    ("SL", sl_order)
+                )
+
+                if not hold_all_reverse:
+                    tp1_order = self.create_bybit_trigger(
+                        symbol,
+                        "TAKE_PROFIT_MARKET",
+                        close_side,
+                        tp1_qty,
+                        tp1,
+                        tp_direction,
+                        "TP1",
+                    )
+                    created.append(
+                        ("TP1", tp1_order)
+                    )
+
+                    tp2_order = self.create_bybit_trigger(
+                        symbol,
+                        "TAKE_PROFIT_MARKET",
+                        close_side,
+                        tp2_qty,
+                        tp2,
+                        tp_direction,
+                        "TP2",
+                    )
+                    created.append(
+                        ("TP2", tp2_order)
+                    )
+
+            elif self.exchange_id == "binance":
+                sl_order = self.create_binance_trigger(
+                    symbol, "STOP_MARKET", close_side, qty, sl, "SL"
+                )
+                created.append(("SL", sl_order))
+
+                if not hold_all_reverse:
+                    tp1_order = self.create_binance_trigger(
+                        symbol, "TAKE_PROFIT_MARKET", close_side, tp1_qty, tp1, "TP1"
+                    )
+                    created.append(("TP1", tp1_order))
+                    tp2_order = self.create_binance_trigger(
+                        symbol, "TAKE_PROFIT_MARKET", close_side, tp2_qty, tp2, "TP2"
+                    )
+                    created.append(("TP2", tp2_order))
+            else:
+                # Gate / Bitget / WEEX.
+                # CCXT maps triggerPrice and reduceOnly to each venue's
+                # conditional-order API where supported.
+                sl_order = self.create_generic_trigger(
+                    symbol, close_side, qty, sl, "SL"
+                )
+                created.append(("SL", sl_order))
+
+                if not hold_all_reverse:
+                    tp1_order = self.create_generic_trigger(
+                        symbol, close_side, tp1_qty, tp1, "TP1"
+                    )
+                    created.append(("TP1", tp1_order))
+                    tp2_order = self.create_generic_trigger(
+                        symbol, close_side, tp2_qty, tp2, "TP2"
+                    )
+                    created.append(("TP2", tp2_order))
+
+        except Exception:
+            # Never leave a half-created protection set behind.
+            for _, order in created:
+                try:
+                    self.exchange.cancel_order(
+                        order["id"],
+                        symbol,
+                    )
+                except Exception:
+                    pass
+            raise
+
+        return created
+
+    def verify_protection_orders(
+        self,
+        symbol,
+        created_orders,
+    ):
+        """
+        Verifies that the exchange still reports every newly
+        created order as open.
+
+        We deliberately do NOT declare protection active merely
+        because create_order() returned without an exception.
+        """
+
+        time.sleep(0.7)
+
+        open_orders = (
+            self.fetch_open_orders_safe(
+                symbol
+            )
+        )
+
+        open_ids = {
+            str(o.get("id"))
+            for o in open_orders
+            if o.get("id")
+        }
+
+        results = []
+
+        for label, order in created_orders:
+            oid = str(
+                order.get("id")
+            )
+
+            active = oid in open_ids
+
+            if active:
+                self.log(
+                    f"{label} VERIFIED ACTIVE. ID={oid}"
+                )
+            else:
+                self.log(
+                    f"{label} NOT FOUND in open orders. ID={oid}"
+                )
+
+            results.append(
+                (label, active)
+            )
+
+        return all(
+            active
+            for _, active in results
+        )
+
+    def _reconcile_protection_orders(self, position):
+        """Keep exchange-side SL/TP protection synchronized with the position.
+
+        Bybit displays these as *Conditional* orders.  ``Untriggered`` is
+        normal for a pending stop/TP; it means the trigger has not fired yet.
+        This routine is specifically for the dangerous case where a live
+        position exists but one of the expected protective orders has
+        disappeared.  The SL is treated as mandatory.
+        """
+        if not position or not self.last_protected_position:
+            return
+
+        protected = self.last_protected_position
+        if protected.get("side") != position.get("side"):
+            return
+
+        # In bot-managed Hold-SL wait mode there is intentionally NO exchange
+        # SL to reconcile.  The ROI threshold is monitored locally and the
+        # strategy reversal closes the position after all active signals reverse.
+        if protected.get("hold_sl_wait_reversal"):
+            return
+
+        now = time.time()
+        if now - self.last_protection_reconcile < self.protection_reconcile_interval:
+            return
+        self.last_protection_reconcile = now
+
+        try:
+            open_orders = self.fetch_open_orders_safe(self.symbol)
+            open_ids = {str(o.get("id")) for o in open_orders if o.get("id")}
+        except Exception as e:
+            self.log(f"PROTECTION RECONCILE NOTICE: {e}")
+            return
+
+        sl_id = str(protected.get("sl_id") or "")
+        tp1_id = str(protected.get("tp1_id") or "")
+        tp2_id = str(protected.get("tp2_id") or "")
+
+        # When Hold-All-Reverse is ON, strategy reversal is the profit exit.
+        # Remove any TP orders that may have been created before the setting was
+        # enabled, and make SL the only exchange-side protection order.
+        if self.v_hold_until_all_reverse.get():
+            for label, oid in (("TP1", tp1_id), ("TP2", tp2_id)):
+                if oid and oid in open_ids:
+                    try:
+                        self.exchange.cancel_order(oid, self.symbol)
+                        self.log(f"{label} CANCELLED: Hold-All-Reverse is ON; strategy reversal is the exit.")
+                    except Exception as e:
+                        self.log(f"{label} CANCEL NOTICE: {e}")
+            protected["tp1_id"] = None
+            protected["tp2_id"] = None
+            return
+
+        expected = []
+        if sl_id:
+            expected.append(("SL/BE", sl_id))
+        if not self.tp1_be_done and tp1_id:
+            expected.append(("TP1", tp1_id))
+        if tp2_id:
+            expected.append(("TP2", tp2_id))
+
+        missing = [(label, oid) for label, oid in expected if oid not in open_ids]
+        if not missing:
+            return
+
+        self.log(
+            "PROTECTION WARNING: Live position has missing exchange order(s): "
+            + ", ".join(label for label, _ in missing)
+        )
+
+        # First priority: restore a missing SL immediately.  Never leave a
+        # live position relying only on TP orders.
+        if sl_id and sl_id not in open_ids:
+            try:
+                remaining_qty = self.safe_amount(self.symbol, float(position.get("qty") or 0.0))
+                sl_price = float(protected.get("sl") or 0.0)
+                if remaining_qty > 0 and sl_price > 0:
+                    close_side = "sell" if position["side"] == "LONG" else "buy"
+                    if self.exchange_id == "bybit":
+                        trigger_direction = 2 if position["side"] == "LONG" else 1
+                        new_sl = self.create_bybit_trigger(
+                            self.symbol, "STOP_MARKET", close_side, remaining_qty,
+                            self.safe_price(self.symbol, sl_price),
+                            trigger_direction, "SL REPLACEMENT"
+                        )
+                    else:
+                        new_sl = self.create_binance_trigger(
+                            self.symbol, "STOP_MARKET", close_side, remaining_qty,
+                            self.safe_price(self.symbol, sl_price), "SL REPLACEMENT"
+                        )
+                    protected["sl_id"] = new_sl.get("id")
+                    self.log(
+                        f"SL REPLACED ✓ | Price={sl_price:.12g} | Qty={remaining_qty:g}"
+                    )
+                    return
+            except Exception as e:
+                self.log(f"SL REPLACEMENT FAILED: {e}")
+
+        # If a TP disappears, do not blindly recreate it if it may already
+        # have filled.  _manage_tp1_break_even() remains the authority for
+        # TP1 completion.  A missing TP2 while the position is still open can
+        # safely be rebuilt from the original TP2 price.
+        if tp2_id and tp2_id not in open_ids:
+            try:
+                remaining_qty = self.safe_amount(self.symbol, float(position.get("qty") or 0.0))
+                tp2_price = float(protected.get("tp2") or 0.0)
+                if remaining_qty > 0 and tp2_price > 0:
+                    # If TP1 is not yet done, preserve the configured TP2
+                    # quantity.  After TP1, the remaining position is TP2's
+                    # natural quantity.
+                    if self.tp1_be_done:
+                        tp2_qty = remaining_qty
+                    else:
+                        tp2_qty = self.safe_amount(self.symbol, float(protected.get("qty") or remaining_qty) * 0.5)
+                        if tp2_qty > remaining_qty:
+                            tp2_qty = remaining_qty
+                    close_side = "sell" if position["side"] == "LONG" else "buy"
+                    if self.exchange_id == "bybit":
+                        trigger_direction = 1 if position["side"] == "LONG" else 2
+                        new_tp2 = self.create_bybit_trigger(
+                            self.symbol, "TAKE_PROFIT_MARKET", close_side, tp2_qty,
+                            self.safe_price(self.symbol, tp2_price),
+                            trigger_direction, "TP2 REPLACEMENT"
+                        )
+                    else:
+                        new_tp2 = self.create_binance_trigger(
+                            self.symbol, "TAKE_PROFIT_MARKET", close_side, tp2_qty,
+                            self.safe_price(self.symbol, tp2_price), "TP2 REPLACEMENT"
+                        )
+                    protected["tp2_id"] = new_tp2.get("id")
+                    self.log(
+                        f"TP2 REPLACED ✓ | Price={tp2_price:.12g} | Qty={tp2_qty:g}"
+                    )
+            except Exception as e:
+                self.log(f"TP2 REPLACEMENT FAILED: {e}")
+
+    def _detect_protection_exit_reason(self, protected):
+        """Identify which exchange-side protection order caused a flat position.
+
+        Returns one of: ``SL``, ``TP1``, ``TP2``, ``UNKNOWN``.  A break-even
+        stop is represented by the current ``sl_id`` and is therefore treated
+        as ``SL``.  This check is only made when a previously protected live
+        position disappears; it is not polled on every normal loop.
+        """
+        if not protected:
+            return "UNKNOWN"
+
+        sl_id = str(protected.get("sl_id") or "")
+        tp1_id = str(protected.get("tp1_id") or "")
+        tp2_id = str(protected.get("tp2_id") or "")
+        ids = {x for x in (sl_id, tp1_id, tp2_id) if x}
+        if not ids:
+            return "UNKNOWN"
+
+        try:
+            closed_orders = self.exchange.fetch_closed_orders(
+                self.symbol,
+                limit=100,
+            )
+        except Exception as e:
+            self.log(f"EXIT REASON CHECK NOTICE: {e}")
+            return "UNKNOWN"
+
+        for order in closed_orders:
+            oid = str(order.get("id") or "")
+            if oid not in ids:
+                continue
+
+            status = str(order.get("status") or "").lower()
+            # A closed/filled trigger order is the strongest available
+            # indication that it fired.  Some exchanges use other terminal
+            # status strings, so matching the known protection ID is enough
+            # when the order is no longer open.
+            if oid == sl_id:
+                self.log(f"EXIT REASON: SL/BE triggered | Order={oid} | Status={status or 'closed'}")
+                return "SL"
+            if oid == tp1_id:
+                self.log(f"EXIT REASON: TP1 triggered | Order={oid} | Status={status or 'closed'}")
+                return "TP1"
+            if oid == tp2_id:
+                self.log(f"EXIT REASON: TP2 triggered | Order={oid} | Status={status or 'closed'}")
+                return "TP2"
+
+        return "UNKNOWN"
+
+    # -------------------- CLOSE / RECOVERY ------------------
+
+    def close_position_market(
+        self,
+        symbol,
+        position_side,
+        qty,
+    ):
+        qty = self.safe_amount(
+            symbol,
+            qty,
+        )
+
+        if qty <= 0:
+            return
+
+        side = (
+            "sell"
+            if position_side == "LONG"
+            else "buy"
+        )
+
+        self.log(
+            "EMERGENCY: Closing unprotected position."
+        )
+
+        self.exchange.create_order(
+            symbol,
+            "market",
+            side,
+            qty,
+            None,
+            {
+                "reduceOnly": True,
+            },
+        )
+
+    # -------------------- ENTRY ------------------------------
+
+    def open_market_position(
+        self,
+        symbol,
+        signal,
+        qty,
+    ):
+        side = (
+            "buy"
+            if signal == "BUY"
+            else "sell"
+        )
+
+        order = self.exchange.create_order(
+            symbol,
+            "market",
+            side,
+            qty,
+            None,
+            {},
+        )
+
+        actual_order_price = (
+            self.get_actual_order_price(
+                order
+            )
+        )
+
+        if actual_order_price:
+            self.log(
+                f"Entry order fill/average reported: "
+                f"{actual_order_price}"
+            )
+
+        expected_side = (
+            "LONG"
+            if signal == "BUY"
+            else "SHORT"
+        )
+
+        position = self.wait_for_position(
+            symbol,
+            expected_side,
+            timeout=10,
+        )
+
+        if not position:
+            raise RuntimeError(
+                "Entry order was submitted, but the actual "
+                "position could not be confirmed."
+            )
+
+        # Position's average entry is the source of truth.
+        actual_entry = position["entry"]
+
+        if actual_entry <= 0:
+            if actual_order_price:
+                actual_entry = actual_order_price
+            else:
+                raise RuntimeError(
+                    "Actual entry price could not be determined."
+                )
+
+        return position, actual_entry
+
+    # -------------------- LEVERAGE ---------------------------
+
+    def configure_leverage(
+        self,
+        symbol,
+        leverage,
+    ):
+        try:
+            self.exchange.set_leverage(
+                leverage,
+                symbol,
+            )
+            self.log(
+                f"Leverage set/requested: {leverage}x"
+            )
+        except Exception as e:
+            self.log(
+                f"Leverage notice: {e}"
+            )
+
+    # -------------------- START / STOP ----------------------
+
+    def start_bot(self):
+        if self.is_running:
+            return
+
+        try:
+            self.save_settings()
+
+            exchange_id = (
+                self.v_exchange.get()
+                .strip()
+                .lower()
+            )
+
+            api_key = (
+                self.e_api_key.get()
+                .strip()
+            )
+            api_secret = (
+                self.e_api_secret.get()
+                .strip()
+            )
+
+            if not api_key or not api_secret:
+                messagebox.showerror(
+                    "Missing API credentials",
+                    "Enter API Key and API Secret first.",
+                )
+                return
+
+            account_mode = (
+                self.v_account_mode.get()
+                .strip()
+                .upper()
+            )
+
+            self.exchange_id = exchange_id
+
+            self.exchange = self.build_exchange(
+                exchange_id,
+                api_key,
+                api_secret,
+                account_mode,
+            )
+
+            self.log(
+                "V8 EXCHANGE ENGINE: "
+                f"{exchange_id.upper()} | "
+                "CCXT unified futures/swap API"
+            )
+
+            self.symbol = (
+                self.normalize_symbol(
+                    self.exchange,
+                    exchange_id,
+                    self.e_symbol.get(),
+                )
+            )
+
+            leverage = int(
+                self.e_lev.get().strip()
+            )
+
+            self.configure_leverage(
+                self.symbol,
+                leverage,
+            )
+
+            try:
+                max_trades = int(self.e_max_trades.get().strip())
+            except Exception:
+                raise ValueError("Max Trades must be a whole number. Use 0 for unlimited.")
+            if max_trades < 0:
+                raise ValueError("Max Trades cannot be negative.")
+
+            self.start_balance = (
+                self.fetch_balance_total()
+            )
+            self.start_equity = float(self.fetch_account_equity())
+            self.peak_equity = self.start_equity
+
+            self.total_trades = 0
+            self.opened_trades = 0
+            self.winning_trades = 0
+            self.losing_trades = 0
+            self.trade_pnls = []
+            self.active_trade = None
+            self.session_started_at = time.time()
+            self.session_max_trades = max_trades
+
+            # Capture/display the exact account balance at BOT START.
+            try:
+                self.root.after(
+                    0,
+                    lambda start=self.start_balance: self.lbl_pnl.config(
+                        text=(
+                            f"Start Balance: ${start:.4f} | "
+                            f"Current Balance: ${start:.4f} | "
+                            "Net PnL: $0.00 | Trades: 0 | Wins: 0 | "
+                            "Losses: 0 | Win Rate: 0.0%"
+                        )
+                    ),
+                )
+            except Exception:
+                pass
+
+            self.log(
+                f"CONNECTED: {exchange_id.upper()} | "
+                f"{self.symbol} | "
+                f"Balance={self.start_balance:.4f} USDT"
+            )
+
+            self.log(
+                "SL/TP engine: ACTUAL ENTRY PRICE + ACTUAL POSITION QTY"
+            )
+            self.log(
+                f"SL mode: {self.v_sl_mode.get()} | TP mode: {self.v_tp_mode.get()}"
+            )
+            self.log(
+                f"TRADE SESSION: Max Trades={max_trades if max_trades > 0 else 'UNLIMITED'} | "
+                f"Estimated Window={self.lbl_est_time.cget('text')} | "
+                f"Actual duration may be longer if signals do not occur every candle."
+            )
+
+            enabled_modules = []
+            if self.v_use_st.get():
+                enabled_modules.append("Supertrend")
+            if self.v_use_ema.get():
+                enabled_modules.append(f"EMA{self.e_ema_len.get().strip()}")
+            if self.v_use_ema_cross.get():
+                enabled_modules.append(
+                    f"EMA Cross {self.e_ema_fast.get().strip()}/{self.e_ema_slow.get().strip()} "
+                    f"({self.v_ema_cross_entry_mode.get().strip().upper()})"
+                )
+            if self.v_use_macd.get():
+                enabled_modules.append(
+                    f"MACD {self.e_macd_fast.get().strip()}/{self.e_macd_slow.get().strip()}/{self.e_macd_signal.get().strip()}"
+                )
+            if self.v_use_rsi.get():
+                enabled_modules.append(
+                    f"RSI {self.e_rsi_len.get().strip()} "
+                    f"({self.v_rsi_logic.get()} | {self.v_rsi_ma_type.get()} {self.e_rsi_ma_len.get().strip()} | "
+                    f"OS {self.e_rsi_os.get().strip()} / OB {self.e_rsi_ob.get().strip()})"
+                )
+            if self.v_use_bb.get():
+                enabled_modules.append(
+                    f"BB {self.e_bb_len.get().strip()}x{self.e_bb_std.get().strip()}"
+                )
+            if self.v_use_stoch.get():
+                enabled_modules.append(
+                    f"Stoch {self.e_stoch_k.get().strip()}/{self.e_stoch_smooth.get().strip()}/{self.e_stoch_d.get().strip()}"
+                )
+            if self.v_use_vwap.get():
+                enabled_modules.append(
+                    f"VWAP {self.e_vwap_len.get().strip()}"
+                )
+            if self.v_use_vwap_delta.get():
+                enabled_modules.append(
+                    f"VWAP Delta "
+                    f"({self.v_vwap_delta_logic.get().strip().upper()} | "
+                    f"Baseline {self.e_vwap_delta_baseline.get().strip()} | "
+                    f"HMA {'ON' if self.v_vwap_delta_smooth.get() else 'OFF'} "
+                    f"{self.e_vwap_delta_smooth_len.get().strip()})"
+                )
+            if self.v_use_vidya.get():
+                enabled_modules.append(
+                    f"Volumatic VIDYA "
+                    f"({self.v_vidya_entry_mode.get().strip().upper()} | "
+                    f"Length {self.e_vidya_len.get().strip()} | "
+                    f"Momentum {self.e_vidya_momentum.get().strip()} | "
+                    f"Band {self.e_vidya_band.get().strip()})"
+                )
+            if self.v_use_nwe.get():
+                enabled_modules.append(
+                    f"NWE "
+                    f"({self.v_nwe_entry_mode.get().strip().upper()} | "
+                    f"Bandwidth {self.e_nwe_bandwidth.get().strip()} | "
+                    f"Mult {self.e_nwe_mult.get().strip()} | "
+                    f"Repaint {'ON' if self.v_nwe_repaint.get() else 'OFF'})"
+                )
+            if self.v_use_atr.get():
+                enabled_modules.append(
+                    f"ATR >= {self.e_atr_min_pct.get().strip()}%"
+                )
+            if self.v_use_vol.get():
+                enabled_modules.append(f"Volume {self.e_vol_len.get().strip()}")
+            if self.v_use_adx.get():
+                enabled_modules.append(f"ADX >= {self.e_adx_thresh.get().strip()}")
+            if self.v_use_mtf.get():
+                enabled_modules.append("4H MTF")
+
+            self.log(
+                "STRATEGY MODULES: "
+                + (
+                    " | ".join(enabled_modules)
+                    if enabled_modules
+                    else "None"
+                )
+            )
+            self.log(
+                f"RSI ENGINE: {'ON' if self.v_use_rsi.get() else 'OFF'}"
+                + (
+                    f" | Logic={self.v_rsi_logic.get().strip().upper()}"
+                    f" | MA={self.v_rsi_ma_type.get().strip().upper()}"
+                    f" {self.e_rsi_ma_len.get().strip()}"
+                    if self.v_use_rsi.get()
+                    else " | RSI columns not required"
+                )
+            )
+
+            # Read signal settings here as well as in the worker thread.
+            # This prevents the GUI START path from referencing undefined
+            # variables before _run_bot_logic() begins.
+            signal_mode = self.v_signal_mode.get().strip().upper()
+            preset_scores = {
+                "SINGLE_SIGNAL": 1,
+                "2_SIGNALS": 2,
+                "3_SIGNALS": 3,
+                "4_SIGNALS": 4,
+            }
+            if signal_mode in preset_scores:
+                min_score = preset_scores[signal_mode]
+            else:
+                min_score = int(self.e_min_score.get().strip())
+
+            allowed_signal_modes = (
+                "STRICT_ALL_FILTERS",
+                "SINGLE_SIGNAL",
+                "ANY_NON_CONFLICTING",
+                "ADAPTIVE_SCORE",
+                "2_SIGNALS",
+                "3_SIGNALS",
+                "4_SIGNALS",
+                "SCORE",
+                "ADAPTIVE_SCORE",
+                "ADAPTIVE_EVIDENCE",
+                "ANY_NON_CONFLICTING",
+            )
+            if signal_mode not in allowed_signal_modes:
+                raise ValueError(f"Unknown signal mode: {signal_mode}")
+            if min_score <= 0:
+                raise ValueError("Minimum score must be greater than 0.")
+
+            # Startup/configuration logging must not depend on _run_bot_logic()
+            # locals, because those are parsed later in the worker thread.
+            # Read the GUI values directly here; _run_bot_logic() performs the
+            # authoritative numeric validation before calculating indicators.
+            startup_st_len = self.e_st_len.get().strip()
+            startup_st_mult = self.e_st_mult.get().strip()
+            startup_st_source = self.v_st_source.get().strip().upper()
+            startup_st_change_atr = bool(self.v_st_change_atr.get())
+            startup_st_entry_mode = self.v_st_entry_mode.get().strip().upper()
+            self.log(
+                f"SUPERTREND: ATR={startup_st_len} | Mult={startup_st_mult} | "
+                f"Source={startup_st_source} | "
+                f"ATR Method={'RMA' if startup_st_change_atr else 'SMA(TR)'} | "
+                f"Entry={startup_st_entry_mode}"
+            )
+            self.log(
+                f"EMA CROSS ENTRY MODE: {self.v_ema_cross_entry_mode.get().strip().upper()}"
+            )
+
+            self.log(
+                f"SIGNAL MODE: {signal_mode} | "
+                f"Minimum Score={min_score}"
+            )
+            if signal_mode == "SINGLE_SIGNAL":
+                self.log(
+                    "SINGLE SIGNAL MODE: ONE enabled signal is enough; "
+                    "Volume/ADX/ATR/MTF are NOT required."
+                )
+            self.log(
+                "REVERSAL HOLD: "
+                + (
+                    "ON | Wait for ALL active directional signals to reverse."
+                    if self.v_hold_until_all_reverse.get()
+                    else "OFF | Normal signal reversal."
+                )
+            )
+            self.log(
+                "POST-SL OPPOSITE LOCK: "
+                + (
+                    "ON | After SL/BE stop, same-direction re-entry is blocked until a valid opposite signal appears."
+                    if self.v_require_opposite_after_exit.get()
+                    else "OFF | Same-direction re-entry is allowed after SL/exit (subject to other safety gates)."
+                )
+            )
+            self.log(
+                "POST-SL LOCK RULE: If SL/BE closes a trade, the bot waits for a valid opposite signal "
+                "using the selected signal mode; TP1/TP2 exits do not create this lock."
+            )
+
+            self.log(
+                f"SUPERTREND ENTRY MODE: "
+                f"{self.v_st_entry_mode.get().strip().upper()}"
+            )
+            if self.v_hold_until_all_reverse.get():
+                self.log(
+                    "TP1 BREAK-EVEN: DISABLED BY REVERSAL HOLD | "
+                    "No TP1 order is placed while Hold-All-Reverse is ON."
+                )
+            else:
+                self.log(
+                    "TP1 BREAK-EVEN: "
+                    + (
+                        "ON | Remaining SL moves to actual entry after TP1."
+                        if self.v_tp1_be.get()
+                        else "OFF"
+                    )
+                )
+
+            self.is_running = True
+
+            self.btn_start.config(
+                state="disabled"
+            )
+            self.btn_stop.config(
+                state="normal"
+            )
+
+            self.bot_thread = threading.Thread(
+                target=self._run_bot_logic,
+                daemon=True,
+            )
+            self.bot_thread.start()
+
+        except Exception as e:
+            self.log(
+                f"START FAILED: {e}"
+            )
+            self.is_running = False
+
+            messagebox.showerror(
+                "Bot start failed",
+                str(e),
+            )
+
+    def stop_bot(self):
+        self.is_running = False
+
+        self.log(
+            "Stopping execution thread..."
+        )
+
+        self.btn_start.config(
+            state="normal"
+        )
+        self.btn_stop.config(
+            state="disabled"
+        )
+
+    def on_close(self):
+        if self.is_running:
+            if not messagebox.askyesno(
+                "Stop bot?",
+                "Bot is running. Stop it and close?",
+            ):
+                return
+
+        self.is_running = False
+        try:
+            p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) and self.symbol else None
+            if not p:
+                fx_clear_runtime_state(self)
+        except Exception:
+            pass
+        try:
+            fx_release_profile_lock(self)
+        except Exception:
+            pass
+        self.root.destroy()
+
+    # -------------------- PERFORMANCE / TRADE ACCOUNTING ----
+
+    def _begin_performance_trade(self, side, entry, qty, balance):
+        self.active_trade = {
+            "side": side,
+            "entry": float(entry),
+            "qty": float(qty),
+            "balance_start": float(balance),
+            "started_at": time.time(),
+            "tp1_hit": False,
+        }
+        self.opened_trades += 1
+
+    def _finalize_performance_trade(self, reason="CLOSED", balance=None):
+        trade = self.active_trade
+        if not trade:
+            return
+        try:
+            if balance is None:
+                balance = self.fetch_balance_total()
+            pnl = float(balance) - float(trade["balance_start"])
+            self.trade_pnls.append(pnl)
+            self.total_trades += 1
+            if pnl > 0:
+                self.winning_trades += 1
+                result = "WIN"
+            elif pnl < 0:
+                self.losing_trades += 1
+                result = "LOSS"
+            else:
+                result = "BREAKEVEN"
+            self.log(
+                f"TRADE CLOSED ✓ | Result={result} | PnL=${pnl:.4f} | "
+                f"Reason={reason} | Completed={self.total_trades}"
+            )
+        except Exception as e:
+            self.log(f"Trade result accounting notice: {e}")
+        finally:
+            self.active_trade = None
+
+    def _mark_tp1_hit_for_stats(self):
+        if self.active_trade is not None:
+            self.active_trade["tp1_hit"] = True
+
+    # -------------------- SESSION WINDOW ---------------------
+
+    def update_estimated_window(self):
+        """Update the estimated candle window for the selected max trades.
+
+        This is only a time estimate based on one potential trade per
+        timeframe candle. It does not guarantee that a signal/trade will
+        occur on every candle.
+        """
+        try:
+            raw_trades = self.e_max_trades.get().strip()
+        except Exception:
+            raw_trades = "10"
+
+        try:
+            max_trades = int(raw_trades)
+        except Exception:
+            max_trades = 0
+
+        if max_trades <= 0:
+            text_value = "Unlimited"
+        else:
+            tf = str(self.v_tf.get()).strip().lower()
+            tf_minutes = {
+                "1m": 1,
+                "3m": 3,
+                "5m": 5,
+                "10m": 10,
+                "15m": 15,
+                "30m": 30,
+                "1h": 60,
+                "2h": 120,
+                "4h": 240,
+                "6h": 360,
+                "12h": 720,
+                "1d": 1440,
+                "45m": 45,
+            }.get(tf)
+
+            if tf_minutes is None:
+                text_value = "N/A"
+            else:
+                total_minutes = max_trades * tf_minutes
+                if total_minutes < 60:
+                    text_value = f"{total_minutes} min"
+                elif total_minutes % 60 == 0:
+                    hours = total_minutes // 60
+                    text_value = (
+                        f"{hours} hr" if hours == 1
+                        else f"{hours} hrs"
+                    )
+                else:
+                    hours = total_minutes / 60.0
+                    text_value = f"{total_minutes} min ({hours:.2f} hrs)"
+
+        try:
+            self.lbl_est_time.config(text=text_value)
+        except Exception:
+            pass
+
+    # -------------------- TP1 -> BREAK-EVEN ------------------
+
+    def _manage_tp1_break_even(self, position):
+        """After TP1 actually fills, move the remaining SL to actual entry.
+
+        TP1 completion is confirmed from the exchange order status. The
+        existing SL is cancelled and replaced with a reduce-only trigger at
+        the actual filled entry price. TP2 is left untouched.
+        """
+        if self.v_hold_until_all_reverse.get():
+            return
+        if not self.v_tp1_be.get():
+            return
+        if self.tp1_be_done:
+            return
+        if not position:
+            return
+
+        protected = self.last_protected_position
+        if not protected:
+            return
+
+        if protected.get("side") != position.get("side"):
+            return
+
+        tp1_id = protected.get("tp1_id")
+        old_sl_id = protected.get("sl_id")
+        if not tp1_id:
+            return
+
+        # TP1 is a conditional/trigger order on Bybit. Do not poll it
+        # with fetch_order(), because Bybit restricts that endpoint to
+        # a recent order window. Check open orders first, then closed
+        # orders. An inconclusive API response must never move the SL.
+        tp1_order = None
+
+        try:
+            open_orders = self.fetch_open_orders_safe(self.symbol)
+            for order in open_orders:
+                if str(order.get("id") or "") == str(tp1_id):
+                    tp1_order = order
+                    break
+        except Exception as e:
+            self.log(f"TP1 open-order status notice: {e}")
+
+        if tp1_order is None:
+            try:
+                closed_orders = self.exchange.fetch_closed_orders(
+                    self.symbol,
+                    limit=100,
+                )
+                for order in closed_orders:
+                    if str(order.get("id") or "") == str(tp1_id):
+                        tp1_order = order
+                        break
+            except Exception as e:
+                self.log(f"TP1 closed-order status notice: {e}")
+
+        if tp1_order is None:
+            return
+
+        status = str(tp1_order.get("status") or "").lower()
+        filled = float(tp1_order.get("filled") or 0.0)
+
+        if status not in ("closed", "filled") or filled <= 0:
+            return
+
+        remaining_qty = float(position.get("qty") or 0.0)
+        entry_price = float(position.get("entry") or 0.0)
+
+        if remaining_qty <= 0 or entry_price <= 0:
+            return
+
+        try:
+            self.log(
+                f"TP1 ACHIEVED ✓ | Filled Qty={filled:g} | "
+                f"Remaining Qty={remaining_qty:g}"
+            )
+            self._mark_tp1_hit_for_stats()
+
+            # Cancel the original full-position SL first.
+            if old_sl_id:
+                try:
+                    self.exchange.cancel_order(
+                        old_sl_id,
+                        self.symbol,
+                    )
+                    self.log(
+                        f"TP1 ACHIEVED: Cancelled old SL: {old_sl_id}"
+                    )
+                except Exception as e:
+                    self.log(
+                        f"TP1 ACHIEVED: old SL cancel notice: {e}"
+                    )
+
+            be_price = float(
+                self.exchange.price_to_precision(
+                    self.symbol,
+                    entry_price,
+                )
+            )
+
+            close_side = (
+                "sell"
+                if position["side"] == "LONG"
+                else "buy"
+            )
+
+            if self.exchange_id == "bybit":
+                trigger_direction = (
+                    2
+                    if position["side"] == "LONG"
+                    else 1
+                )
+
+                be_order = self.create_bybit_trigger(
+                    self.symbol,
+                    "STOP_MARKET",
+                    close_side,
+                    remaining_qty,
+                    be_price,
+                    trigger_direction,
+                    "BREAK-EVEN SL",
+                )
+            else:
+                be_order = self.create_binance_trigger(
+                    self.symbol,
+                    "STOP_MARKET",
+                    close_side,
+                    remaining_qty,
+                    be_price,
+                    "BREAK-EVEN SL",
+                )
+
+            be_id = be_order.get("id")
+            protected["sl_id"] = be_id
+            protected["sl"] = be_price
+            self.tp1_be_done = True
+
+            self.log(
+                f"BREAK-EVEN ACTIVE ✓ | "
+                f"Entry={entry_price:.12g} | "
+                f"Remaining Qty={remaining_qty:g} | "
+                f"SL={be_price:.12g}"
+            )
+
+            if be_id:
+                verified = self.verify_protection_orders(
+                    self.symbol,
+                    [("BREAK-EVEN SL", be_order)],
+                )
+                if not verified:
+                    raise RuntimeError(
+                        "Break-even SL was submitted but could not be verified."
+                    )
+
+        except Exception as e:
+            self.tp1_be_done = False
+            self.log(
+                f"TP1 BREAK-EVEN ERROR: {e}"
+            )
+
+    # -------------------- TIMEFRAME DATA ---------------------
+
+    def _fetch_strategy_ohlcv(self, timeframe, limit):
+        """Fetch strategy candles, including synthetic 45m candles.
+
+        Exchanges supported by CCXT generally provide 1m/3m/5m/15m/30m/1h
+        candles but not a native 45m interval. For 45m, build candles from
+        completed/current 15m candles aligned to UTC 45-minute boundaries.
+        The returned dataframe keeps the current in-progress 45m bucket when
+        available; the main loop ALWAYS uses closed_idx=-2, so an in-progress
+        45m bucket is never used for a signal.
+        """
+        timeframe = str(timeframe).strip().lower()
+        limit = int(limit)
+        if limit <= 0:
+            raise ValueError("OHLCV limit must be greater than 0.")
+
+        if timeframe != "45m":
+            return self.exchange.fetch_ohlcv(
+                self.symbol,
+                timeframe=timeframe,
+                limit=limit,
+            )
+
+        # 45m = three 15m candles. Fetch extra history because aggregation
+        # reduces the number of rows by roughly 3x. Multiple batches are used
+        # when the exchange caps a single request below the required amount.
+        base_interval_ms = 15 * 60 * 1000
+        target_base = limit * 3 + 6
+        batch_limit = min(1000, max(200, target_base))
+        batches = []
+        remaining = target_base
+        since = None
+
+        while remaining > 0 and len(batches) < 5:
+            request_limit = min(batch_limit, remaining)
+            kwargs = {
+                "symbol": self.symbol,
+                "timeframe": "15m",
+                "limit": request_limit,
+            }
+            if since is not None:
+                kwargs["since"] = int(since)
+
+            batch = self.exchange.fetch_ohlcv(**kwargs)
+            if not batch:
+                break
+
+            batches.extend(batch)
+            oldest = min(int(row[0]) for row in batch)
+            new_since = oldest - base_interval_ms * request_limit
+            if since is not None and new_since >= since:
+                break
+            since = new_since
+            remaining = target_base - len(batches)
+
+            if len(batch) < request_limit:
+                break
+
+        if not batches:
+            raise RuntimeError("No 15m OHLCV data returned for synthetic 45m timeframe.")
+
+        # Deduplicate and sort chronologically.
+        unique = {}
+        for row in batches:
+            unique[int(row[0])] = row
+        base = pd.DataFrame(
+            [unique[k] for k in sorted(unique)],
+            columns=["time", "open", "high", "low", "close", "vol"],
+        )
+        base["datetime"] = pd.to_datetime(base["time"], unit="ms", utc=True)
+        base = base.set_index("datetime")
+
+        # Aggregate exactly three 15m candles per 45m bucket. Incomplete
+        # historical buckets are discarded so a missing 15m candle can never
+        # masquerade as a completed 45m candle.
+        grouped = base.resample(
+            "45min", origin="epoch", label="left", closed="left"
+        )
+        agg = grouped.agg({
+            "time": "first",
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "vol": "sum",
+        })
+        counts = grouped["close"].count()
+        agg["base_count"] = counts
+        agg = agg.dropna(subset=["open", "high", "low", "close", "vol"])
+
+        # The newest bucket can be in progress. Keep it so the main strategy
+        # can use closed_idx=-2 and therefore trade only a fully completed 45m bar.
+        # All older buckets must contain exactly 3 base candles.
+        if len(agg) > 1:
+            older = agg.iloc[:-1]
+            newest = agg.iloc[-1:]
+            older = older[older["base_count"] == 3]
+            agg = pd.concat([older, newest], axis=0)
+        agg = agg.reset_index(drop=True)
+
+        # Keep the newest `limit` 45m rows.
+        if len(agg) > limit:
+            agg = agg.iloc[-limit:].reset_index(drop=True)
+
+        return agg[["time", "open", "high", "low", "close", "vol"]].values.tolist()
+
 def parse_symbols(s):
     out=[]
     for x in str(s).replace(","," ").split():
