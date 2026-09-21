@@ -181,10 +181,20 @@ Install dependencies from `requirements.txt` first.
 - Verify actual fills, protection orders, broker/exchange trigger behavior, partial fills, reconnects and recovery before live deployment.
 - Never commit API keys, passwords or tokens.
 
+
+## 2026-09-22 Engine Audit Update
+
+The latest R5 audit added explicit ADX Period configuration, detailed Evidence blocker diagnostics, safer new-profile defaults, and a Grid fill-loop fix in the Crypto backtester. The Crypto backtester also enforces Grid cooldown, loss-streak protection and marked-equity daily drawdown.
+
+For Forex new profiles, the R5 recommendation now uses 0.50% risk, ATR regime gating, news/session/correlation guardrails, 2% daily loss, and the 1.50 / 1.30 / 2.20 ATR protection contract.
+
+See docs/R5_ENGINE_AUDIT_2026-09-22.md for the complete fix/add/modify list.
+
 ## Release documentation
 
 - [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
 - [Forex R5 release notes](docs/FOREX_R5_RELEASE_NOTES.md)
+- [2026-09-22 Engine Audit](docs/R5_ENGINE_AUDIT_2026-09-22.md)
 - [Changelog](CHANGELOG.md)
 
 ## User manuals
