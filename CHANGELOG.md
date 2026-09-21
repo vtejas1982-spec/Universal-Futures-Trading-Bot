@@ -1,3 +1,31 @@
+## V8.4.2-R5 — Engine Audit Follow-up — 2026-09-22
+
+### Fixed
+- Crypto R5 backtester Grid fill processing no longer mutates the fill queue while iterating, removing a repeated-fill/infinite-loop defect.
+- Crypto backtester Grid cooldown is now actually enforced after Grid risk/exit resets.
+- Crypto backtester daily drawdown now includes adverse marked-to-market PnL.
+- Crypto backtester now enforces the configured maximum loss streak.
+- ADAPTIVE_EVIDENCE blocked-signal diagnostics now identify the actual gate/family/edge blocker instead of only reporting BF/SF counts.
+- Runtime logs now expose the completed-candle ADX value and ADX gate result.
+
+### Added
+- Explicit ADX Period setting (default 14) in Crypto and Forex R5 GUI/configuration.
+- ADX Period persistence and validation.
+- R5 Engine Audit document: docs/R5_ENGINE_AUDIT_2026-09-22.md.
+
+### Modified
+- New Crypto profiles: ATR gate ON, Grid OFF, 0.75% risk, 15-minute cooldown.
+- New Forex profiles: 0.50% risk, ATR gate ON, ATR Dynamic protection ON, news/session/correlation guardrails ON, 2% daily loss, and Forex TP1 = 1.30R.
+- Crypto protection remains 1.50 / 1.20 / 2.20 ATR/SL-distance; Forex uses 1.50 / 1.30 / 2.20.
+
+### Diagnostic clarification
+- In EVIDENCE_BLOCKED_BF3_SF1_EDGE0.25, BF3 is the bullish-family count and SF1 is the bearish-family count. SF does not mean "strong families".
+
+### Safety
+- Evidence thresholds were not weakened to manufacture more trades.
+- Existing saved profiles remain authoritative; these are new-profile defaults.
+- Demo/testnet validation remains required.
+
 ## V8.4.2-R5 — Repository Cleanup / Production Layout — 2026-09-21
 
 ### Changed
