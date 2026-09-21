@@ -1997,7 +1997,8 @@ class UniversalFuturesBotGUI:
         # 1440x900, or Windows DPI scaling.  Size the app to the available
         # screen and leave enough room for the controls + execution log.
         try:
-            screen_w = self.root.winfo_screenwidth()            screen_h = self.root.winfo_screenheight()
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
             win_w = min(1500, max(900, screen_w - 20))
             win_h = min(900, max(620, screen_h - 40))
             pos_x = max(0, (screen_w - win_w) // 2)
@@ -3995,7 +3996,8 @@ class UniversalFuturesBotGUI:
             if rows and rows[0].get("totalEquity") is not None:
                 return float(rows[0]["totalEquity"])
         except Exception:
-            pass        equity = self.fetch_balance_total()
+            pass
+        equity = self.fetch_balance_total()
         try:
             for pos in self.exchange.fetch_positions():
                 try:
@@ -4994,7 +4996,8 @@ class UniversalFuturesBotGUI:
 
         expected = []
         if sl_id:
-            expected.append(("SL/BE", sl_id))        if not self.tp1_be_done and tp1_id:
+            expected.append(("SL/BE", sl_id))
+        if not self.tp1_be_done and tp1_id:
             expected.append(("TP1", tp1_id))
         if tp2_id:
             expected.append(("TP2", tp2_id))
@@ -5993,7 +5996,8 @@ class UniversalFuturesBotGUI:
         return agg[["time", "open", "high", "low", "close", "vol"]].values.tolist()
 
 def parse_symbols(s):
-    out=[]    for x in str(s).replace(","," ").split():
+    out=[]
+    for x in str(s).replace(","," ").split():
         x=x.strip().upper()
         if not x: continue
         if ":" in x: x=x.split(":")[0]
@@ -6999,7 +7003,8 @@ class BacktesterGUI:
                  ("div_use_momentum","MOM"),("div_use_obv","OBV"),("div_use_vwmacd","VWMACD"),("div_use_cmf","CMF"),("div_use_mfi","MFI")]
         for j,(k,l) in enumerate(divopts): self.check(adv,k,l,2+(j//5),(j%5)*2)
         self.check(adv,"use_vol_sr","Volume S/R Zones",4,0)
-        self.combo(adv,"sr_vote_mode","Vote",["MAJORITY","ANY","ALL"],4,2,14)        self.combo(adv,"sr_entry_mode","Entry",["CURRENT_ZONE","FRESH_BREAK"],4,4,16)
+        self.combo(adv,"sr_vote_mode","Vote",["MAJORITY","ANY","ALL"],4,2,14)
+        self.combo(adv,"sr_entry_mode","Entry",["CURRENT_ZONE","FRESH_BREAK"],4,4,16)
         self.ent(adv,"sr_volume_ma","Vol MA Threshold",4,6,10); self.ent(adv,"sr_history_bars","SR History Bars",4,8,10)
         for j,(k,l) in enumerate([("sr_tf1","TF1"),("sr_tf2","TF2"),("sr_tf3","TF3"),("sr_tf4","TF4")]):
             self.combo(adv,k,l,["Chart","15m","30m","1h","4h","D","W","Disable"],5,j*2,12)
