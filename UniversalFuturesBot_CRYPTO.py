@@ -104,22 +104,24 @@ DEFAULT_ADAPTIVE_MIN_WEIGHT = "3.5"
 DEFAULT_USE_MTF = True
 DEFAULT_USE_ADX = True
 DEFAULT_USE_VOLUME = True
-DEFAULT_USE_ATR = False
-DEFAULT_GRID_MODE = "DIRECT_SHOT"
+DEFAULT_USE_ATR = True
+DEFAULT_GRID_MODE = "OFF"
 DEFAULT_MAX_OPEN_TRADES = 1
 DEFAULT_ATR_SL_ENABLED = True
 DEFAULT_ATR_SL_MULTIPLIER = 1.5
 DEFAULT_ATR_TP1_MULTIPLIER = 1.2
 DEFAULT_ATR_TP2_MULTIPLIER = 2.2
 DEFAULT_RISK_MODE = "EQUITY_RISK_%"
-DEFAULT_RISK_PER_TRADE = "1.0"
+DEFAULT_RISK_PER_TRADE = "0.75"
 DEFAULT_POST_SL_OPPOSITE_LOCK = True
 DEFAULT_NO_SAME_CANDLE = True
+DEFAULT_COOLDOWN_MIN = "15"
 DEFAULT_USE_DIVERGENCE = True
 DEFAULT_DIV_USE_ALL = True
 RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
+DEFAULT_ADX_LEN = 14
 PROFILE_OPERATION_SCHEMA_VERSION = 2  # V8.2.2 explicit current-vs-selected profile controls
 # V8.3.0 advanced strategy defaults
 DIVERGENCE_INDICATORS = (
@@ -1322,7 +1324,18 @@ class StrategyEngine:
                 return "EVIDENCE_BUY_" + "+".join(bull_families) + f"_EDGE{edge:.2f}"
             if bear_ok:
                 return "EVIDENCE_SELL_" + "+".join(bear_families) + f"_EDGE{edge:.2f}"
-            return f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
+            dominant = "BUY" if bt > st else "SELL" if st > bt else "NONE"
+            active = bull_families if dominant == "BUY" else bear_families if dominant == "SELL" else []
+            blockers = []
+            if len(active) < required: blockers.append(f"FAMILIES_{len(active)}/{required}")
+            if edge < threshold: blockers.append(f"EDGE_{edge:.2f}<{threshold:.2f}")
+            if trend_required and dominant != "NONE" and "TREND" not in active: blockers.append("TREND_REQUIRED")
+            if independent_required and dominant != "NONE" and not any(f in active for f in ("MOMENTUM","FLOW","STRUCTURE")): blockers.append("INDEPENDENT_REQUIRED")
+            if not atr_pass: blockers.append("ATR_GATE")
+            if not adx_pass: blockers.append("ADX_GATE")
+            return (f"EVIDENCE_BLOCKED_BF{len(bull_families)}_SF{len(bear_families)}_EDGE{edge:.2f}"
+                    f"|SIDE={dominant}|BLOCK={','.join(blockers) if blockers else 'CONFLICT_OR_NEUTRAL'}"
+                    f"|ATR={'PASS' if atr_pass else 'FAIL'}|ADX={'PASS' if adx_pass else 'FAIL'}")
         if mode == "STRICT_ALL_FILTERS":
             if buy == len(modules) and sell == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bull: return "STRICT_BUY_ALL_FILTERS_PASS"
             if sell == len(modules) and buy == 0 and atr_pass and vol_pass and adx_pass and mtf_pass_bear: return "STRICT_SELL_ALL_FILTERS_PASS"
@@ -3791,7 +3804,7 @@ class UniversalFuturesBotGUI:
         tk.Label(f_market, text="Prevents instant re-entry after SL/TP/reversal.", fg="#444444").grid(row=3, column=3, columnspan=3, sticky="w")
         tk.Label(f_market, text="Cooldown (min):").grid(row=4, column=0, sticky="w")
         self.e_cooldown_min = tk.Entry(f_market, width=6)
-        self.e_cooldown_min.insert(0, "0")
+        self.e_cooldown_min.insert(0, DEFAULT_COOLDOWN_MIN)
         self.e_cooldown_min.grid(row=4, column=1, padx=5, sticky="w")
         tk.Label(f_market, text="0 = OFF", fg="#444444").grid(row=4, column=2, sticky="w")
         self.v_require_opposite_after_exit = tk.BooleanVar(value=DEFAULT_POST_SL_OPPOSITE_LOCK)
@@ -4152,6 +4165,7 @@ class UniversalFuturesBotGUI:
 
         _check(fr, "ADX", "v_use_adx", DEFAULT_USE_ADX, 0, 4)
         _entry(fr, "ADX Threshold", "e_adx_thresh", "20", 0, 6)
+        _entry(fr, "ADX Period", "e_adx_len", str(DEFAULT_ADX_LEN), 1, 4)
 
         tk.Label(
             fr,
@@ -4988,6 +5002,7 @@ class UniversalFuturesBotGUI:
             "vol_len": self.e_vol_len.get().strip(),
 
             "use_adx": self.v_use_adx.get(),
+            "adx_len": self.e_adx_len.get().strip(),
             "adx_thresh": self.e_adx_thresh.get().strip(),
 
             "use_mtf": self.v_use_mtf.get(),
@@ -5554,6 +5569,8 @@ class UniversalFuturesBotGUI:
                     "20",
                 ),
             )
+            self.e_adx_len.delete(0, tk.END)
+            self.e_adx_len.insert(0, cfg.get("adx_len", DEFAULT_ADX_LEN))
 
             self.v_use_mtf.set(
                 cfg.get(
@@ -10121,6 +10138,9 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Volume MA period must be greater than 0.")
 
             use_adx = self.v_use_adx.get()
+            adx_len = int(self.e_adx_len.get())
+            if adx_len <= 0:
+                raise ValueError("ADX period must be greater than 0.")
             adx_thresh = float(
                 self.e_adx_thresh.get()
             )
@@ -10493,7 +10513,7 @@ class UniversalFuturesBotGUI:
                     # the optional 4H MTF confirmation, which always uses
                     # completed 4H candles. 45m is synthesized from 15m data.
 
-                    df = calculate_adx(df)
+                    df = calculate_adx(df, adx_len)
 
                     df["ema"] = (
                         df["close"].ewm(
@@ -11492,7 +11512,10 @@ class UniversalFuturesBotGUI:
                         f"TRENDLINE={'ON' if use_trendline else 'OFF'}"
                         f"({trendline_entry_mode if use_trendline else 'OFF'}) "
                         f"ATR={'ON' if use_atr else 'OFF'} "
-                        f"ATR%={atr_pct:.3f} | "
+                        f"ATR%={atr_pct:.3f} "
+                        f"ADX={'ON' if use_adx else 'OFF'} "
+                        f"ADX={float(df['adx'].iloc[-2]):.2f} "
+                        f"ADXGate={'PASS' if adx_pass else 'FAIL'} | "
                         f"Position={pos_type} "
                         f"Qty={pos_qty}"
                     )
