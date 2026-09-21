@@ -1,3 +1,40 @@
+## V8.4.2-R5 — Forex / MT5 Evidence Hardened — 2026-09-21
+
+### Fixed
+- Added fail-safe Max Open Trades handling; values above 1 normalize to 1 net position per bot/symbol.
+- Fixed the Forex GUI cooldown-row placement.
+- Added ATR Dynamic SL/TP parity with the Crypto R5 protection contract.
+- ATR Dynamic protection uses the latest completed candle and actual filled entry/position quantity.
+- Fixed the Forex backtester protection-mode parity gap for ATR / PRICE_% / ROI_% target handling.
+- Added post-SL opposite-direction lock coverage to the strategy-parity backtester.
+
+### Added
+- Persistent max_open_trades, atr_sl_mult, atr_tp1_mult and atr_tp2_mult configuration fields.
+- Config schema 9 migration compatibility.
+- R5 Protection / Execution GUI controls.
+- Canonical Forex R5 live wrapper: UniversalForexBot_V8_4_2_MT5_FOREX_EVIDENCE_HARDENED_R5.py.
+- Forex R5 strategy-parity backtester.
+- Forex R5 audit tests and release documentation.
+
+### Modified
+- New-profile defaults are aligned with the R5 Evidence-family strategy contract: ADAPTIVE_EVIDENCE, 2 evidence families, family minimum score 0.35, Trend required, independent non-Trend family required, Adaptive Edge 0.18, synchronized trend/momentum/flow/structure defaults.
+- ATR defaults are SL 1.50×, TP1 1.20× SL distance and TP2 2.20× SL distance.
+- Existing saved configurations remain authoritative; missing R5 fields use safe defaults.
+
+### Validation
+- **26/26 local Forex R5 audit checks PASS**
+- GUI smoke: PASS.
+- Config save/load round-trip: PASS.
+- Synthetic raw-OHLCV backtest: PASS.
+- SINGLE_SIGNAL conflict fail-closed: PASS.
+- Evidence-family decision contract: PASS.
+
+### Safety
+- The current single-symbol execution coordinator still manages one net position per bot profile. This release does not claim two independent MT5 positions from one profile.
+- Demo/paper broker validation remains required before live deployment.
+
+---
+
 ## V8.4.1 FOREX-R2 — MT5 Forex Full Engine Audit — 2026-09-21
 
 ### Fixed
