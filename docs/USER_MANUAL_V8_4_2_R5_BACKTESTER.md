@@ -142,6 +142,81 @@ OB/OS describe extremes; they do not automatically create a trade.
 R5: K 14, smoothing 3, D 3.
 K > D = bullish momentum; K < D = bearish momentum.
 
+### Bollinger Bands (BB) — optional module
+
+The R5 code retains Bollinger Bands as an optional weighted strategy module. It is **not** one of the four named R5 Evidence families, so enabling BB does not create an additional independent Evidence family in ADAPTIVE_EVIDENCE.
+
+Current backtester defaults:
+- Use BB = OFF
+- Length = 20
+- Standard deviation = 2.0
+
+
+Meaning: the middle band is the moving-average reference; upper/lower bands are volatility envelopes. A BB directional condition can contribute when enabled, but its contribution is subject to the selected signal mode.
+
+
+For ADAPTIVE_SCORE, BB has weight 0.75. For ADAPTIVE_EVIDENCE, do not count BB as a fifth independent family.
+
+
+### RSI comparison options
+
+The current backtester profile contains:
+- RSI length = 14
+- Overbought = 70
+- Oversold = 30
+- RSI logic = CROSS_MA
+- RSI MA type = EMA
+- RSI MA length = 9
+
+
+CROSS_MA means the strategy compares RSI with its configured RSI moving average rather than treating 70/30 alone as a trade trigger. The OB/OS values remain contextual momentum thresholds.
+
+
+### NWE option details
+
+The backtester profile includes:
+- Bandwidth = 8.0
+- Multiplier = 3.0
+- Lookback = 500
+- MAE length = 499
+- Entry mode = FRESH_CROSS
+
+
+FRESH_CROSS is intended to react to a newly occurring envelope crossing rather than repeatedly treating an already-established state as a new event. The implementation is causal/end-point and does not use future values for trading decisions.
+
+
+### Divergence source-option meanings
+
+The ten supported divergence source series have distinct roles:
+- MACD: trend/momentum oscillator relationship.
+- MACD Histogram: distance between MACD and signal line.
+- RSI: momentum strength.
+- Stochastic: short-term momentum.
+- CCI: deviation of typical price from its moving average.
+- Momentum: price change over the configured momentum length.
+- OBV: cumulative volume signed by price direction.
+- VWMACD: volume-weighted MACD-style relationship.
+- CMF: money-flow pressure relative to the candle range.
+- MFI: volume-weighted momentum/flow oscillator.
+
+
+The Use All Divergence Sources option enables the configured divergence source set together. Individual source switches are also persisted by the engine where available.
+
+
+### Liquidity/Trendline event-option meanings
+
+FRESH_BREAK = only a newly detected break is treated as the event.
+CURRENT_ZONE = the current price/zone state can provide the directional state.
+CURRENT_TREND = the existing current directional state can provide evidence.
+COUNT filter = uses the configured count-based swing/filter interpretation.
+Wick Extremity = uses wick extremes as the swing/liquidity reference area.
+Retest = number of subsequent candles considered for the configured trendline retest behavior.
+
+
+### MTF anti-lookahead rule
+
+The higher-timeframe candle must be available before its information is merged into the lower-timeframe decision. In the 4H-on-15m configuration, the bot does not intentionally use an unfinished future 4H candle as if it were already closed.
+
 #### Divergence
 A causal/confirmed momentum module. Supported source series:
 MACD, MACD Histogram, RSI, Stochastic, CCI, Momentum, OBV, Volume-weighted MACD, CMF, MFI.
