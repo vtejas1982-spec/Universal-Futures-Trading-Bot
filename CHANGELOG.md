@@ -1,3 +1,35 @@
+## V8.4.1-R2 — Full Follow-up Engine Audit — 2026-09-21
+
+### Fixed
+- Restored the V8.4.1 live source as the complete self-contained crypto engine and retained the categorized Evidence-Family GUI.
+- Fixed legacy `SINGLE_SIGNAL` ambiguity: if both bullish and bearish directional evidence exists, the engine now returns no trade.
+- Fixed `decision_reason()` so Evidence-Family Trend/Independent requirements match the actual decision engine.
+- Fixed the `Use all divergence sources` checkbox so it actually enables/disables all divergence sources and persists correctly.
+- Added comprehensive startup strategy/risk/SL/TP validation before exchange-side leverage/order setup.
+- Added legacy-config migration logging while preserving explicitly saved user settings.
+- Preserved the current crypto GUI default with Confirmed Divergence enabled.
+
+### Backtester
+- Fixed direct `run_backtest()` calls with raw OHLCV data that contains `time` but no `datetime`.
+- Fixed direct `run_backtest()` calls that did not pre-build strategy indicator columns.
+- Removed duplicate top-level Liquidity Swings and Trendline Breakout implementations.
+- Synchronized backtester Evidence-Family diagnostics and SINGLE_SIGNAL behavior with live.
+
+### Tests
+- Reworked the regression suite to resolve repository-root paths correctly when run from `tests/`.
+- Added raw-OHLCV backtester regression coverage.
+- Added Evidence-family conflict/gate coverage.
+
+### Validation
+- **60 PASS / 0 FAIL / 0 SKIP**
+- Live, backtester and recovery AST/compile: PASS.
+- Full 19-module indicator chain: PASS.
+- GUI initialization and save/load: PASS.
+- StrategyEngine behavior and diagnostics: PASS.
+- Raw-OHLCV backtest execution: PASS.
+
+---
+
 ## V8.4.1 — FINAL Full Engine Audit — 2026-09-21
 
 ### Fixed
