@@ -33,7 +33,7 @@ def main():
     ]
     c=bt.DEFAULTS
     checks += [c["signal_mode"]=="ADAPTIVE_EVIDENCE",c["evidence_min_families"]==2,c["evidence_family_min_score"]==.35,
-               c["use_atr_sl"] is True,c["atr_sl_mult"]==1.5,c["atr_tp1_mult"]==1.2,c["atr_tp2_mult"]==2.2,c["max_open_trades"]==1]
+               c["use_atr"] is True,c["grid_mode"]=="OFF",c["risk_pct"]==0.75,c["cooldown_min"]==15.0,c["use_atr_sl"] is True,c["atr_sl_mult"]==1.5,c["atr_tp1_mult"]==1.2,c["atr_tp2_mult"]==2.2,c["max_open_trades"]==1,c["max_loss_streak"]==3]
     r=bt.run_backtest(bt.load_ohlcv(synthetic()),dict(c))
     checks += [isinstance(r,tuple) and len(r)==4]
     print(f"CRYPTO V8.4.2-R5 AUDIT: {sum(checks)}/{len(checks)} PASS")
