@@ -17,7 +17,7 @@ Primary focus: Forex/MT5 live engine. This file is nevertheless a complete refer
 
 The production root uses stable filenames; old FINAL/AUDITED/HARDENED copies belong in Git history/tags/releases.
 
-**Repository note:** README/CHANGELOG/release notes describe Forex as V8.4.2-R5, while the current Forex live source header still carries an older V8.4.1/R2 APP_VERSION/AUDIT_BUILD. This is a version-label inconsistency and is documented rather than silently hidden.
+**Repository note:** The Forex live engine is now aligned to the V8.4.2-R5 APP_VERSION/AUDIT_BUILD contract.
 
 ## 2. R5 architecture — how a signal is built
 
@@ -817,3 +817,62 @@ The supplied updated manual records **TP1 = 1.30R** as the recommended Forex pro
 | TP1 / TP2 | 1.2R / 2.2R recommended | 1.3R / 2.2R recommended |
 | Grid | OFF initially | OFF |
 | News / session | N/A | ON / ON |
+
+
+## R5 AUDIT FOLLOW-UP — 2026-09-22
+
+The current production line has received the 2026-09-22 engine audit.
+
+### New / fixed
+- Explicit ADX Period setting: default 14, saved/loaded and validated.
+- ADAPTIVE_EVIDENCE blocked-signal diagnostics now identify family-count, edge, Trend-family, independent-family, ATR-gate and ADX-gate blockers.
+- Runtime logs expose the completed-candle ADX value and ADXGate result.
+- Crypto backtester Grid fill processing was fixed so a fill queue is not mutated while it is being iterated.
+- Crypto backtester Grid cooldown is now enforced.
+- Crypto backtester maximum loss-streak protection is now enforced.
+- Crypto backtester daily drawdown uses marked equity, including adverse unrealized PnL.
+- Existing saved profiles remain authoritative; new-profile defaults were updated without silently rewriting saved configurations.
+
+### New-profile starting recommendations
+
+Crypto:
+- ADAPTIVE_EVIDENCE
+- 2 Evidence families
+- Family score 0.35
+- Trend required ON
+- Independent non-Trend family required ON
+- Adaptive Edge 0.18
+- ATR gate ON, minimum ATR 0.30%
+- ADX ON, threshold 20, period 14
+- Grid OFF
+- Risk per trade 0.75%
+- Cooldown 15 minutes
+- ATR Dynamic protection ON: SL 1.50x ATR, TP1 1.20R, TP2 2.20R
+
+Forex / MT5:
+- ADAPTIVE_EVIDENCE
+- Risk per trade 0.50%
+- ATR gate ON, minimum ATR 0.20%
+- ADX ON, threshold 20, period 14
+- News filter ON, ±30 minutes
+- Session filter ON, 07:00–20:00 UTC
+- Friday cutoff 18:00 UTC
+- Daily loss limit 2%
+- Correlation protection ON at 0.85
+- ATR Dynamic protection ON: SL 1.50x ATR, TP1 1.30R, TP2 2.20R
+
+### Evidence diagnostic clarification
+
+For a message such as:
+
+EVIDENCE_BLOCKED_BF3_SF1_EDGE0.25
+
+BF3 means 3 qualifying bullish Evidence families. SF1 means 1 qualifying bearish Evidence family. SF does not mean "strong families".
+
+The new diagnostic suffix can show the exact blocker, for example:
+
+SIDE=BUY | BLOCK=ADX_GATE | ATR=PASS | ADX=FAIL
+
+This is a diagnostic improvement; the Evidence thresholds were not weakened to force more trades.
+
+See docs/R5_ENGINE_AUDIT_2026-09-22.md for the complete audit and change list.
