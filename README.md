@@ -187,6 +187,16 @@ Install dependencies from `requirements.txt` first.
 - [Forex R5 release notes](docs/FOREX_R5_RELEASE_NOTES.md)
 - [Changelog](CHANGELOG.md)
 
+## User manuals
+
+The repository now includes three **complete, self-contained V8.4.2-R5 manuals**. Each manual contains the full Crypto + Forex/MT5 + Backtester reference; the edition title only identifies its primary focus.
+
+- [Complete Crypto Edition](docs/USER_MANUAL_V8_4_2_R5_CRYPTO.md)
+- [Complete Forex / MT5 Edition](docs/USER_MANUAL_V8_4_2_R5_FOREX_MT5.md)
+- [Complete Backtester Edition](docs/USER_MANUAL_V8_4_2_R5_BACKTESTER.md)
+
+The manuals document every R5 indicator family, indicator purpose, major options, signal modes, Evidence-family logic, risk/protection controls, Grid modes, live execution concepts, Forex news/session/correlation controls, and backtesting rules.
+
 ## Versioning policy
 
 The production root uses stable filenames. Do **not** create files such as:
