@@ -1,819 +1,209 @@
 # Universal Futures & Forex Trading Bot
 
-## CURRENT PRODUCTION RELEASE — V8.4.2-R5
+**Current production release: V8.4.2-R5**
 
-This repository intentionally keeps **only the current production source names** in the main working tree. Historical versions belong in Git history/tags/releases rather than beside the production files. GitHub releases are based on tags, which provide a clean historical version boundary.
+This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
-### Production engines
+## Current production files
 
 | Area | Live engine | Backtester |
 |---|---|---|
 | Crypto / Futures | `UniversalFuturesBot_CRYPTO.py` | `UniversalFuturesBot_CRYPTO_BACKTESTER.py` |
 | Forex / MT5 | `UniversalForexBot_MT5.py` | `UniversalForexBot_MT5_BACKTESTER.py` |
 
-### R5 status
+### Tests
 
-- Crypto live engine: **V8.4.2-R5**
-- Crypto strategy-parity backtester: **V8.4.2-R5**
-- Forex / MT5 live engine: **V8.4.2-R5**
-- Forex / MT5 strategy-parity backtester: **V8.4.2-R5**
-- Config schema: **9**
-- Evidence-family engine: **ADAPTIVE_EVIDENCE**
-- ATR Dynamic protection: **1.50× ATR / 1.20× SL / 2.20× SL**
-- Current single-symbol execution coordinator: **1 net position per bot/symbol**
+- `tests/test_crypto_engine.py`
+- `tests/test_crypto_gui.py`
+- `tests/test_forex_engine.py`
 
-### Repository rule
+### Build scripts
 
-Do not add another `V8_4_2_R6.py`, `FINAL2.py`, `AUDITED_R3.py`, etc. to the production root. Update the current production file, increment the release/build marker, add a changelog entry, and use Git tags/releases for historical snapshots.
+- `BUILD_CRYPTO_EXE.bat`
+- `BUILD_FOREX_EXE.bat`
 
-## R5 architecture
+## V8.4.2-R5 contract
 
-- Evidence families: TREND, MOMENTUM, FLOW, STRUCTURE; ATR/ADX are regime gates.
-- Minimum evidence families: 2.
-- Family minimum score: 0.35.
-- Trend family required.
-- Independent non-Trend family required.
-- Adaptive edge: 0.18.
-- Adaptive minimum weight: 3.50.
-- DIRECT_SHOT and Grid modes remain supported.
-- Existing saved profiles remain authoritative; missing R5 fields use safe defaults.
-- ATR Dynamic SL uses the latest completed candle and the actual filled entry/position quantity.
-- Backtests are research simulations; exchange/MT5 execution, fills, latency, trigger behavior and broker reconciliation still require demo validation.
+### Strategy
 
-## File layout
+- Signal mode: `ADAPTIVE_EVIDENCE`
+- Minimum evidence families: **2**
+- Family minimum score: **0.35**
+- Trend family required: **ON**
+- Independent non-Trend family required: **ON**
+- Adaptive Edge: **0.18**
+- Adaptive Minimum Weight: **3.50**
+- Evidence families:
+  - TREND
+  - MOMENTUM
+  - FLOW
+  - STRUCTURE
+- ATR and ADX are **regime gates**, not independent directional evidence families.
+- `DIRECT_SHOT`, `LONG_GRID`, `SHORT_GRID`, and `NEUTRAL_GRID` remain supported by the Crypto engine.
+
+## Dynamic protection
+
+R5 uses the following ATR relationship when ATR Dynamic protection is enabled:
 
 ```
-Universal-Futures-Trading-Bot/
-├── UniversalFuturesBot_CRYPTO.py
-├── UniversalFuturesBot_CRYPTO_BACKTESTER.py
-├── UniversalForexBot_MT5.py
-├── UniversalForexBot_MT5_BACKTESTER.py
-├── tests/
-├── docs/
-├── README.md
-└── CHANGELOG.md
+Completed-candle ATR
+        ↓
+SL = 1.50 × ATR
+        ↓
+TP1 = 1.20 × actual SL distance
+TP2 = 2.20 × actual SL distance
 ```
 
----
-
-## V8.4.2-R5 — Crypto Evidence Hardened + Strategy-Parity Backtester — 2026-09-21
-
-### R5 fixes / additions
-
-- R5 live engine is based directly on the V8.4.2-R3 hardened source.
-- Fixed Max Open Trades handling: values above 1 now normalize safely to 1 instead of aborting startup because the current single-symbol coordinator manages one net position.
-- Added ATR Dynamic SL/TP safety bounds.
-- Preserved completed-candle ATR -> actual filled-entry protection.
-- Preserved explicit Evidence-family runtime parameters, including Minimum Families and Family Minimum Score.
-- Removed a pandas FutureWarning in the Volume/S-R aggregation path.
-- Added a dedicated R5 strategy-parity backtester: UniversalFuturesBot_CRYPTO_BACKTESTER.py
-- Backtester supports raw OHLCV/DataFrame/CSV input, completed 4H MTF, causal divergence, Volume/S-R, Evidence-family decisions, ATR Dynamic SL/TP, risk sizing, cooldown, drawdown, loss-streak, post-SL lock, Grid simulation and conservative SL-first same-bar ambiguity.
-- ATR Dynamic contract: SL 1.50x ATR, TP1 1.20x actual SL distance, TP2 2.20x actual SL distance.
-- Added R5 engine audit and GUI smoke tests.
-
-### R5 files
-
-- UniversalFuturesBot_CRYPTO.py
-- UniversalFuturesBot_CRYPTO_BACKTESTER.py
-- tests/test_v842_crypto_engine_audit_R5.py
-- tests/test_v842_crypto_gui_smoke_R5.py
-- docs/V8_4_2_CRYPTO_R5_RELEASE_NOTES.md
-
-### Validation
-
-27/27 Crypto R5 engine checks PASS
-GUI smoke PASS
-Synthetic raw-OHLCV backtest PASS
-
-The historical backtester does not claim exchange-side order/fill/reconciliation equivalence. Demo validation is still required.
-
----
-
-## V8.4.2-R5 — Forex / MT5 Hardened Release — 2026-09-21
-
-The Forex/MT5 engine now has a dedicated V8.4.2-R5 hardening layer aligned with the Crypto R5 protection/configuration contract while preserving MT5-native execution.
-
-### R5 fixes / additions
-
-- Added Max Open Trades (per bot/symbol) with fail-safe normalization to 1 net position for the current single-symbol execution coordinator.
-- Fixed the Forex GUI cooldown-row overlap.
-- Added ATR Dynamic SL + TP1 + TP2 controls:
-  - SL = completed-candle ATR × 1.50
-  - TP1 = actual SL distance × 1.20
-  - TP2 = actual SL distance × 2.20
-- ATR protection uses the actual filled entry and actual position quantity.
-- Runtime ATR protection diagnostics report entry, ATR, price movement %, ROI context and R relationships.
-- Added persistent atr_sl_mult, atr_tp1_mult, atr_tp2_mult and max_open_trades settings.
-- Bumped Forex config schema to 9.
-- Added R5 strategy-parity backtester and 26-check Forex R5 audit suite.
-- New profiles use the R5 Evidence-family contract: ADAPTIVE_EVIDENCE, 2 families, family score 0.35, Trend + independent non-Trend requirements, Edge 0.18, and synchronized trend/momentum/flow/structure defaults.
-- Existing saved profiles remain authoritative; missing R5 fields receive safe defaults during migration.
-
-### Forex R5 source files
-
-- UniversalForexBot_MT5.py
-- UniversalForexBot_MT5_BACKTESTER.py
-- tests/test_forex_v842_engine_audit_R5.py
-- docs/V8_4_2_FOREX_R5_RELEASE_NOTES.md
-
-### Validation
-
-26/26 Forex R5 audit checks PASS, plus GUI smoke and config save/load round-trip validation. Live MT5 order lifecycle remains a demo/paper validation step.
-
----
-
-# Universal Futures Trading Bot V8.4.1
-
-
-A Python/Tkinter multi-exchange cryptocurrency futures trading bot for development, testing, research and educational use.
-
-> **Important:** This project is not financial advice and does not guarantee profits. Cryptocurrency futures and leverage can cause rapid losses. Start with demo/testnet environments and understand your exchange's order, account-mode and liquidation rules.
-
-## V8.4.1 FINAL-R2 Full Engine / Strategy / GUI / Safety Audit — 2026-09-21
-
-The crypto bot has now received the full follow-up audit against the V8.2 Engine Audit requirements and the V8.4 Evidence-Family redesign.
-
-### Critical fixes in this final audit
-
-- Restored the 11 missing core live indicator functions: RMA, Supertrend, ADX, MACD, RSI, WMA, RSI-MA, HMA, VWAP Delta, VIDYA and Nadaraya-Watson Envelope.
-- Hardened ADX so it is self-contained and no longer depends on Supertrend having run first.
-- Added the missing Divergence **Min Div** GUI control and save/load persistence.
-- Made **Use all divergence sources** functional and persistent.
-- Passed the exact Evidence-Family settings into `decision_reason()`, keeping diagnostics aligned with the real decision.
-- Changed missing/legacy signal-mode fallback to the current `ADAPTIVE_EVIDENCE` default.
-- Added exchange/account-mode preflight validation before exchange construction.
-- Made newly created SL/TP/BE protection verification **fail closed** when the exchange response is inconclusive.
-- Fixed legacy `SINGLE_SIGNAL` so opposing directional evidence is treated as a conflict instead of accepting whichever module appears first.
-- Added a full startup strategy/risk/SLTP preflight before leverage/order setup, while retaining authoritative worker-side validation.
-- Fixed the direct backtester API so raw OHLCV containing only millisecond `time` is normalized and strategy columns are built automatically.
-- Removed duplicate top-level Liquidity Swings and Trendline Breakout definitions from the backtester.
-- Synchronized the backtester `decision_reason()` contract with the Evidence-Family requirements.
-- Added a repository-aware 60-check regression suite and corrected the test path handling for `tests/`.
-- Kept the categorized Section 3 GUI: TREND, MOMENTUM, FLOW, STRUCTURE, REGIME, OPTIONAL/LEGACY and DECISION ENGINE.
-- Retained the V8.2/V8.3 safety contract: actual-fill protection, Grid order verification, recovery identity checks, managed-order ownership, Hold-All-Reverse, Hold-SL WAIT, post-SL opposite lock, same-candle protection, stale-data guard, emergency scope and multi-bot profile isolation.
-
-### V8.4 Evidence-Family contract
-
-- **TREND:** Supertrend, EMA, EMA Cross, MACD, VIDYA, NWE
-- **MOMENTUM:** RSI, Stochastic, Divergence
-- **FLOW:** VWAP, VWAP Delta, Volume, Volume S/R
-- **STRUCTURE:** Liquidity Swings, Trendline Breakout, MTF
-- **REGIME:** ATR and ADX gates only; they are not counted as independent directional evidence
-- **OPTIONAL / LEGACY:** Bollinger Bands
-
-### Final validation
-
-**60 PASS / 0 FAIL / 0 SKIP**
-
-The suite covers compilation, core indicators, the 19-module chain, Evidence-Family decisions, legacy modes, protection fail-closed behavior, GUI initialization and save/load round-trips.
-
-Import smoke tests for live, backtester and recovery sources also passed.
-
-See `docs/V8_4_1_ENGINE_AUDIT_RELEASE_NOTES.md` for the complete audit record.
-
-## Historical V8.3.3 Modular Engine + Recovery + Multi-Bot Build
-
-**Historical V8.3.3 baseline — retained for reference**
-
-`V8_3_HARDENED_ADAPTIVE_BOT.py` — hardened adaptive live engine
-
-`V8_3_HARDENED_ADAPTIVE_BACKTESTER.py` — strategy-parity hardened backtester
-
-`UniversalFuturesBot_V8_2_MODULAR_ENGINE.py` remains available as the earlier V8.2 baseline.
-
-This build keeps the existing V8 strategy/Grid architecture and adds the V8.1 safety/regression layer and adds a persistent recovery layer, exchange-side reconciliation, isolated bot profiles, and a shared multi-bot trade/session ledger.
-
-### Highlights
-
-- Multi-exchange futures execution through CCXT
-- Completed-candle strategy evaluation
-- **19 configurable directional modules**
-- DIRECT_SHOT and SCORE strategy execution
-- LONG_GRID / SHORT_GRID / NEUTRAL_GRID
-- NEUTRAL_GRID automatic direction changes
-- Grid basket TP and global Grid SL
-- Grid exposure and drawdown controls
-- Global daily drawdown and emergency capital-loss protection
-- Individual Grid order-status verification
-- **Crash/restart recovery with Resume or Start New prompt**
-- **Per-bot profile configuration and runtime state**
-- **Saved Bot Profile Manager with profile table, full details and Copy Profile**
-- **Copy Profile workflow for cloning a bot to another pair/quantity/leverage**
-- **Exchange-side position/order reconciliation before recovery**
-- **Profile locking to prevent duplicate instances of the same bot profile**
-- **Shared SQLite master database for multiple bots**
-- **Excel-compatible master CSV trade/session export**
-- Telegram alerts
-- Dashboard and CSV trade logging
-
-## 🆕 V8.3.3 Full Engine / Strategy / Configuration Audit — 2026-09-20
-
-V8.3.3 is a full correctness and safety audit of the V8.3.2 live engine.
-
-### Fixed
-- **Real orphan-order recovery gap:** V8.3.2 could lose ownership evidence after a normal position exit because `last_protected_position` was cleared. V8.3.3 persists exact retired bot-managed order IDs in the recovery checkpoint.
-- **Strict Bybit open-order pagination guard:** a full 50-order page is treated as potentially truncated during safety-critical reads instead of being mistaken for the complete inventory.
-- **Startup risk validation:** Sizing Mode, Risk %, Fixed Qty, Daily DD, Emergency Loss, Emergency Scope and Cooldown are now checked before leverage mutation.
-
-### Added
-- Runtime schema **5** with `retired_managed_order_ids`.
-- Centralized requested new-profile defaults for Adaptive/risk/safety settings.
-- `tests/test_v833_full_audit.py`.
-- `docs/V8_3_3_FULL_AUDIT_RELEASE_NOTES.md`.
-
-### Modified
-- New profile defaults remain **ADAPTIVE_SCORE**, Edge 0.18, Min Weight 3.5, MTF/ADX/Volume ON, ATR OFF, Grid OFF, EQUITY_RISK_% at 1%, Post-SL lock ON and No-Same-Candle ON.
-- Adaptive thresholds remain explicit per-call/per-profile; mutable StrategyEngine Adaptive class state remains prohibited.
-- Grid shutdown/direction cleanup also preserves exact managed order IDs for recovery.
-
-### Safety rule
-Automatic orphan cleanup still requires exact persisted bot order IDs. Unknown/manual orders continue to block startup.
-
-### Validation
-- Source compile/import: PASS.
-- Adaptive isolation: PASS.
-- Retired-order checkpoint: PASS.
-- Strict full-page order guard: PASS.
-- Runtime checkpoint serialization: PASS.
-
-See **[V8.3.3 Full Audit Release Notes](docs/V8_3_3_FULL_AUDIT_RELEASE_NOTES.md)**.
-
-
-## 🧪 V8.3.3 Strategy-Parity Backtester — 2026-09-20
-
-The V8.3.3 backtester is kept in lock-step with the live strategy contract. When the live bot's strategy/indicator logic changes, the matching backtester is updated and regression-tested before release.
-
-### V8.3.3 parity updates
-- Live StrategyEngine.decide_signal() and decision_reason() are mirrored exactly, including explicit per-profile Adaptive Edge / Minimum Weight parameters.
-- Volume S/R causal logic is synchronized with the live V8.3.3 implementation.
-- The pandas boolean aggregation path uses nullable Boolean dtype to avoid future downcasting behavior changes.
-- The backtester records V8.3.3 strategy parity separately from live-only runtime protections; checkpoint/order-ownership safety is not fabricated as historical price behavior.
-- Historical execution remains completed-candle → next-open for normal entries, with the existing conservative OHLC SL/TP ambiguity rule.
-
-### Regression validation
-- tests/test_v833_backtester_parity.py: 8/8 PASS.
-- Deterministic synthetic V8.3.3 backtest executed successfully with the full Divergence + Volume S/R modules enabled.
-
-## 🆕 V8.3.1 Adaptive Startup + Multi-Bot Isolation Fix — 2026-09-20
-
-V8.3.1 is a correctness/hardening patch after the first V8.3.0 demo startup exposed a real ADAPTIVE_SCORE startup bug.
-
-### Fixed
-
-- Fixed START FAILED: name 'adaptive_edge' is not defined.
-- start_bot() now reads and validates Adaptive Edge / Adaptive Minimum Weight before startup logging.
-- Removed mutable StrategyEngine.adaptive_edge / StrategyEngine.adaptive_min_weight class state.
-- Adaptive thresholds are now explicit inputs to the live StrategyEngine decision and diagnostic functions.
-- Backtester Adaptive thresholds are explicit inputs too; no hidden global cfg_adaptive_* state.
-- This prevents one bot profile from overwriting another profile's Adaptive thresholds when multiple workers run concurrently.
-
-### Validation
-
-- Live bot source compilation: PASS.
-- Backtester source compilation: PASS.
-- Live/backtester Adaptive parity: PASS.
-- Startup NameError regression: PASS.
-- Per-profile parameter isolation: PASS.
-- Regression suite: **6/6 PASS**.
-
-See **[V8.3.1 Release Notes](docs/V8_3_HARDENED_ADAPTIVE_RELEASE_NOTES.md)** and **[V8.3.1 Adaptive Strategy Specification](docs/V8_3_HARDENED_ADAPTIVE_STRATEGY.md)**.
-
-## 🆕 V8.3.0 Hardened Adaptive Engine — 2026-09-20
-
-V8.3.0 is the hardening pass after V8.2.6. It focuses on decision quality, risk-state correctness and fail-closed execution rather than adding more indicators.
-
-### Added
-- **ADAPTIVE_SCORE** strategy mode with correlation-aware module weights.
-- Adaptive Edge and Adaptive Minimum Weight controls, persisted through save/load and recovery.
-- VOL and ATR act as regime gates in Adaptive mode instead of being counted as independent candle-direction votes.
-- Daily drawdown now uses **daily peak equity**, so unrealized losses cannot hide behind an unchanged balance.
-- Session peak equity is persisted for recovery/audit.
-- Stale market-data guard.
-- Three-consecutive-cycle-error fail-closed safety halt.
-- Emergency-stop scope with safe default **BOT_SYMBOL** and explicit **ALL_ACCOUNT** option.
-- Managed-order cleanup for normal/Grid shutdown and reversal paths.
-- Adaptive Grid SCORE/NEUTRAL_GRID parity: weighted evidence is retained inside Grid direction filtering.
-- V8.3 hardened backtester and 5/5 regression suite.
-
-### Modified
-- Configuration schema **6 → 7**.
-- Runtime schema **3 → 4**.
-- New profiles default to ADAPTIVE_SCORE; existing saved profiles retain their saved strategy mode.
-- Backtester defaults to ADAPTIVE_SCORE and exposes the same Adaptive Edge / Minimum Weight settings.
-
-### Engineering intent
-The goal is not a guaranteed maximum-profit setting. The Adaptive engine reduces the chance that many correlated trend indicators are treated as independent votes, while regime gates reduce entries during unsuitable conditions. Risk controls are deliberately conservative and remain configurable.
-
-See **[V8.3.0 Release Notes](docs/V8_3_HARDENED_ADAPTIVE_RELEASE_NOTES.md)** and **[V8.3 Adaptive Strategy Specification](docs/V8_3_HARDENED_ADAPTIVE_STRATEGY.md)**.
-
-`tests/test_v830_hardened.py`: **6/6 PASS** locally.
-
-`V8_3_HARDENED_ADAPTIVE_RELEASE.zip` is the local release package for this build.
-
-`V8_3_HARDENED_ADAPTIVE_BOT.py` and `V8_3_HARDENED_ADAPTIVE_BACKTESTER.py` are committed to the repository.
-
-## 🆕 V8.2.4 Strategy + Execution Audit — 2026-09-20
-
-### Added
-- **ANY_NON_CONFLICTING** signal mode: any enabled directional module may trigger when the final direction is not contradictory.
-- Explicit conflict blocking: EMA=BULL + VWAP Delta=BEAR remains **NO TRADE** in ANY_NON_CONFLICTING.
-- `StrategyEngine.decision_reason()` for deterministic signal diagnostics.
-- Per-module signal-state logging and explicit decision reasons.
-- Configuration schema version 5.
-
-### Fixed
-- `2_SIGNALS`, `3_SIGNALS` and `4_SIGNALS` now enforce their named confirmation count inside the central StrategyEngine.
-- Invalid saved signal modes fall back safely to `SINGLE_SIGNAL`.
-- Worker-thread trade-limit and max-drawdown shutdown paths no longer call the Tkinter-touching `stop_bot()` method.
-- Persisted schema values use the central schema constants.
-
-### Modified
-- The signal log now shows states such as `EMA_CROSS:BULL,VWAP_DELTA:BEAR`, the required confirmation count and the decision reason.
-- Existing Grid, recovery, profile, SL/TP and protection architecture is retained.
-- The V8.2.3 runtime symbol normalization fix remains included.
-
-### Validation
-- Python compilation: PASS.
-- GUI attribute/callback audit: PASS.
-- Save/load coverage audit: PASS.
-- V8.2.4 regression tests: **12/12 PASS** locally.
-- Full live exchange lifecycle: not claimed by this audit.
-
-See **[V8.2.4 Release Notes](docs/V8_2_4_RELEASE_NOTES.md)** and **[V8.2.4 Audit Tests](tests/test_v824_audit.py)**.
-
-## 🆕 V8.2.6 Advanced Strategy Modules — 2026-09-20
-
-V8.2.6 adds two new configurable directional modules to both the live strategy architecture and the strategy-parity backtester:
-
-- **Divergence** — causal/confirmed port of the supplied *Divergence for Many Indicators v4* logic.
-  - MACD, MACD Histogram, RSI, Stochastic, CCI, Momentum, OBV, VWMACD, CMF and MFI.
-  - Regular / Hidden / Regular+Hidden divergence.
-  - Pivot period, source, minimum divergence count, maximum pivots/bars and per-source enable switches.
-  - Unconfirmed/"Don't Wait for Confirmation" divergence is deliberately not used for trading because it would introduce look-ahead.
-
-- **Volume S/R Zones** — numerical strategy port of the supplied *Volume-based Support & Resistance Zones V2* fractal logic.
-  - Four configurable timeframes.
-  - Volume MA threshold.
-  - MAJORITY / ANY / ALL timeframe voting.
-  - CURRENT_ZONE / FRESH_BREAK entry logic.
-  - Trading uses numerical support/resistance states rather than TradingView chart line/fill/label objects.
-
-The directional strategy contract is now **19 modules**. Both modules participate in the central signal engine, Grid SCORE/NEUTRAL_GRID direction source, Hold-All-Reverse persistence and the backtester combination laboratory.
-
-The V8.2.6 backtester also aligns higher-timeframe S/R states at the higher-timeframe candle close and requests additional historical warmup when configured higher-timeframe S/R is enabled, reducing look-ahead risk.
-
-**Local V8.2.6 release artifacts:** the complete live bot, strategy-parity backtester, regression tests and release notes were generated as the V8.2.6 release package for this development session. The V8.2.6 generated source files were subsequently committed to the repository; V8.3.0 supersedes that build with the hardened adaptive engine.
-
-## 🆕 V8.2.5 Strategy-Parity Backtester
-
-The V8.2.5 backtester was built from the uploaded V8.2.4 live engine plus the previously supplied V8 multi-strategy backtester reference.
-
-### Backtester coverage
-- All 17 live directional modules: ST, EMA, EMA Cross, MACD, RSI, Bollinger, Stochastic, VWAP, VWAP Delta, VIDYA, NWE, Liquidity Swings, Trendline, MTF, Volume, ADX, ATR.
-- Every live indicator option/entry mode.
-- Central signal modes: SINGLE_SIGNAL, ANY_NON_CONFLICTING, SCORE, 2_SIGNALS, 3_SIGNALS, 4_SIGNALS, STRICT_ALL_FILTERS.
-- Normal risk sizing, cooldown, same-candle protection, max trades, daily DD and emergency capital-loss stop.
-- PRICE_% / ROI_% protection, TP1/TP2 split, TP1 break-even, Hold-All-Reverse and post-SL opposite-signal lock.
-- DIRECT_SHOT, LONG_GRID, SHORT_GRID and NEUTRAL_GRID with Grid risk/protection controls.
-- Multi-symbol public OHLCV, caching, CSV/XLSX export, monthly statistics, equity data, parameter sweep, walk-forward and 1/2/3/4-way combination lab.
-- V8 bot-config JSON import/export.
-
-### Important V8.2.5 fix
-The live Grid validator requires Global Grid SL to be greater than Grid Spacing × Grid Levels. The previous default was 5.0% SL with 5 × 1.0% levels, which fails its own validator because 5.0 is equal to 5.0. The live default is now 6.0%.
-
-### Historical execution model
-Signals use completed candles and normal entries are simulated at the next candle OPEN. If an OHLC candle touches both SL and TP, the backtester assumes SL first. Funding, liquidation, order-book latency and exchange-specific conditional-order behavior are not invented.
-## 🆕 What was fixed / added / modified
-
-### 1. Crash / restart recovery
-
-The previous V8 runtime state was primarily in memory. The new build persists a per-profile runtime checkpoint.
-
-When the application detects a previous running/crashed/stopping session, it asks:
-
-> **Resume the last saved bot stage?**
-
-You can choose:
-
-- **YES — Resume:** restore saved configuration/runtime state and verify it against the exchange.
-- **NO — Start New Bot:** start a new session without silently adopting an existing exchange position/order.
-
-The recovery state includes strategy mode, timeframe, module summary, session statistics, normal-position state, protection IDs, TP1/BE state, re-entry locks and Grid state.
-
-### 2. Exchange-side recovery verification
-
-Resume does not blindly trust the local state file.
-
-Before continuing, the bot verifies the exchange-side position and open-order state and uses the saved bot state to determine whether the inventory can safely be associated with the profile.
-
-Unknown/unverifiable states are handled conservatively instead of being silently treated as safe.
-
-### 3. Full configuration recovery
-
-The running configuration is checkpointed so recovery can restore the settings that were active for the session, including strategy, risk, execution and Grid parameters.
-
-API keys, API secrets and Telegram credentials are deliberately excluded from the crash-recovery snapshot.
-
-### 4. Multi-bot profiles
-
-Each bot can have a unique **Bot Profile ID**, for example:
-
-```text
-BOT-01 → BTC/USDT → 15m
-BOT-02 → ETH/USDT → 5m
-BOT-03 → SOL/USDT → 1h
+The live engine calculates protection from the **actual filled entry price** and actual position quantity.
+
+Runtime diagnostics report:
+
+```
+Entry Price
+ATR
+SL Price %
+SL ROI %
+TP1 Price %
+TP1 ROI %
+TP2 Price %
+TP2 ROI %
 ```
 
-Each profile has isolated configuration and runtime-state files under:
+## Max Open Trades
 
-```text
-bot_profiles/
-    BOT-01/
-        config.json
-        runtime_state.json
-    BOT-02/
-        config.json
-        runtime_state.json
+The current execution coordinator is a **single-symbol net-position engine**.
+
+Therefore:
+
+```
+Max Open Trades > 1
+        ↓
+normalized safely
+        ↓
+1 net position per bot/symbol
 ```
 
-A profile lock prevents two processes from accidentally running the same profile simultaneously.
+This does **not** claim support for two independent same-symbol positions.
 
-### 5. Master multi-bot trade/session database
+## Crypto backtester
 
-All profiles can write to:
+`UniversalFuturesBot_CRYPTO_BACKTESTER.py` is the R5 research simulator.
 
-```text
-universal_bot_master.db
+It supports the strategy-side contract including:
+
+- completed-candle signals
+- next-candle-open entry simulation
+- Evidence-family decisions
+- MTF
+- divergence
+- Volume/S/R
+- ATR Dynamic SL/TP
+- risk sizing
+- cooldown
+- drawdown
+- loss streak
+- post-SL opposite lock
+- TP1 partial close
+- TP1 break-even
+- Grid modes
+- conservative same-bar ambiguity handling
+
+Backtesting is not a substitute for exchange demo validation.
+
+## Forex / MT5
+
+`UniversalForexBot_MT5.py` is the self-contained R5 MT5 production engine.
+
+It includes:
+
+- MT5 execution
+- broker lot/price rules
+- MT5-native account handling
+- Evidence-family strategy
+- ATR Dynamic protection
+- post-SL lock
+- recovery/checkpoint behavior
+- spread/session/news/correlation protections inherited from the audited MT5 engine
+
+The Forex backtester loads the clean production Forex engine rather than a historical V8.4.0 source file.
+
+## Configuration
+
+Current configuration schema:
+
+```
+CONFIG_SCHEMA_VERSION = 9
 ```
 
-The master ledger records bot/session context such as:
+Existing saved profiles remain authoritative. Missing R5 fields are populated with safe defaults.
 
-- Bot Profile ID
-- Session ID
-- Exchange
-- Account mode
-- Symbol
-- Timeframe
-- Strategy mode
-- Grid mode
-- Signal mode
-- Enabled strategy modules
-- Side
-- Entry/exit information
-- Quantity
-- Leverage
-- SL / TP1 / TP2
-- TP1 state
-- PnL/session result
-- Duration
-- Exit reason
-- Configuration hash
+Important persisted R5 fields include:
 
-### 6. Saved Bot Profile Manager
+- `max_open_trades`
+- `use_atr_sl`
+- `atr_sl_mult`
+- `atr_tp1_mult`
+- `atr_tp2_mult`
+- Evidence-family settings
 
-The Connection tab now includes a profile table showing saved bots with Profile ID, Exchange/account mode, Pair, Timeframe, Leverage, Strategy/Grid mode, Quantity or risk mode, Runtime status and Last update.
+## Running
 
-Selecting a profile opens a detailed configuration view. API keys, API secrets and Telegram tokens are masked in the details panel.
+### Crypto
 
-**Copy Selected Profile** creates an independent profile with the same strategy, risk, Grid, exchange and credential settings. The copied runtime checkpoint is reset. You can then change Pair, Quantity/Risk and Leverage before saving and starting the second bot.
-
-### 6.1 Profile Load / Save / Copy Improvements
-
-The Profile Manager also strengthens the existing profile loading and saving workflow:
-
-- **Load Selected Profile** loads the saved configuration into the GUI.
-- Before loading, existing Tkinter Entry fields are cleared so values such as API keys, secrets, symbol and other text fields cannot be accidentally concatenated during repeated profile loads.
-- Loading a **nonexistent profile is blocked** instead of leaving an older profile's settings visible.
-- **Save Profile** writes the current profile configuration to its own profile storage.
-- **Copy Selected Profile** creates a new Bot Profile ID with the source strategy, indicators, risk, Grid, exchange and credential configuration.
-- The copied profile's previous runtime checkpoint is reset, so it does not inherit the source bot's recovery session.
-- After copying, the new profile can be changed independently for **Pair, Quantity/Risk and Leverage**, then saved and started.
-- While a bot is running, **Profile ID, Exchange, Account Mode and active Symbol** cannot be silently changed through a live configuration checkpoint.
-- Profile locking prevents the same Bot Profile ID from being started by another process at the same time.
-- Profile lock acquisition occurs only after API credential validation, preventing a failed credential check from leaving a stale profile lock.
-
-This section describes the configuration/profile changes made in the **V8 Profile Manager + Configuration Audit — 2026-09-20** update.
-
-### 6.2 V8.2.2 Profile Manager Selection Fix
-
-V8.2.2 fixes a UI state mismatch between the Connection-section Profile ID field and the Saved Bot Profiles tree:
-
-- **Load Profile ID** loads the exact Profile ID typed in the Connection section.
-- **Delete Profile ID** deletes the exact Profile ID typed in the Connection section.
-- **Load Selected** loads the profile selected in the Profile Manager table.
-- **Delete Selected** deletes the profile selected in the Profile Manager table.
-- After deleting the current profile, the GUI synchronizes to the first remaining saved profile so the visible selection and Profile ID field cannot silently refer to different profiles.
-
-This prevents the confusing situation where BOT-02 is visibly selected but a top-level action still attempts to load BOT-01.
-
-### 7. Excel-compatible master log
-
-The database is accompanied by:
-
-```text
-universal_bot_master_log.csv
+```
+py -3.14 UniversalFuturesBot_CRYPTO.py
 ```
 
-The CSV can be opened directly in Microsoft Excel for comparing multiple bot profiles, pairs, timeframes and strategy configurations.
+### Crypto backtester
 
-### 8. Protection reconciliation safety improvement
-
-Protection reconciliation now distinguishes verified exchange states from uncertain states. If protection cannot be safely verified, the recovery/execution path fails closed rather than guessing.
-
-### 9. Existing Grid duplicate-order protection retained
-
-The previous V8 Grid fix remains in this build. The Grid engine tracks managed order IDs and individually verifies missing orders rather than recreating levels from an incomplete open-order snapshot.
-
-### 10. Bugs fixed during configuration/profile audit
-
-The current audited build also fixes repeated profile loads concatenating Entry-widget values, loading a nonexistent profile while leaving previous settings visible, changing Profile ID/exchange/account mode/active symbol through a live checkpoint, and acquiring a profile lock before API credential validation.
-
-The audit also confirmed that all 115 GUI setting attributes are assigned before use, callbacks resolve to existing methods, and the saved configuration covers the current settings system.
-
-### 11. Previous protection-reconciliation fix
-
-The previous protection reconciliation implementation contained an undefined `open_ids` reference in a branch that could be reached during reconciliation. The audited build removes that undefined-variable dependency and uses the existing specific-order verification path.
-
-### 12. V8.1 Engine / Strategy / Configuration Safety Audit
-
-The V8.1 pass rechecked the execution engine, strategy decision path, settings variables, defaults, callbacks, profile configuration and recovery behavior.
-
-#### Fixed
-
-- Profile-lock startup ordering: API credentials are validated before lock acquisition.
-- Recovery position identity: an open exchange position must match saved position/active-trade identity before recovery can adopt it.
-- Recovery protection gate: a saved live position without a protection checkpoint is blocked.
-- Immediate recovery protection reconciliation: a resumed normal position is reconciled immediately.
-- One-way position safety: multiple live positions returned for one symbol are treated as unsafe and the engine refuses to guess.
-- Bybit order consistency: normal market entry and normal emergency close explicitly use positionIdx=0.
-- Trendline validation: breakout buffer is constrained to 0% <= buffer < 100%.
-- Generic trigger safety: generic CCXT trigger orders check reported triggerPrice/reduceOnly capabilities when available and fail closed on explicit unsupported results.
-- Profile identity integrity: the profile folder remains authoritative if config.json contains a stale/mismatched bot_id.
-- Configuration schema: saved profiles now carry config_schema_version=3.
-
-#### Modified
-
-- Signal voting was extracted into a pure _decide_signal() engine helper. Existing SINGLE_SIGNAL, SCORE/2/3/4_SIGNALS and STRICT_ALL_FILTERS behavior is preserved while the core decision path becomes independently regression-testable.
-- Existing 17-module strategy, Grid, SL/TP, recovery and Profile Manager architecture is preserved.
-
-#### Added
-
-- tests/test_v81_static_audit.py with 10 automated checks covering Python compilation, GUI variable assignment, callback resolution, save/load coverage, profile-lock ordering, recovery safety, one-way position protection, trendline bounds, schema versioning and signal-voting behavior.
-
-#### V8.1 validation
-
-- Python compilation: PASS
-- Static engine/configuration audit: PASS
-- V8.1 regression checks: 10/10 PASS
-- Full exchange order lifecycle: NOT LIVE-TESTED in this audit
-
-V8.1 remains intended for demo/testnet validation before live funds are used.
-
-## 🧩 V8.2 Modular Engine
-
-V8.2 keeps the existing execution/recovery architecture but separates the final strategy-voting contract into a GUI/exchange-independent StrategyEngine. The GUI remains the execution coordinator and the existing 17 directional modules continue to feed the same decision path.
-
-Additional V8.2 hardening:
-
-- Central supported-exchange, signal-mode and Grid-mode contracts.
-- Preflight validation runs before profile-lock acquisition or exchange-side mutations.
-- Invalid signal mode, minimum score, leverage and Grid settings are rejected early.
-- CCXT client timeout is set to 20 seconds to prevent an indefinitely blocked network call from freezing a worker cycle.
-- Configuration schema is version 4; runtime checkpoint schema is version 3.
-- V8.2 regression tests cover compilation, GUI attributes, callback resolution, strategy voting, recovery contracts and Grid fail-closed behavior.
-
-## 🧠 19 directional modules
-
-The V8 Section 3 strategy engine can use:
-
-1. Supertrend
-2. EMA
-3. EMA Cross
-4. MACD
-5. RSI
-6. Bollinger Bands
-7. Stochastic
-8. VWAP
-9. VWAP Delta
-10. Volumatic VIDYA
-11. NWE
-12. Liquidity Swings
-13. Trendline Breakout
-14. Multi-Timeframe
-15. Volume
-16. ADX
-17. ATR
-18. Divergence
-19. Volume S/R Zones
-
-The Grid SCORE logic uses the same enabled Section 3 directional modules and their configured parameters.
-
-## 📊 Strategy modes
-
-### DIRECT_SHOT
-
-Direct strategy execution using the configured signal engine.
-
-### SCORE
-
-Combines directional module votes into a bullish/bearish score and requires the configured minimum score.
-
-### Grid modes
-
-- **LONG_GRID** — buy-side Grid
-- **SHORT_GRID** — sell-side Grid
-- **NEUTRAL_GRID** — automatic direction based on the configured direction source
-
-## 🔄 NEUTRAL_GRID automatic direction
-
-NEUTRAL_GRID can automatically change Grid direction:
-
-- **SUPERTREND** — follows the current Supertrend direction.
-- **SCORE** — uses the complete enabled Section 3 directional-module score.
-- **OFF** — uses the complete Section 3 score logic in the supplied V8 build.
-
-When direction changes, the Grid engine cancels old pending entries, handles existing Grid inventory, verifies the position state before switching sides, resets the Grid center and places the new side.
-
-LONG_GRID and SHORT_GRID remain explicitly directional and are not automatically switched by this mechanism.
-
-## 🛠️ Grid duplicate-order fix
-
-One of the important V8 engineering fixes addresses a Grid synchronization problem.
-
-The engine does not rely only on an incomplete open-order snapshot to decide whether a tracked Grid order still exists. It:
-
-1. Retrieves Bybit open orders with an explicit page size.
-2. Tracks locally managed order IDs.
-3. Checks missing tracked IDs individually with order-status queries.
-4. Retains orders when their status is still open or ambiguous.
-5. Removes or marks orders according to their verified exchange status.
-6. Verifies managed cancellations individually.
-
-This is intended to prevent repeated recreation of Grid levels when an exchange response does not contain every open order.
-
-## 🖥️ V8 GUI Preview
-
-![Universal Futures Trading Bot V8 GUI](docs/screenshots/V8_GUI_Screenshots_Overview.jpg)
-
-## 📖 Documentation
-
-- **[User Manual](docs/UniversalFuturesBot_V8_User_Manual.pdf)**
-- **[Change Log](CHANGELOG.md)**
-- **[Recovery / Multi-Bot / Profile Manager Audit](docs/V8_RECOVERY_MULTI_BOT_AUDIT.md)**
-- **[Bot Profile Manager Guide](docs/PROFILE_MANAGER.md)**
-- **[Launch Kit](docs/LAUNCH_KIT.md)**
-- **[Contributing Guide](CONTRIBUTING.md)**
-- **[Security Policy](SECURITY.md)**
-
-## 🏗️ Architecture
-
-```text
-Tkinter GUI
-    │
-    ├── Market / Strategy Configuration
-    ├── Indicator Parameters
-    ├── Risk & Grid Configuration
-    └── Monitoring / Dashboard
-            │
-            ▼
-     Strategy Engine
-            │
-            ├── 17 Directional Modules
-            ├── DIRECT_SHOT / SCORE
-            └── Grid Engine
-                    │
-                    ▼
-              Recovery Layer
-                    │
-          ┌─────────┴─────────┐
-          ▼                   ▼
-   Profile Runtime       Master Ledger
-          │                   │
-          ▼                   ▼
-       CCXT              SQLite + CSV
-          │
-   ┌──────┼───────────┬───────────┐
-   ▼      ▼           ▼           ▼
- Bybit  Binance    Gate.io     Bitget / WEEX
+```
+py -3.14 UniversalFuturesBot_CRYPTO_BACKTESTER.py
 ```
 
-The current design supports Bybit, Binance, Gate.io, Bitget and WEEX. KuCoin is not included in this V8 build.
+### Forex / MT5
 
-## ⚡ Quick start
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/vtejas1982-spec/Universal-Futures-Trading-Bot.git
-cd Universal-Futures-Trading-Bot
+```
+py -3.14 UniversalForexBot_MT5.py
 ```
 
-### 2. Install dependencies
+### Forex backtester
 
-Python 3.13/3.14 is recommended for the current Windows development environment.
-
-```powershell
-py -m pip install -r requirements.txt
+```
+py -3.14 UniversalForexBot_MT5_BACKTESTER.py
 ```
 
-### 3. Configure credentials locally
+Install dependencies from `requirements.txt` first.
 
-Never commit exchange API keys, API secrets, Telegram tokens, passwords or private configuration files.
+## Safety
 
-Keep credentials outside Git. See [SECURITY.md](SECURITY.md).
+- Use exchange demo/testnet or MT5 paper/demo first.
+- Do not treat backtest results as a guarantee of live execution.
+- Verify actual fills, protection orders, broker/exchange trigger behavior, partial fills, reconnects and recovery before live deployment.
+- Never commit API keys, passwords or tokens.
 
-### 4. Run the current build
+## Release documentation
 
-```powershell
-py V8_3_HARDENED_ADAPTIVE_BOT.py
+- [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
+- [Forex R5 release notes](docs/FOREX_R5_RELEASE_NOTES.md)
+- [Changelog](CHANGELOG.md)
+
+## Versioning policy
+
+The production root uses stable filenames. Do **not** create files such as:
+
+```
+*_V8_4_2_R6.py
+*_FINAL2.py
+*_AUDITED_R3.py
+*_HARDENED_R4.py
 ```
 
-### 5. Test recovery safely
+For a new release:
 
-Start with **one profile and demo/testnet credentials**.
+1. Update the current production source.
+2. Update the internal `APP_VERSION` / `AUDIT_BUILD`.
+3. Update tests.
+4. Update `CHANGELOG.md`.
+5. Tag the release in Git.
 
-Recommended first recovery test:
-
-1. Start BOT-01.
-2. Allow it to create its normal/Grid state in the controlled environment.
-3. Stop/terminate the process in a controlled test.
-4. Reopen the application.
-5. Confirm the **Resume / Start New** prompt.
-6. Choose Resume.
-7. Confirm exchange-side reconciliation before execution continues.
-8. Verify that no duplicate Grid orders are created.
-
-## 🔬 Development and testing
-
-The published recovery build was syntax-compiled and statically audited for configuration coverage, callbacks, persistence paths and the existing strategy modules.
-
-The local audit also checked:
-
-- GUI setting save/load coverage
-- strategy-module configuration coverage
-- runtime persistence
-- profile locking
-- master SQLite logging
-- master CSV export
-- recovery serialization
-- protection reconciliation paths
-
-### Not live-tested
-
-This release has **not** been fully live-tested against Bybit Demo or every supported exchange. Exchange-side recovery, order-mode behavior, account modes and permissions can vary.
-
-Do not interpret static validation as proof of safe live trading.
-
-## 🗑️ V8.2.1 Profile Delete
-
-V8.2.1 adds safe profile deletion to the Profile Manager. A profile cannot be deleted while it is running, locked by another bot process, or has recovery state that may represent an open/unverified position or active Grid orders. BOT-01 legacy configuration is handled explicitly, while the master SQLite trade/session history is preserved.
-
-## 🧪 V8.2 validation status
-
-- Local static/unit regression suite: **22 tests passed; 1 exchange-demo gate skipped**.
-- Exchange demo/testnet order lifecycle: **not yet executed by the static suite**.
-- V8.2 is intended to be validated on one exchange demo/testnet profile before live use.
-
-## 🗺️ Roadmap
-
-### V8 — current
-
-- [x] 19 directional modules
-- [x] DIRECT_SHOT / SCORE execution
-
-### V8.2.4 audited strategy/execution build
-- Added ANY_NON_CONFLICTING and explicit signal-decision diagnostics.
-- Enforced 2/3/4 confirmation semantics inside StrategyEngine.
-- Fixed worker-thread shutdown paths that called Tkinter-touching stop_bot().
-- Added 12 regression checks covering strategy conflict handling, confirmation counts, configuration coverage and worker shutdown safety.
-
-### V8.2.3 checkpoint fix
-- Fixed live configuration checkpoint false warnings caused by comparing GUI symbols such as `OP/USDT` with CCXT canonical runtime symbols such as `OP/USDT:USDT`.
-- The running symbol is now normalized through the connected exchange before the live identity check.
-- Real symbol changes while running remain blocked.
-
-
-## V8.4.1 FOREX-R2 MT5 Full Engine / Strategy / GUI / Safety Audit — 2026-09-21
-
-The MT5 Forex V8.4 Evidence-Family bot was audited against the V8.2 Engine Audit contract.
-
-### Forex audit fixes
-- Fixed SINGLE_SIGNAL conflict handling: simultaneous BUY+SELL evidence now returns NONE.
-- Fixed Evidence-Family decision_reason parity for Trend and independent non-Trend requirements.
-- Added startup strategy/risk/SL-TP preflight before MT5 connection/login/order setup.
-- Fixed worker signal-mode validation so all supported modes, including ADAPTIVE_EVIDENCE, are accepted at runtime.
-- Added config schema 8 and migration logging while preserving saved settings.
-- Preserved MT5-native execution, broker-side SL reconciliation, fail-closed protection, entry idempotency, profile lock, runtime recovery and Forex V2 guardrails.
-- Fixed backtester NWE parameter parity with the live engine.
-- Added a public raw-OHLCV run_backtest() API.
-
-### Forex validation
-- AST / compile: PASS
-- GUI smoke + default preflight: PASS
-- Config save/load round-trip: PASS
-- Evidence-family and SINGLE_SIGNAL regression: PASS
-- Full 19-module strategy frame: PASS
-- Raw-OHLCV backtest API: PASS
-- **7/7 audit groups PASS**
-
-The Forex backtester remains an OHLC approximation and synthetic validation is engineering validation only, not a claim of live profitability.
+That keeps the working tree understandable while Git history and releases retain previous versions.
