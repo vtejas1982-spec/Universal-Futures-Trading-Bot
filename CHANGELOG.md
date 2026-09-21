@@ -1,3 +1,39 @@
+## V8.4.2-R5 — Crypto Evidence Hardened + Backtester — 2026-09-21
+
+### Fixed
+- Max Open Trades values above 1 no longer abort startup; they normalize to 1 net position for the current single-symbol coordinator.
+- Added ATR Dynamic SL/TP multiplier safety bounds.
+- Preserved completed-candle ATR and actual-filled-entry protection calculations.
+- Preserved explicit Evidence-family parameters in the live execution path.
+- Removed the pandas FutureWarning in Volume/S-R boolean aggregation.
+
+### Added
+- Crypto V8.4.2-R5 hardened live engine.
+- Crypto V8.4.2-R5 strategy-parity backtester.
+- Raw OHLCV/DataFrame/CSV backtesting.
+- Completed 4H MTF alignment, causal divergence and Volume/S-R.
+- ATR Dynamic SL 1.50x ATR, TP1 1.20x actual SL distance, TP2 2.20x actual SL distance.
+- R5 deterministic engine audit and GUI smoke tests.
+- R5 release documentation.
+
+### Modified
+- Build marker: V8.4.2-ENGINE-AUDIT-2026-09-21-R5.
+- Backtester defaults synchronized to ADAPTIVE_EVIDENCE, 2 evidence families, family score 0.35, Trend required, independent non-Trend family required and Adaptive Edge 0.18.
+- ATR is a regime gate in ADAPTIVE_EVIDENCE and is not counted as an independent directional family.
+- Historical execution remains completed-candle signal -> next-candle-open entry with conservative SL-first same-bar ambiguity.
+
+### Validation
+- 27/27 Crypto R5 engine checks PASS.
+- GUI smoke PASS.
+- Synthetic raw-OHLCV backtest PASS.
+- SINGLE_SIGNAL conflict fail-closed PASS.
+
+### Safety
+- The execution engine remains one-net-position-per-bot/symbol. R5 does not claim two independent same-symbol positions.
+- Historical backtests do not prove exchange order acceptance, conditional-trigger behavior, partial fills or recovery; demo validation remains required.
+
+---
+
 ## V8.4.2-R5 — Forex / MT5 Evidence Hardened — 2026-09-21
 
 ### Fixed
