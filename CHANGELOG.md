@@ -1,3 +1,30 @@
+## V8.4.1 FOREX-R2 — MT5 Forex Full Engine Audit — 2026-09-21
+
+### Fixed
+- Fixed SINGLE_SIGNAL conflict semantics to fail closed on simultaneous bullish/bearish evidence.
+- Fixed Evidence-Family diagnostic parity with Trend-family and independent-family gates.
+- Added startup strategy/risk/SL/TP preflight before MT5 broker setup.
+- Fixed runtime signal-mode validation to accept the complete supported mode set, including ADAPTIVE_EVIDENCE.
+- Added config schema 8 and migration logging.
+- Fixed Forex backtester NWE argument parity with the live implementation.
+- Added raw-OHLCV run_backtest() API coverage.
+
+### Preserved safety/execution architecture
+- MT5-native Forex execution and broker lot rules.
+- Broker-side SL reconciliation and fail-closed protection handling.
+- order_send=None entry reconciliation to avoid blind duplicate retries.
+- Runtime checkpoint/recovery and single-instance profile lock.
+- Spread/slippage/session/Friday/news/correlation/trailing/ATR-SL/risk protections.
+
+### Validation
+- **7/7 audit groups PASS**
+- GUI construction/default preflight: PASS.
+- Config save/load round-trip: PASS.
+- Full 19-module strategy frame including NWE: PASS.
+- Raw OHLCV backtest: PASS.
+
+---
+
 ## V8.4.1-R2 — Full Follow-up Engine Audit — 2026-09-21
 
 ### Fixed
