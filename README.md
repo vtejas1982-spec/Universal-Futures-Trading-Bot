@@ -2,7 +2,7 @@
 
 ## CURRENT PRODUCTION RELEASE — V8.4.2-R5
 
-This repository intentionally keeps **only the current production source names** in the main working tree. Historical versions belong in Git history/tags/releases rather than beside the production files. GitHub releases are based on tags, which provide a clean historical version boundary. citeturn0search1
+This repository intentionally keeps **only the current production source names** in the main working tree. Historical versions belong in Git history/tags/releases rather than beside the production files. GitHub releases are based on tags, which provide a clean historical version boundary.
 
 ### Production engines
 
