@@ -66,8 +66,8 @@ try:
 except Exception:
     HAS_MPL = False
 
-APP_VERSION = "V8.4.0-CRYPTO-EVIDENCE-BT"
-APP_TITLE = "Universal Futures Bot V8.3.3 — Strategy-Parity Backtester"
+APP_VERSION = "V8.4.1-CRYPTO-EVIDENCE-BT-AUDITED"
+APP_TITLE = "Universal Futures Bot V8.4.1 — Strategy-Parity Backtester"
 APP_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = APP_DIR / "backtest_results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -86,7 +86,7 @@ LIVE_STRATEGY_PARITY_VERSION = "V8.3.3"
 LIVE_RUNTIME_SCHEMA_VERSION = 5
 MODULES = ["ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE","LIQ_SWING","TRENDLINE","MTF","VOL","ADX","ATR","DIVERGENCE","VOL_SR"]
 
-DEFAULTS = {'exchange': 'Binance', 'symbols': 'BTC/USDT', 'tf': '15m', 'start': '2026-01-01', 'end': '2026-09-01', 'capital': 1000.0, 'leverage': 5, 'no_same_candle': True, 'cooldown_min': 0.0, 'max_trades': 10, 'use_st': True, 'st_len': 10, 'st_mult': 2.0, 'st_source': 'CLOSE', 'st_change_atr': True, 'st_entry_mode': 'FRESH_FLIP', 'use_ema': True, 'ema_len': 200, 'use_ema_cross': False, 'ema_fast': 9, 'ema_slow': 20, 'ema_cross_entry_mode': 'FRESH_CROSS', 'use_macd': False, 'macd_fast': 12, 'macd_slow': 26, 'macd_signal': 9, 'use_rsi': False, 'rsi_len': 14, 'rsi_ob': 80, 'rsi_os': 20, 'rsi_logic': 'REVERSAL_ZONE', 'rsi_ma_type': 'EMA', 'rsi_ma_len': 9, 'use_bb': False, 'bb_len': 20, 'bb_std': 2.0, 'use_stoch': False, 'stoch_k': 14, 'stoch_smooth': 3, 'stoch_d': 3, 'use_vwap': False, 'vwap_len': 50, 'use_vwap_delta': False, 'vwap_delta_smooth': False, 'vwap_delta_smooth_len': 21, 'vwap_delta_baseline': 50, 'vwap_delta_logic': 'CURRENT_TREND', 'use_vidya': False, 'vidya_len': 10, 'vidya_momentum': 20, 'vidya_band': 2.0, 'vidya_entry_mode': 'CURRENT_TREND', 'use_nwe': False, 'nwe_bandwidth': 8.0, 'nwe_mult': 3.0, 'nwe_entry_mode': 'FRESH_CROSS', 'nwe_lookback': 500, 'nwe_mae': 499, 'use_liq_swings': False, 'liq_length': 14, 'liq_area': 'Wick Extremity', 'liq_filter': 'Count', 'liq_filter_value': 0.0, 'liq_entry_mode': 'FRESH_BREAK', 'use_trendline': False, 'trendline_length': 14, 'trendline_min_distance': 5, 'trendline_entry_mode': 'FRESH_BREAK', 'trendline_buffer': 0.0, 'trendline_retest_candles': 3, 'use_atr': False, 'atr_min_pct': 0.3, 'use_vol': True, 'vol_len': 20, 'use_adx': True, 'adx_thresh': 20.0, 'use_mtf': True, 'signal_mode': 'ADAPTIVE_SCORE', 'min_score': 1, 'adaptive_edge': 0.18, 'adaptive_min_weight': 3.5, 'evidence_min_families': 2, 'evidence_family_min_score': 0.35, 'evidence_require_trend': True, 'evidence_require_independent': True, 'hold_until_all_reverse': True, 'require_opposite_after_sl': True, 'size_mode': 'EQUITY_RISK_%', 'risk_pct': 1.0, 'fixed_qty': 0.001, 'max_dd': 5.0, 'emergency_capital_pct': 30.0, 'sl_mode': 'PRICE_%', 'tp_mode': 'ROI_%', 'sl_pct': 1.5, 'tp1_pct': 2.0, 'tp2_pct': 4.0, 'hold_sl_roi': 5.0, 'hold_sl_wait_reversal': False, 'tp1_be': True, 'tp_qty_mode': 'PERCENT_%', 'tp1_close': 50.0, 'tp2_close': 50.0, 'grid_mode': 'OFF', 'grid_levels': 5, 'grid_spacing': 1.0, 'grid_order_size': 10.0, 'grid_size_increase': 0.0, 'grid_tp': 1.0, 'grid_sl': 6.0, 'grid_max_exposure': 100.0, 'grid_max_dd': 3.0, 'grid_score_min': 1, 'grid_trend_filter': 'OFF', 'grid_recenter': False, 'grid_recenter_distance': 3.0, 'grid_cooldown': 30.0, 'fee_pct': 0.04, 'slippage_pct': 0.01, 'slippage_exit': True, 'warmup': 250, 'exit_on_opposite': False, 'output_trades': True}
+DEFAULTS = {'exchange': 'Binance', 'symbols': 'BTC/USDT', 'tf': '15m', 'start': '2026-01-01', 'end': '2026-09-01', 'capital': 1000.0, 'leverage': 5, 'no_same_candle': True, 'cooldown_min': 0.0, 'max_trades': 10, 'use_st': True, 'st_len': 10, 'st_mult': 2.0, 'st_source': 'CLOSE', 'st_change_atr': True, 'st_entry_mode': 'FRESH_FLIP', 'use_ema': True, 'ema_len': 200, 'use_ema_cross': False, 'ema_fast': 9, 'ema_slow': 20, 'ema_cross_entry_mode': 'FRESH_CROSS', 'use_macd': False, 'macd_fast': 12, 'macd_slow': 26, 'macd_signal': 9, 'use_rsi': False, 'rsi_len': 14, 'rsi_ob': 80, 'rsi_os': 20, 'rsi_logic': 'REVERSAL_ZONE', 'rsi_ma_type': 'EMA', 'rsi_ma_len': 9, 'use_bb': False, 'bb_len': 20, 'bb_std': 2.0, 'use_stoch': False, 'stoch_k': 14, 'stoch_smooth': 3, 'stoch_d': 3, 'use_vwap': False, 'vwap_len': 50, 'use_vwap_delta': False, 'vwap_delta_smooth': False, 'vwap_delta_smooth_len': 21, 'vwap_delta_baseline': 50, 'vwap_delta_logic': 'CURRENT_TREND', 'use_vidya': False, 'vidya_len': 10, 'vidya_momentum': 20, 'vidya_band': 2.0, 'vidya_entry_mode': 'CURRENT_TREND', 'use_nwe': False, 'nwe_bandwidth': 8.0, 'nwe_mult': 3.0, 'nwe_entry_mode': 'FRESH_CROSS', 'nwe_lookback': 500, 'nwe_mae': 499, 'use_liq_swings': False, 'liq_length': 14, 'liq_area': 'Wick Extremity', 'liq_filter': 'Count', 'liq_filter_value': 0.0, 'liq_entry_mode': 'FRESH_BREAK', 'use_trendline': False, 'trendline_length': 14, 'trendline_min_distance': 5, 'trendline_entry_mode': 'FRESH_BREAK', 'trendline_buffer': 0.0, 'trendline_retest_candles': 3, 'use_atr': False, 'atr_min_pct': 0.3, 'use_vol': True, 'vol_len': 20, 'use_adx': True, 'adx_thresh': 20.0, 'use_mtf': True, 'signal_mode': 'ADAPTIVE_EVIDENCE', 'min_score': 1, 'adaptive_edge': 0.18, 'adaptive_min_weight': 3.5, 'evidence_min_families': 2, 'evidence_family_min_score': 0.35, 'evidence_require_trend': True, 'evidence_require_independent': True, 'hold_until_all_reverse': True, 'require_opposite_after_sl': True, 'size_mode': 'EQUITY_RISK_%', 'risk_pct': 1.0, 'fixed_qty': 0.001, 'max_dd': 5.0, 'emergency_capital_pct': 30.0, 'sl_mode': 'PRICE_%', 'tp_mode': 'ROI_%', 'sl_pct': 1.5, 'tp1_pct': 2.0, 'tp2_pct': 4.0, 'hold_sl_roi': 5.0, 'hold_sl_wait_reversal': False, 'tp1_be': True, 'tp_qty_mode': 'PERCENT_%', 'tp1_close': 50.0, 'tp2_close': 50.0, 'grid_mode': 'OFF', 'grid_levels': 5, 'grid_spacing': 1.0, 'grid_order_size': 10.0, 'grid_size_increase': 0.0, 'grid_tp': 1.0, 'grid_sl': 6.0, 'grid_max_exposure': 100.0, 'grid_max_dd': 3.0, 'grid_score_min': 1, 'grid_trend_filter': 'OFF', 'grid_recenter': False, 'grid_recenter_distance': 3.0, 'grid_cooldown': 30.0, 'fee_pct': 0.04, 'slippage_pct': 0.01, 'slippage_exit': True, 'warmup': 250, 'exit_on_opposite': False, 'output_trades': True}
 DEFAULTS.update({
     'max_configs':250,'wf_split':70,'top_n':1,'combo_one':True,'combo_two':True,'combo_three':True,'combo_four':True,
     'use_divergence':False,'div_pivot':5,'div_source':'Close','div_type':'Regular','div_min_count':1,
@@ -1013,7 +1013,8 @@ def calculate_nadaraya_watson_envelope(df, bandwidth=8.0, multiplier=3.0, lookba
     """
     df = df.copy()
     bandwidth = float(bandwidth)
-    multiplier = float(multiplier)    lookback = int(lookback)
+    multiplier = float(multiplier)
+    lookback = int(lookback)
     mae_length = int(mae_length)
     if bandwidth <= 0:
         raise ValueError("NWE Bandwidth must be greater than 0.")
@@ -6100,7 +6101,12 @@ def build_mtf_filter(df):
     # Resample base OHLCV into UTC 4H bars and align only bars whose close
     # timestamp is <= the current base candle close timestamp.
     x=df.copy()
-    x["datetime"]=pd.to_datetime(x["datetime"],utc=True)
+    if "datetime" not in x.columns:
+        if "time" not in x.columns:
+            raise ValueError("MTF filter requires either datetime or time column.")
+        x["datetime"] = pd.to_datetime(x["time"], unit="ms", utc=True)
+    else:
+        x["datetime"] = pd.to_datetime(x["datetime"], utc=True)
     q=x.set_index("datetime")[["open","high","low","close","vol"]].resample("4h",label="right",closed="right").agg(
         {"open":"first","high":"max","low":"min","close":"last","vol":"sum"}
     ).dropna()
@@ -6440,8 +6446,12 @@ def calc_metrics(trades,initial,equity_curve=None):
     peak=np.maximum.accumulate(np.r_[initial,eq]); dd=np.maximum(0,peak[1:]-eq)
     wins=pnl[pnl>0]; losses=pnl[pnl<0]; gw=wins.sum() if len(wins) else 0; gl=abs(losses.sum()) if len(losses) else 0
     seq=mx=0
-    for v in pnl:        if v<=0: seq+=1; mx=max(mx,seq)
-        else: seq=0
+    for v in pnl:
+        if v <= 0:
+            seq += 1
+            mx = max(mx, seq)
+        else:
+            seq = 0
     longs=[t for t in trades if t["side"]=="LONG"]; shorts=[t for t in trades if t["side"]=="SHORT"]
     fees=sum(float(t.get("fees",0)) for t in trades)
     return {"trades":int(len(pnl)),"wins":int((pnl>0).sum()),"losses":int((pnl<=0).sum()),
