@@ -120,6 +120,9 @@ DEFAULT_USE_DIVERGENCE = True
 DEFAULT_DIV_USE_ALL = True
 RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
+MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10
+ACCOUNT_READ_RETRIES = 3
+ACCOUNT_READ_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
 DEFAULT_ADX_LEN = 14
 PROFILE_OPERATION_SCHEMA_VERSION = 2  # V8.2.2 explicit current-vs-selected profile controls
@@ -6018,28 +6021,93 @@ class UniversalFuturesBotGUI:
 
     # -------------------- ACCOUNT / POSITION -----------------
 
-    def fetch_balance_total(self):
-        balance = self.exchange.fetch_balance()
+    @staticmethod
+    def _is_transient_exchange_error(error):
+        """Classify exchange/network failures that are safe to retry."""
+        transient_types = tuple(
+            cls for cls in (
+                getattr(ccxt, "NetworkError", None),
+                getattr(ccxt, "RequestTimeout", None),
+                getattr(ccxt, "ExchangeNotAvailable", None),
+                getattr(ccxt, "DDoSProtection", None),
+                getattr(ccxt, "RateLimitExceeded", None),
+            )
+            if isinstance(cls, type)
+        )
+        if transient_types and isinstance(error, transient_types):
+            return True
+        text_error = str(error).lower()
+        return any(token in text_error for token in (
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "too many requests",
+            "rate limit",
+            "502 bad gateway",
+            "503 service unavailable",
+            "504 gateway timeout",
+        ))
 
+    def _fetch_exchange_balance_with_retry(self):
+        """Fetch account balance with bounded retry/backoff.
+
+        Account reads are critical risk inputs, so a transient Bybit/API
+        failure must not be mistaken for a strategy failure. The retry is
+        deliberately bounded; persistent failures still fail closed.
+        """
+        last_error = None
+        for attempt in range(ACCOUNT_READ_RETRIES):
+            try:
+                return self.exchange.fetch_balance()
+            except Exception as error:
+                last_error = error
+                if not self._is_transient_exchange_error(error):
+                    raise
+                if attempt + 1 >= ACCOUNT_READ_RETRIES:
+                    break
+                delay = ACCOUNT_READ_BACKOFF_SECONDS[
+                    min(attempt, len(ACCOUNT_READ_BACKOFF_SECONDS) - 1)
+                ]
+                self.log(
+                    f"ACCOUNT API transient error "
+                    f"{attempt + 1}/{ACCOUNT_READ_RETRIES}: {error} | "
+                    f"retrying in {delay:g}s"
+                )
+                time.sleep(delay)
+        raise last_error
+
+    @staticmethod
+    def _balance_total_from_snapshot(balance):
         try:
             value = balance["USDT"]["total"]
             if value is not None:
                 return float(value)
         except Exception:
             pass
-
         try:
-            return float(
-                balance["total"]["USDT"]
-            )
+            return float(balance["total"]["USDT"])
         except Exception:
-            raise RuntimeError(
-                "Could not read USDT total balance."
-            )
+            raise RuntimeError("Could not read USDT total balance.")
 
-    def fetch_account_equity(self):
-        """Return Bybit account equity; unrealized PnL is included when available."""
-        balance = self.exchange.fetch_balance()
+    def fetch_balance_total(self):
+        return self._balance_total_from_snapshot(
+            self._fetch_exchange_balance_with_retry()
+        )
+
+    def fetch_account_equity(self, balance=None):
+        """Return account equity; unrealized PnL is included when available.
+
+        Reuses the already-fetched balance when supplied so one execution
+        cycle does not make two wallet-balance API requests.
+        """
+        balance = (
+            balance
+            if balance is not None
+            else self._fetch_exchange_balance_with_retry()
+        )
         try:
             rows = ((balance.get("info") or {}).get("result") or {}).get("list") or []
             if rows and rows[0].get("totalEquity") is not None:
@@ -10408,10 +10476,9 @@ class UniversalFuturesBotGUI:
                     # ------------------------------------------------
                     # 1. Balance / drawdown
                     # ------------------------------------------------
-                    curr_balance = (
-                        self.fetch_balance_total()
-                    )
-                    curr_equity = self.fetch_account_equity()
+                    balance_snapshot = self._fetch_exchange_balance_with_retry()
+                    curr_balance = self._balance_total_from_snapshot(balance_snapshot)
+                    curr_equity = self.fetch_account_equity(balance_snapshot)
                     self.session_peak_equity = max(float(self.session_peak_equity or 0.0), float(curr_equity))
                     self.daily_peak_equity = max(float(self.daily_peak_equity or 0.0), float(curr_equity))
 
@@ -12229,16 +12296,35 @@ class UniversalFuturesBotGUI:
                         break
 
                 except Exception as cycle_error:
-                    self.consecutive_cycle_errors += 1
-                    self.log(
-                        f"Execution cycle error #{self.consecutive_cycle_errors}/{MAX_CONSECUTIVE_CYCLE_ERRORS}: "
-                        f"{cycle_error}"
-                    )
-                    if self.consecutive_cycle_errors >= MAX_CONSECUTIVE_CYCLE_ERRORS:
-                        self.runtime_last_error = f"Consecutive cycle safety halt: {cycle_error}"
-                        self.log("CRITICAL: consecutive cycle error limit reached; bot halted fail-closed.")
-                        self.is_running = False
-                        break
+                    if self._is_transient_exchange_error(cycle_error):
+                        self.consecutive_cycle_errors += 1
+                        self.log(
+                            f"Transient exchange/API cycle error "
+                            f"{self.consecutive_cycle_errors}/{MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS}: "
+                            f"{cycle_error} | No new entry will be attempted this cycle."
+                        )
+                        if self.consecutive_cycle_errors >= MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS:
+                            self.runtime_last_error = (
+                                f"Persistent transient exchange/API failure: {cycle_error}"
+                            )
+                            self.log(
+                                "CRITICAL: persistent exchange/API failure limit reached; "
+                                "bot halted fail-closed."
+                            )
+                            self.is_running = False
+                            break
+                    else:
+                        self.consecutive_cycle_errors += 1
+                        self.log(
+                            f"Execution cycle error "
+                            f"{self.consecutive_cycle_errors}/{MAX_CONSECUTIVE_CYCLE_ERRORS}: "
+                            f"{cycle_error}"
+                        )
+                        if self.consecutive_cycle_errors >= MAX_CONSECUTIVE_CYCLE_ERRORS:
+                            self.runtime_last_error = f"Consecutive cycle safety halt: {cycle_error}"
+                            self.log("CRITICAL: consecutive cycle error limit reached; bot halted fail-closed.")
+                            self.is_running = False
+                            break
 
                 # ------------------------------------------------
                 # 9. Persistent checkpoint + 30-second scan
@@ -12286,7 +12372,14 @@ class UniversalFuturesBotGUI:
             self.is_running = False
 
             try:
-                live_position = self.fetch_position(self.symbol) if self.exchange and self.symbol else None
+                live_position = None
+                if self.exchange and self.symbol:
+                    try:
+                        live_position = self.fetch_position(self.symbol)
+                    except Exception as final_position_error:
+                        self.log(
+                            f"FINAL POSITION CHECK WARNING: {final_position_error}"
+                        )
                 final_status = (
                     "CRASHED"
                     if self.runtime_last_error
