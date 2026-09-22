@@ -1,3 +1,12 @@
+## V8.4.2-R5 — 2026-09-22 Managed-Order Cleanup Hotfix
+
+### Fixed
+- A closed SL/TP could still leave retired order IDs in the managed-order cleanup set.
+- Bybit retCode 110001 ("order not exists or too late to cancel") was previously treated as a cancellation failure.
+- The same inactive IDs could therefore be retried every 30 seconds until the 3-cycle safety halt.
+- Terminal managed orders are now recognized as inactive and removed from tracking.
+- Genuine unresolved open/protection orders still fail closed.
+
 ## V8.4.2-R5 — 2026-09-22 API Resilience Hotfix
 
 ### Fixed
