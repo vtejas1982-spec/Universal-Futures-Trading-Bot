@@ -6478,27 +6478,83 @@ class UniversalFuturesBotGUI:
 
         return ids
 
+    @staticmethod
+    def _is_terminal_cancel_error(error):
+        """Return True when the exchange confirms an order is already inactive."""
+        text_error = str(error).lower()
+        return any(token in text_error for token in (
+            "110001",
+            "order not exists",
+            "order does not exist",
+            "too late to cancel",
+            "order already filled",
+            "order already closed",
+            "order already cancelled",
+            "order already canceled",
+        ))
+
+    def _forget_managed_order_id(self, order_id):
+        oid = str(order_id or "")
+        if not oid:
+            return
+        self.retired_managed_order_ids.discard(oid)
+        for state in (self.last_protected_position, self.grid_state):
+            if not isinstance(state, dict):
+                continue
+            for key in ("sl_id", "tp1_id", "tp2_id", "sl_order_id", "tp_order_id"):
+                if str(state.get(key) or "") == oid:
+                    state[key] = None
+            if isinstance(state.get("entry_orders"), dict):
+                for level, meta in list(state["entry_orders"].items()):
+                    if isinstance(meta, dict) and str(meta.get("id") or "") == oid:
+                        state["entry_orders"].pop(level, None)
+
     def _cancel_known_managed_orders_from_ids(self, symbol, ids):
         ids = {str(oid) for oid in (ids or set()) if oid}
+        if not ids:
+            return
+
+        terminal_ids = set()
         for oid in sorted(ids):
             try:
                 self.exchange.cancel_order(oid, symbol)
-            except Exception as e:
-                self.log(f"MANAGED ORDER CANCEL WARNING | ID={oid} | {e}")
-        if ids:
-            time.sleep(0.25)
-            remaining=[]
-            for oid in sorted(ids):
-                try:
-                    if self._order_is_still_open(symbol, oid, unknown_is_open=False):
-                        remaining.append(oid)
-                except Exception:
-                    remaining.append(oid)
-            if remaining:
-                raise RuntimeError(
-                    "Managed orders could not be verified cancelled: "
-                    + ",".join(remaining[:20])
+            except Exception as error:
+                if self._is_terminal_cancel_error(error):
+                    terminal_ids.add(oid)
+                    self.log(
+                        f"MANAGED ORDER ALREADY INACTIVE | ID={oid} | {error}"
+                    )
+                else:
+                    self.log(
+                        f"MANAGED ORDER CANCEL WARNING | ID={oid} | {error}"
+                    )
+
+        time.sleep(0.25)
+        remaining = []
+        for oid in sorted(ids - terminal_ids):
+            try:
+                state = self._order_is_still_open(
+                    symbol,
+                    oid,
+                    unknown_is_open=False,
                 )
+                if state is True or state is None:
+                    remaining.append(oid)
+            except Exception:
+                remaining.append(oid)
+
+        for oid in terminal_ids:
+            self._forget_managed_order_id(oid)
+
+        confirmed_gone = ids - set(remaining)
+        for oid in confirmed_gone:
+            self._forget_managed_order_id(oid)
+
+        if remaining:
+            raise RuntimeError(
+                "Managed orders could not be verified cancelled: "
+                + ",".join(remaining[:20])
+            )
 
     def _cancel_known_managed_orders(self, symbol):
         self._cancel_known_managed_orders_from_ids(
