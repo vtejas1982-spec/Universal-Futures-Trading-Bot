@@ -44,9 +44,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R5-HOTFIX2"
 APP_TITLE = "Universal Futures Trading Bot V8.4.2-R5 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-21-R5"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-22-R5-HOTFIX2"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -1002,7 +1002,8 @@ def _volume_sr_series(frame, vol_threshold=6):
             p=i-3
             up=(float(x.high.iloc[p])>float(x.high.iloc[p-1])>float(x.high.iloc[p-2])
                 and float(x.high.iloc[p+1])<float(x.high.iloc[p])>float(x.high.iloc[p+2])
-                and float(x.vol.iloc[p])>float(vma.iloc[p]))            dn=(float(x.low.iloc[p])<float(x.low.iloc[p-1])<float(x.low.iloc[p-2])
+                and float(x.vol.iloc[p])>float(vma.iloc[p]))
+            dn=(float(x.low.iloc[p])<float(x.low.iloc[p-1])<float(x.low.iloc[p-2])
                 and float(x.low.iloc[p+1])>float(x.low.iloc[p])<float(x.low.iloc[p+2])
                 and float(x.vol.iloc[p])>float(vma.iloc[p]))
             old_res_hi, old_sup_lo = res_hi, sup_lo
@@ -4010,7 +4011,8 @@ class UniversalFuturesBotGUI:
         ]
         self.v_div_use_all = tk.BooleanVar(value=DEFAULT_DIV_USE_ALL)
 
-        def _toggle_divergence_all():            enabled = bool(self.v_div_use_all.get())
+        def _toggle_divergence_all():
+            enabled = bool(self.v_div_use_all.get())
             for key, _label in div_names:
                 getattr(self, key).set(enabled)
 
@@ -10129,7 +10131,8 @@ class UniversalFuturesBotGUI:
             vwap_delta_baseline_len = int(self.e_vwap_delta_baseline.get())
             vwap_delta_logic = self.v_vwap_delta_logic.get().strip().upper()
             if vwap_delta_smooth_len <= 0 or vwap_delta_baseline_len <= 0:
-                raise ValueError("VWAP Delta lengths must be greater than 0.")            if vwap_delta_logic not in ("CURRENT_TREND", "CROSS_BASELINE"):
+                raise ValueError("VWAP Delta lengths must be greater than 0.")
+            if vwap_delta_logic not in ("CURRENT_TREND", "CROSS_BASELINE"):
                 raise ValueError("VWAP Delta Logic must be CURRENT_TREND or CROSS_BASELINE.")
 
             use_vidya = self.v_use_vidya.get()
@@ -11130,7 +11133,8 @@ class UniversalFuturesBotGUI:
                             liq_state = int(df["liq_swing_trend"].iloc[-2])
                             liq_bull = liq_state > 0
                             liq_bear = liq_state < 0
-                        else:                            liq_bull = liq_bull_break
+                        else:
+                            liq_bull = liq_bull_break
                             liq_bear = liq_bear_break
                     else:
                         liq_bull = True
