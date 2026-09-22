@@ -119,3 +119,22 @@ The latest overnight log exposed a second independent halt after a real SL exit.
 The log shows the trade had already closed by SL before the halt. The bot then repeatedly tried to cancel order IDs that Bybit reported as already inactive. This was an engine cleanup bug, not an Evidence/strategy decision.
 
 The fail-closed mechanism itself remains enabled for genuine unresolved managed-order states.
+
+
+## 2026-09-22 — Crypto R5-HOTFIX2
+
+### Fixed
+- Corrected accidental line-merge corruption in UniversalFuturesBot_CRYPTO.py that caused Python SyntaxError around the Volume/SR series builder (_volume_sr_series).
+- Repaired the divergence GUI callback definition where the function header and first statement had been merged onto one line.
+- Repaired the VWAP Delta settings validation where two statements had been merged onto one line.
+- Repaired the liquidity-entry else branch where statements had been merged onto one line.
+
+### Verified
+- Full Python source compilation completed successfully after the repairs.
+- Strategy/evidence-family architecture, ADAPTIVE_EVIDENCE gating, ATR/ADX regime gates, risk defaults, cooldown, grid settings, callbacks, and configuration schema were preserved rather than weakened.
+- Version marker: V8.4.2-CRYPTO-EVIDENCE-HARDENED-R5-HOTFIX2.
+- Audit marker: V8.4.2-ENGINE-AUDIT-2026-09-22-R5-HOTFIX2.
+
+### Existing resilience fixes retained
+- Bybit transient wallet-balance retry/backoff and recovery handling.
+- Managed-order terminal-state handling for Bybit 110001 so already-inactive orders do not repeatedly halt the bot.
