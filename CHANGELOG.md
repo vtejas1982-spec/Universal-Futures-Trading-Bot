@@ -550,3 +550,22 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 - Fixed a live-checkpoint bug where equivalent symbol forms such as `OP/USDT` and `OP/USDT:USDT` were treated as different symbols.
 - Live strategy/risk settings can now be checkpointed without the false `Symbol cannot be changed while the bot is running` warning.
 - Real exchange/symbol/account/profile identity changes while running remain blocked.
+
+
+## 2026-09-22 — Crypto R5-HOTFIX2
+
+### Fixed
+- Corrected accidental line-merge corruption in UniversalFuturesBot_CRYPTO.py that caused Python SyntaxError around the Volume/SR series builder (_volume_sr_series).
+- Repaired the divergence GUI callback definition where the function header and first statement had been merged onto one line.
+- Repaired the VWAP Delta settings validation where two statements had been merged onto one line.
+- Repaired the liquidity-entry else branch where statements had been merged onto one line.
+
+### Verified
+- Full Python source compilation completed successfully after the repairs.
+- Strategy/evidence-family architecture, ADAPTIVE_EVIDENCE gating, ATR/ADX regime gates, risk defaults, cooldown, grid settings, callbacks, and configuration schema were preserved rather than weakened.
+- Version marker: V8.4.2-CRYPTO-EVIDENCE-HARDENED-R5-HOTFIX2.
+- Audit marker: V8.4.2-ENGINE-AUDIT-2026-09-22-R5-HOTFIX2.
+
+### Existing resilience fixes retained
+- Bybit transient wallet-balance retry/backoff and recovery handling.
+- Managed-order terminal-state handling for Bybit 110001 so already-inactive orders do not repeatedly halt the bot.
