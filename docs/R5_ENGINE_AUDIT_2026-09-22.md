@@ -79,3 +79,26 @@ Run the repository tests after every production source change:
 ## Operational recommendation
 
 Run the updated bot on demo/testnet first and inspect DecisionReason, Evidence-family counts, ATR gate and ADX gate in the execution log. This makes the next overnight test easier to diagnose.
+
+
+## API RESILIENCE HOTFIX — 2026-09-22
+
+The overnight BOT-01 log showed three consecutive failures on the Bybit Demo Unified Account wallet-balance request:
+
+`GET https://api-demo.bybit.com/v5/account/wallet-balance?accountType=UNIFIED`
+
+The bot's fail-closed halt worked as designed, but the recovery policy was too aggressive for a transient exchange/network failure.
+
+### Fixed
+- Added bounded retry/backoff for account balance reads: up to 3 attempts with 1s / 2s / 4s delays.
+- Added transient-error classification for CCXT network timeout, exchange-unavailable, DDoS/rate-limit and common HTTP gateway/connection failures.
+- A transient API failure no longer consumes the same 3-error fatal budget immediately.
+- Persistent transient failures are now allowed up to 10 execution cycles before a fail-closed halt.
+- Persistent non-transient execution errors still use the 3-cycle fail-closed limit.
+- The main cycle now reuses one successful wallet-balance snapshot for balance/equity calculation, reducing duplicate `wallet-balance` requests.
+- Final position-state inspection is now best-effort and cannot create a misleading secondary fatal warning after an already-recorded shutdown.
+
+### Safety
+The bot does **not** trade using an unverified stale account balance. If the account snapshot cannot be obtained, the current cycle is skipped; persistent failures still stop the bot.
+
+This change addresses API resilience; it does not disable the fail-closed safety mechanism.
