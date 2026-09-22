@@ -241,3 +241,7 @@ See `docs/R5_ENGINE_AUDIT_2026-09-22.md` for the complete change history.
 ### 2026-09-22 managed-order cleanup hotfix
 
 After the overnight SL event, Bybit returned terminal order state 110001 (order not exists or too late to cancel) for retired TP/SL IDs. The engine now treats that state as inactive, removes stale managed IDs, and avoids repeating the same cancellation every 30 seconds. Genuine unresolved managed-order cancellation failures remain fail-closed.
+
+
+## Latest Crypto R5-HOTFIX2
+See the repository changelog and audit notes for the 2026-09-22 syntax-corruption repair, compilation verification, and retained exchange/order resilience fixes.
