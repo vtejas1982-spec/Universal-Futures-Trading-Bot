@@ -1,3 +1,17 @@
+## V8.4.2-R5 — 2026-09-22 API Resilience Hotfix
+
+### Fixed
+- BOT-01 could halt after three consecutive transient Bybit Demo wallet-balance failures. Account reads now use bounded retry/backoff.
+- Transient network/time-out/rate-limit/exchange-unavailable errors have a separate recovery budget of 10 execution cycles.
+- Non-transient execution errors retain the 3-cycle fail-closed safety limit.
+- The main execution cycle reuses one successful wallet-balance response for balance and equity calculations.
+- Final position inspection is best-effort so a failed cleanup read does not hide the original runtime error.
+
+### Safety
+- No new entry is attempted when a verified account snapshot is unavailable.
+- Persistent exchange/API failure still causes a fail-closed stop.
+- No stale balance is used for new risk sizing.
+
 ## V8.4.2-R5 — Engine Audit Follow-up — 2026-09-22
 
 ### Fixed
