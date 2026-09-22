@@ -40,3 +40,14 @@ def main():
     if not all(checks): raise SystemExit(1)
 
 if __name__=="__main__": main()
+
+def test_r5_exchange_resilience_contract():
+    src = Path(__file__).resolve().parents[1].joinpath("UniversalFuturesBot_CRYPTO.py").read_text(encoding="utf-8")
+    assert "ACCOUNT_READ_RETRIES = 3" in src
+    assert "MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10" in src
+    assert "def _is_transient_exchange_error" in src
+    assert "def _is_terminal_cancel_error" in src
+    assert '"110001"' in src
+    assert "def _forget_managed_order_id" in src
+    assert "balance_snapshot = self._fetch_exchange_balance_with_retry()" in src
+
