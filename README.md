@@ -227,3 +227,12 @@ For a new release:
 5. Tag the release in Git.
 
 That keeps the working tree understandable while Git history and releases retain previous versions.
+
+
+### 2026-09-22 API resilience hotfix
+
+The live Crypto engine now treats transient exchange/API connectivity failures separately from strategy/runtime faults. Account balance reads use bounded retry/backoff, one successful wallet snapshot is reused for balance/equity, and persistent transient failures still halt the bot fail-closed after a larger recovery window.
+
+This specifically addresses the BOT-01 Bybit Demo `/v5/account/wallet-balance` failure pattern seen during the overnight run.
+
+See `docs/R5_ENGINE_AUDIT_2026-09-22.md` for the complete change history.
