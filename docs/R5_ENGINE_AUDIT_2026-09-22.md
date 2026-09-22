@@ -102,3 +102,20 @@ The bot's fail-closed halt worked as designed, but the recovery policy was too a
 The bot does **not** trade using an unverified stale account balance. If the account snapshot cannot be obtained, the current cycle is skipped; persistent failures still stop the bot.
 
 This change addresses API resilience; it does not disable the fail-closed safety mechanism.
+
+
+## MANAGED ORDER 110001 HOTFIX — 2026-09-22
+
+The latest overnight log exposed a second independent halt after a real SL exit. Bybit returned retCode **110001** while the bot was cancelling old TP/SL order IDs. The message was "order not exists or too late to cancel". The engine treated these already-inactive orders as cancellation failures and retried them on every 30-second cycle until the 3-cycle fail-closed limit was reached.
+
+### Fixed
+- Added terminal-cancel classification for Bybit 110001 and equivalent "already filled/closed/cancelled/not exists/too late" messages.
+- Terminal managed orders are now treated as safely inactive rather than execution-cycle failures.
+- Stale managed order IDs are removed from the active/retired tracking sets after terminal confirmation.
+- This prevents the same dead TP/SL IDs from being retried every cycle.
+- Genuine cancellation verification failures still fail closed.
+
+### Why this matters
+The log shows the trade had already closed by SL before the halt. The bot then repeatedly tried to cancel order IDs that Bybit reported as already inactive. This was an engine cleanup bug, not an Evidence/strategy decision.
+
+The fail-closed mechanism itself remains enabled for genuine unresolved managed-order states.
