@@ -1,8 +1,8 @@
 """
-V8.4.2-R8 UNIVERSAL FUTURES BACKTESTER — CRYPTO EVIDENCE STRATEGY-PARITY EDITION
+V8.4.2-R6.5 UNIVERSAL FUTURES BACKTESTER — CRYPTO AI-AGENT EDITION
 ===============================================================
 
-Historical simulator for Universal Futures Trading Bot V8.4.2-R8.
+Historical simulator for Universal Futures Trading Bot V8.4.2-R6.5 AI-Agent engine.
 
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
