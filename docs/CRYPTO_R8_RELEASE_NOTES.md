@@ -18,7 +18,7 @@ The Bybit Demo validation exposed two separate production issues:
 2. Risk sizing interpreted the GUI value `0.75` as `75%` of equity instead of `0.75%`. This could produce an oversized requested quantity before the exchange rejected it.
 3. The live engine did not enforce the exchange's maximum order quantity before submitting an entry. Bybit therefore had to reject an oversized order.
 
-R8 fixes these at the lifecycle, sizing, and exchange-boundary layers without loosening the strategy.
+R8 fixes these at the lifecycle, sizing, and exchange-boundary layers without loosening the strategy. RISK_% also emits a conservative leverage-envelope warning when the required price stop is wide; actual liquidation remains exchange/margin dependent.
 
 ## Fixed
 
