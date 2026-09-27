@@ -1,3 +1,29 @@
+## V8.4.2-R6 — 2026-09-27 Crypto Execution Hardening
+
+### Fixed
+- **Critical live cooldown defect:** a flat bot was refreshing `last_flat_time` during every 30-second polling cycle. With a 15-minute cooldown this prevented the cooldown from ever expiring and could block valid entries indefinitely.
+- Cooldown now starts only when the engine observes a real live-position/active-trade state transition to flat.
+- **Hold-SL WAIT reversal defect:** the WAIT prerequisite was being set to false and then overwritten by the later ALL-REVERSE calculation. R6 preserves the WAIT gate until the configured Hold-SL ROI threshold has actually been reached.
+- Removed an unreachable duplicate ADAPTIVE_EVIDENCE startup log branch.
+
+### Added
+- Explicit `COOLDOWN STARTED` runtime diagnostics.
+- Dedicated `tests/test_crypto_r6_regressions.py` coverage for cooldown, Hold-SL WAIT, all signal modes and SINGLE_SIGNAL conflict behavior.
+- R6 release documentation.
+
+### Modified
+- Crypto live production marker: `V8.4.2-CRYPTO-EVIDENCE-HARDENED-R6`.
+- Engine audit marker: `V8.4.2-ENGINE-AUDIT-2026-09-27-R6`.
+- Crypto backtester release marker aligned to R6; historical signal logic remains unchanged.
+
+### Strategy safety
+- No Evidence-family threshold was weakened.
+- No new directional indicator was added to force trades.
+- Existing saved profiles remain authoritative.
+- Demo/testnet validation remains required before live deployment.
+
+---
+
 ## V8.4.2-R5 — 2026-09-22 Managed-Order Cleanup Hotfix
 
 ### Fixed
