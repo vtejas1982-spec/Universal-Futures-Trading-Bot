@@ -793,6 +793,39 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 
 # Changelog
 
+
+# V8.4.2 Crypto AI Agent R6.4 — 2026-09-27
+
+## Fixed
+- Fixed the Windows GUI "Not Responding" condition during window close.
+- Removed the synchronous GUI-thread call to the exchange kill switch from on_close().
+- GUI shutdown now starts the background stop-cleanup worker and returns control to Tkinter immediately.
+- _poll_stop_completion() now waits for the execution worker, stop-cleanup worker, and kill-switch activity without blocking the GUI.
+- The window is destroyed only after the mandatory kill switch verifies FLAT + NO OPEN ORDERS.
+- When cleanup verification fails, the GUI remains open and reports that safe close is blocked rather than silently destroying the window.
+
+## Modified
+- Added _close_requested lifecycle state.
+- Configuration/runtime schema: 20 -> 21.
+- Internal version: V8.4.2-CRYPTO-AI-AGENT-R6.4.
+- Audit marker: V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.4-GUI-SHUTDOWN-NONBLOCKING-HOTFIX.
+
+## Retained
+- Mandatory fail-closed kill switch.
+- Background exchange flatten/cancel/verification.
+- Watchdog heartbeat protection.
+- Actual-fill SL/TP protection.
+- AI-Agent risk/ATR-SL/ATR-TP management.
+- Persisted configuration migration.
+
+## Validation
+- Python AST parse: PASS.
+- Python bytecode compilation: PASS.
+- Static shutdown audit: PASS; on_close() contains no direct GUI-thread _activate_kill_switch() call.
+- Static lifecycle audit: PASS; GUI close schedules background cleanup and polls completion.
+- Full live exchange lifecycle was not claimed by this patch.
+
+
 # V8.4.2 Crypto AI Agent R6.3 — 2026-09-27
 
 ## Fixed
