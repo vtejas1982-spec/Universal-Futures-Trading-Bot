@@ -1787,6 +1787,9 @@ class UniversalFuturesBotGUI:
         self.stop_requested = False
         self.stop_started_at = 0.0
         self._stop_completion_scheduled = False
+        # Tkinter variables are not thread-safe. R8 snapshots GUI settings on the Tk thread.
+        self._runtime_gui_lock = threading.RLock()
+        self._runtime_gui_values = {}
 
         # Persistent bot profile / crash-recovery state.
         self.bot_profile_id = "BOT-01"
@@ -1799,6 +1802,8 @@ class UniversalFuturesBotGUI:
         self.runtime_account_mode = ""
         self.runtime_strategy_mode = ""
         self.runtime_strategy_modules = ""
+        self.runtime_sizing_mode = ""
+        self.runtime_protection_basis = ""
         self.runtime_config_hash = ""
         self.runtime_resumed = False
         self.profile_lock_fd = None
@@ -1876,6 +1881,7 @@ class UniversalFuturesBotGUI:
         self._build_ui()
         self.update_estimated_window()
         self.load_settings()
+        self._refresh_runtime_gui_snapshot()
         self._refresh_profile_list(select_profile=self.bot_profile_id)
 
         # Give Tk time to finish constructing the GUI before showing a
@@ -2004,6 +2010,8 @@ class UniversalFuturesBotGUI:
             "timeframe": self.runtime_timeframe,
             "strategy_mode": self.runtime_strategy_mode,
             "strategy_modules": self.runtime_strategy_modules,
+            "sizing_mode": self.runtime_sizing_mode,
+            "protection_basis": self.runtime_protection_basis,
             "config_hash": self.runtime_config_hash,
             "resumed": bool(self.runtime_resumed),
             "stop_requested": bool(self.stop_requested),
@@ -2181,6 +2189,8 @@ class UniversalFuturesBotGUI:
             state.get("strategy_mode") or self.v_signal_mode.get()
         )
         self.runtime_strategy_modules = str(state.get("strategy_modules") or "")
+        self.runtime_sizing_mode = str(state.get("sizing_mode") or self.v_size_mode.get())
+        self.runtime_protection_basis = str(state.get("protection_basis") or "CONFIGURED_SL_OR_ATR")
         self.runtime_config_hash = str(state.get("config_hash") or "")
         self.runtime_resumed = True
 
@@ -4941,6 +4951,25 @@ class UniversalFuturesBotGUI:
         except Exception:
             pass
 
+    def _refresh_runtime_gui_snapshot(self):
+        values = {}
+        for attr in dir(self):
+            if not (attr.startswith("e_") or attr.startswith("v_")):
+                continue
+            try:
+                widget = getattr(self, attr)
+                getter = getattr(widget, "get", None)
+                if callable(getter):
+                    values[attr] = getter()
+            except Exception:
+                continue
+        with self._runtime_gui_lock:
+            self._runtime_gui_values = values
+
+    def _runtime_gui_value(self, attr, default=None):
+        with self._runtime_gui_lock:
+            return self._runtime_gui_values.get(attr, default)
+
     def save_settings(self):
         requested_profile = self._sanitize_profile_id(self.v_bot_id.get())
         if self.is_running:
@@ -5189,6 +5218,7 @@ class UniversalFuturesBotGUI:
         try:
             config_path = self._get_config_path(self.bot_profile_id, for_save=True)
             self._write_json_atomic(config_path, cfg)
+            self._refresh_runtime_gui_snapshot()
             self.log(
                 f"Configuration saved | Profile={self.bot_profile_id} | "
                 f"File={config_path}"
@@ -5950,6 +5980,7 @@ class UniversalFuturesBotGUI:
                 ),
             )
 
+            self._refresh_runtime_gui_snapshot()
             self.log(
                 "Configuration loaded."
             )
@@ -9127,8 +9158,7 @@ class UniversalFuturesBotGUI:
                     "single-symbol engine has a hard limit of 1 net position. "
                     "Normalizing to 1."
                 )
-                self.e_max_open_trades.delete(0, tk.END)
-                self.e_max_open_trades.insert(0, "1")
+                max_open_trades = 1
                 max_open_trades = 1
 
             current_balance = self.fetch_balance_total()
@@ -9585,6 +9615,8 @@ class UniversalFuturesBotGUI:
                 else signal_mode
             )
             self.runtime_strategy_modules = " | ".join(enabled_modules) if enabled_modules else "None"
+            self.runtime_sizing_mode = str(self.v_size_mode.get()).strip().upper()
+            self.runtime_protection_basis = ("FIXED_QTY_RISK_SL" if str(self.v_sl_mode.get()).strip().upper() == "RISK_%" else "CONFIGURED_SL_OR_ATR")
             self.runtime_config_hash = self._config_hash()
             if not self.session_id:
                 self.session_id = str(uuid.uuid4())
@@ -10209,20 +10241,20 @@ class UniversalFuturesBotGUI:
 
     def _run_bot_logic(self):
         try:
-            timeframe = str(self.v_tf.get()).strip().lower()
+            timeframe = str(self._runtime_gui_value("v_tf")).strip().lower()
             supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "45m", "1h", "4h"}
             if timeframe not in supported_timeframes:                raise ValueError(
                     f"Unsupported timeframe: {timeframe}. Use 1m, 3m, 5m, 15m, 30m, 45m, 1h or 4h."
                 )
 
             try:
-                max_trades = int(self.e_max_trades.get().strip())
+                max_trades = int(self._runtime_gui_value("e_max_trades").strip())
             except Exception:
                 raise ValueError("Max Trades must be a whole number. Use 0 for unlimited.")
             if max_trades < 0:
                 raise ValueError("Max Trades cannot be negative.")
             try:
-                max_open_trades = int(self.e_max_open_trades.get().strip())
+                max_open_trades = int(self._runtime_gui_value("e_max_open_trades").strip())
             except Exception:
                 raise ValueError("Max Open Trades must be a whole number. Use 0 for unlimited.")
             if max_open_trades < 0:
@@ -10237,42 +10269,42 @@ class UniversalFuturesBotGUI:
                 self.e_max_open_trades.insert(0, "1")
                 max_open_trades = 1
             self.log(f"MAX OPEN TRADES: {max_open_trades} net position per bot/symbol.")
-            no_same_candle = self.v_no_same_candle.get()
+            no_same_candle = self._runtime_gui_value("v_no_same_candle")
             try:
-                cooldown_min = float(self.e_cooldown_min.get().strip())
+                cooldown_min = float(self._runtime_gui_value("e_cooldown_min").strip())
             except Exception:
                 raise ValueError("Cooldown must be a number of minutes.")
             if cooldown_min < 0:
                 raise ValueError("Cooldown cannot be negative.")
 
-            use_st = self.v_use_st.get()
+            use_st = self._runtime_gui_value("v_use_st")
             st_len = int(
-                self.e_st_len.get()
+                self._runtime_gui_value("e_st_len")
             )
             st_mult = float(
-                self.e_st_mult.get()
+                self._runtime_gui_value("e_st_mult")
             )
-            st_source = self.v_st_source.get().strip().upper()
-            st_change_atr = bool(self.v_st_change_atr.get())
+            st_source = self._runtime_gui_value("v_st_source").strip().upper()
+            st_change_atr = bool(self._runtime_gui_value("v_st_change_atr"))
 
             if st_source not in ("CLOSE", "HL2"):
                 raise ValueError("Supertrend Source must be CLOSE or HL2.")
             if st_len <= 0 or st_mult <= 0:
                 raise ValueError("Supertrend ATR Period and Multiplier must be greater than 0.")
 
-            use_ema = self.v_use_ema.get()
+            use_ema = self._runtime_gui_value("v_use_ema")
             ema_len = int(
-                self.e_ema_len.get()
+                self._runtime_gui_value("e_ema_len")
             )
             if ema_len <= 0:
                 raise ValueError("EMA period must be greater than 0.")
 
-            use_ema_cross = self.v_use_ema_cross.get()
+            use_ema_cross = self._runtime_gui_value("v_use_ema_cross")
             ema_fast_len = int(
-                self.e_ema_fast.get()
+                self._runtime_gui_value("e_ema_fast")
             )
             ema_slow_len = int(
-                self.e_ema_slow.get()
+                self._runtime_gui_value("e_ema_slow")
             )
 
             if ema_fast_len <= 0 or ema_slow_len <= 0:
@@ -10285,29 +10317,29 @@ class UniversalFuturesBotGUI:
                     "EMA crossover Fast and Slow periods must be different."
                 )
 
-            ema_cross_entry_mode = self.v_ema_cross_entry_mode.get().strip().upper()
+            ema_cross_entry_mode = self._runtime_gui_value("v_ema_cross_entry_mode").strip().upper()
             if ema_cross_entry_mode not in ("FRESH_CROSS", "CURRENT_TREND"):
                 raise ValueError(
                     "EMA crossover Entry mode must be FRESH_CROSS or CURRENT_TREND."
                 )
 
-            use_macd = self.v_use_macd.get()
-            macd_fast_len = int(self.e_macd_fast.get())
-            macd_slow_len = int(self.e_macd_slow.get())
-            macd_signal_len = int(self.e_macd_signal.get())
+            use_macd = self._runtime_gui_value("v_use_macd")
+            macd_fast_len = int(self._runtime_gui_value("e_macd_fast"))
+            macd_slow_len = int(self._runtime_gui_value("e_macd_slow"))
+            macd_signal_len = int(self._runtime_gui_value("e_macd_signal"))
 
             if macd_fast_len <= 0 or macd_slow_len <= 0 or macd_signal_len <= 0:
                 raise ValueError("MACD periods must be greater than 0.")
             if macd_fast_len >= macd_slow_len:
                 raise ValueError("MACD Fast period must be smaller than Slow period.")
 
-            use_rsi = self.v_use_rsi.get()
-            rsi_len = int(self.e_rsi_len.get())
-            rsi_ob = float(self.e_rsi_ob.get())
-            rsi_os = float(self.e_rsi_os.get())
-            rsi_logic = self.v_rsi_logic.get().strip().upper()
-            rsi_ma_type = self.v_rsi_ma_type.get().strip().upper()
-            rsi_ma_len = int(self.e_rsi_ma_len.get())
+            use_rsi = self._runtime_gui_value("v_use_rsi")
+            rsi_len = int(self._runtime_gui_value("e_rsi_len"))
+            rsi_ob = float(self._runtime_gui_value("e_rsi_ob"))
+            rsi_os = float(self._runtime_gui_value("e_rsi_os"))
+            rsi_logic = self._runtime_gui_value("v_rsi_logic").strip().upper()
+            rsi_ma_type = self._runtime_gui_value("v_rsi_ma_type").strip().upper()
+            rsi_ma_len = int(self._runtime_gui_value("e_rsi_ma_len"))
 
             if rsi_len <= 0 or rsi_ma_len <= 0:
                 raise ValueError("RSI and RSI MA periods must be greater than 0.")
@@ -10318,61 +10350,61 @@ class UniversalFuturesBotGUI:
             if rsi_ma_type not in ("SMA", "EMA", "WMA"):
                 raise ValueError("RSI MA Type must be SMA, EMA, or WMA.")
 
-            use_bb = self.v_use_bb.get()
-            bb_len = int(self.e_bb_len.get())
-            bb_std = float(self.e_bb_std.get())
+            use_bb = self._runtime_gui_value("v_use_bb")
+            bb_len = int(self._runtime_gui_value("e_bb_len"))
+            bb_std = float(self._runtime_gui_value("e_bb_std"))
 
             if bb_len <= 0 or bb_std <= 0:
                 raise ValueError("Bollinger period and StdDev must be greater than 0.")
 
-            use_stoch = self.v_use_stoch.get()
-            stoch_k_len = int(self.e_stoch_k.get())
-            stoch_smooth_len = int(self.e_stoch_smooth.get())
-            stoch_d_len = int(self.e_stoch_d.get())
+            use_stoch = self._runtime_gui_value("v_use_stoch")
+            stoch_k_len = int(self._runtime_gui_value("e_stoch_k"))
+            stoch_smooth_len = int(self._runtime_gui_value("e_stoch_smooth"))
+            stoch_d_len = int(self._runtime_gui_value("e_stoch_d"))
 
             if stoch_k_len <= 0 or stoch_smooth_len <= 0 or stoch_d_len <= 0:
                 raise ValueError("Stochastic periods must be greater than 0.")
 
-            use_vwap = self.v_use_vwap.get()
-            vwap_len = int(self.e_vwap_len.get())
+            use_vwap = self._runtime_gui_value("v_use_vwap")
+            vwap_len = int(self._runtime_gui_value("e_vwap_len"))
             if vwap_len <= 0:
                 raise ValueError("VWAP period must be greater than 0.")
 
-            use_vwap_delta = self.v_use_vwap_delta.get()
-            vwap_delta_smooth = self.v_vwap_delta_smooth.get()
-            vwap_delta_smooth_len = int(self.e_vwap_delta_smooth_len.get())
-            vwap_delta_baseline_len = int(self.e_vwap_delta_baseline.get())
-            vwap_delta_logic = self.v_vwap_delta_logic.get().strip().upper()
+            use_vwap_delta = self._runtime_gui_value("v_use_vwap_delta")
+            vwap_delta_smooth = self._runtime_gui_value("v_vwap_delta_smooth")
+            vwap_delta_smooth_len = int(self._runtime_gui_value("e_vwap_delta_smooth_len"))
+            vwap_delta_baseline_len = int(self._runtime_gui_value("e_vwap_delta_baseline"))
+            vwap_delta_logic = self._runtime_gui_value("v_vwap_delta_logic").strip().upper()
             if vwap_delta_smooth_len <= 0 or vwap_delta_baseline_len <= 0:
                 raise ValueError("VWAP Delta lengths must be greater than 0.")
             if vwap_delta_logic not in ("CURRENT_TREND", "CROSS_BASELINE"):
                 raise ValueError("VWAP Delta Logic must be CURRENT_TREND or CROSS_BASELINE.")
 
-            use_vidya = self.v_use_vidya.get()
-            vidya_len = int(self.e_vidya_len.get())
-            vidya_momentum = int(self.e_vidya_momentum.get())
-            vidya_band = float(self.e_vidya_band.get())
-            vidya_entry_mode = self.v_vidya_entry_mode.get().strip().upper()
+            use_vidya = self._runtime_gui_value("v_use_vidya")
+            vidya_len = int(self._runtime_gui_value("e_vidya_len"))
+            vidya_momentum = int(self._runtime_gui_value("e_vidya_momentum"))
+            vidya_band = float(self._runtime_gui_value("e_vidya_band"))
+            vidya_entry_mode = self._runtime_gui_value("v_vidya_entry_mode").strip().upper()
             if vidya_len <= 0 or vidya_momentum <= 0 or vidya_band <= 0:
                 raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
             if vidya_entry_mode not in ("CURRENT_TREND", "FRESH_FLIP"):
                 raise ValueError("VIDYA Entry must be CURRENT_TREND or FRESH_FLIP.")
 
-            use_nwe = self.v_use_nwe.get()
-            nwe_bandwidth = float(self.e_nwe_bandwidth.get())
-            nwe_mult = float(self.e_nwe_mult.get())
-            nwe_entry_mode = self.v_nwe_entry_mode.get().strip().upper()
-            nwe_repaint = self.v_nwe_repaint.get()
+            use_nwe = self._runtime_gui_value("v_use_nwe")
+            nwe_bandwidth = float(self._runtime_gui_value("e_nwe_bandwidth"))
+            nwe_mult = float(self._runtime_gui_value("e_nwe_mult"))
+            nwe_entry_mode = self._runtime_gui_value("v_nwe_entry_mode").strip().upper()
+            nwe_repaint = self._runtime_gui_value("v_nwe_repaint")
             if nwe_bandwidth <= 0 or nwe_mult < 0:
                 raise ValueError("NWE Bandwidth must be > 0 and Mult cannot be negative.")
             if nwe_entry_mode not in ("CURRENT_TREND", "FRESH_CROSS"):
                 raise ValueError("NWE Entry must be CURRENT_TREND or FRESH_CROSS.")
-            use_liq_swings = self.v_use_liq_swings.get()
-            liq_length = int(self.e_liq_length.get())
-            liq_area = self.v_liq_area.get().strip()
-            liq_filter = self.v_liq_filter.get().strip().title()
-            liq_filter_value = float(self.e_liq_filter_value.get())
-            liq_entry_mode = self.v_liq_entry_mode.get().strip().upper()
+            use_liq_swings = self._runtime_gui_value("v_use_liq_swings")
+            liq_length = int(self._runtime_gui_value("e_liq_length"))
+            liq_area = self._runtime_gui_value("v_liq_area").strip()
+            liq_filter = self._runtime_gui_value("v_liq_filter").strip().title()
+            liq_filter_value = float(self._runtime_gui_value("e_liq_filter_value"))
+            liq_entry_mode = self._runtime_gui_value("v_liq_entry_mode").strip().upper()
             if liq_length <= 0:
                 raise ValueError("Liquidity Swing Pivot Lookback must be greater than 0.")
             if liq_area not in ("Wick Extremity", "Full Range"):
@@ -10384,12 +10416,12 @@ class UniversalFuturesBotGUI:
             if liq_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND"):
                 raise ValueError("Liquidity Swing Entry must be FRESH_BREAK or CURRENT_TREND.")
 
-            use_trendline = self.v_use_trendline.get()
-            trendline_length = int(self.e_trendline_length.get())
-            trendline_min_distance = int(self.e_trendline_min_distance.get())
-            trendline_entry_mode = self.v_trendline_entry_mode.get().strip().upper()
-            trendline_buffer = float(self.e_trendline_buffer.get())
-            trendline_retest_candles = int(self.e_trendline_retest.get())
+            use_trendline = self._runtime_gui_value("v_use_trendline")
+            trendline_length = int(self._runtime_gui_value("e_trendline_length"))
+            trendline_min_distance = int(self._runtime_gui_value("e_trendline_min_distance"))
+            trendline_entry_mode = self._runtime_gui_value("v_trendline_entry_mode").strip().upper()
+            trendline_buffer = float(self._runtime_gui_value("e_trendline_buffer"))
+            trendline_retest_candles = int(self._runtime_gui_value("e_trendline_retest"))
             if trendline_length <= 0:
                 raise ValueError("Trendline Pivot Lookback must be greater than 0.")
             if trendline_min_distance <= 0:
@@ -10403,14 +10435,14 @@ class UniversalFuturesBotGUI:
             if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
                 raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
 
-            use_divergence = bool(self.v_use_divergence.get())
-            div_pivot = int(self.e_div_pivot.get())
-            div_source = self.v_div_source.get().strip()
-            div_type = self.v_div_type.get().strip()
-            div_min_count = int(self.e_div_min_count.get())
-            div_max_pivots = int(self.e_div_max_pivots.get())
-            div_max_bars = int(self.e_div_max_bars.get())
-            div_entry_mode = self.v_div_entry_mode.get().strip().upper()
+            use_divergence = bool(self._runtime_gui_value("v_use_divergence"))
+            div_pivot = int(self._runtime_gui_value("e_div_pivot"))
+            div_source = self._runtime_gui_value("v_div_source").strip()
+            div_type = self._runtime_gui_value("v_div_type").strip()
+            div_min_count = int(self._runtime_gui_value("e_div_min_count"))
+            div_max_pivots = int(self._runtime_gui_value("e_div_max_pivots"))
+            div_max_bars = int(self._runtime_gui_value("e_div_max_bars"))
+            div_entry_mode = self._runtime_gui_value("v_div_entry_mode").strip().upper()
             if div_pivot < 1 or div_pivot > 50:
                 raise ValueError("Divergence Pivot Period must be 1-50.")
             if div_source not in ("Close", "High/Low"):
@@ -10442,19 +10474,19 @@ class UniversalFuturesBotGUI:
             div_cfg = {
                 "div_pivot": div_pivot, "div_source": div_source, "div_type": div_type,
                 "div_max_pivots": div_max_pivots, "div_max_bars": div_max_bars,
-                "div_cci_len": int(self.e_div_cci_len.get()), "div_mom_len": int(self.e_div_mom_len.get()),
+                "div_cci_len": int(self._runtime_gui_value("e_div_cci_len")), "div_mom_len": int(self._runtime_gui_value("e_div_mom_len")),
                 "div_entry_mode": div_entry_mode, **div_use
             }
             if div_cfg["div_cci_len"] <= 0 or div_cfg["div_mom_len"] <= 0:
                 raise ValueError("Divergence CCI/Momentum lengths must be greater than 0.")
 
-            use_vol_sr = bool(self.v_use_vol_sr.get())
-            sr_volume_ma = int(self.e_sr_volume_ma.get())
-            sr_vote_mode = self.v_sr_vote_mode.get().strip().upper()
-            sr_entry_mode = self.v_sr_entry_mode.get().strip().upper()
+            use_vol_sr = bool(self._runtime_gui_value("v_use_vol_sr"))
+            sr_volume_ma = int(self._runtime_gui_value("e_sr_volume_ma"))
+            sr_vote_mode = self._runtime_gui_value("v_sr_vote_mode").strip().upper()
+            sr_entry_mode = self._runtime_gui_value("v_sr_entry_mode").strip().upper()
             sr_tfs = [
-                self.v_sr_tf1.get().strip(), self.v_sr_tf2.get().strip(),
-                self.v_sr_tf3.get().strip(), self.v_sr_tf4.get().strip()
+                self._runtime_gui_value("v_sr_tf1").strip(), self._runtime_gui_value("v_sr_tf2").strip(),
+                self._runtime_gui_value("v_sr_tf3").strip(), self._runtime_gui_value("v_sr_tf4").strip()
             ]
             if sr_volume_ma <= 0:
                 raise ValueError("Volume S/R Volume MA threshold must be greater than 0.")
@@ -10465,31 +10497,31 @@ class UniversalFuturesBotGUI:
             if use_vol_sr and all(tf == "Disable" for tf in sr_tfs):
                 raise ValueError("Volume S/R requires at least one enabled timeframe.")
 
-            use_atr = self.v_use_atr.get()
-            atr_min_pct = float(self.e_atr_min_pct.get())
+            use_atr = self._runtime_gui_value("v_use_atr")
+            atr_min_pct = float(self._runtime_gui_value("e_atr_min_pct"))
             if atr_min_pct < 0:
                 raise ValueError("Minimum ATR % cannot be negative.")
 
-            use_vol = self.v_use_vol.get()
+            use_vol = self._runtime_gui_value("v_use_vol")
             vol_len = int(
-                self.e_vol_len.get()
+                self._runtime_gui_value("e_vol_len")
             )
             if vol_len <= 0:
                 raise ValueError("Volume MA period must be greater than 0.")
 
-            use_adx = self.v_use_adx.get()
-            adx_len = int(self.e_adx_len.get())
+            use_adx = self._runtime_gui_value("v_use_adx")
+            adx_len = int(self._runtime_gui_value("e_adx_len"))
             if adx_len <= 0:
                 raise ValueError("ADX period must be greater than 0.")
             adx_thresh = float(
-                self.e_adx_thresh.get()
+                self._runtime_gui_value("e_adx_thresh")
             )
             if adx_thresh < 0:
                 raise ValueError("ADX threshold cannot be negative.")
 
-            use_mtf = self.v_use_mtf.get()
+            use_mtf = self._runtime_gui_value("v_use_mtf")
 
-            signal_mode = self.v_signal_mode.get().strip().upper()
+            signal_mode = self._runtime_gui_value("v_signal_mode").strip().upper()
 
             # Preset modes directly mean "how many directional indicators
             # must agree for this trade". SCORE keeps the existing custom
@@ -10505,10 +10537,10 @@ class UniversalFuturesBotGUI:
             if signal_mode in preset_scores:
                 min_score = preset_scores[signal_mode]
             else:
-                min_score = int(self.e_min_score.get().strip())
+                min_score = int(self._runtime_gui_value("e_min_score").strip())
 
-            adaptive_edge = float(self.e_adaptive_edge.get())
-            adaptive_min_weight = float(self.e_adaptive_min_weight.get())
+            adaptive_edge = float(self._runtime_gui_value("e_adaptive_edge"))
+            adaptive_min_weight = float(self._runtime_gui_value("e_adaptive_min_weight"))
             if not 0.0 < adaptive_edge < 1.0 or adaptive_min_weight <= 0:
                 raise ValueError("Adaptive strategy settings are invalid.")
 
@@ -10516,10 +10548,10 @@ class UniversalFuturesBotGUI:
             # worker cycle.  Previously decision_reason() referenced the names
             # without initializing them in _run_bot_logic(), causing:
             # "name 'evidence_min_families' is not defined".
-            evidence_min_families = int(self.e_evidence_min_families.get())
-            evidence_family_min_score = float(self.e_evidence_family_min_score.get())
-            evidence_require_trend = bool(self.v_evidence_require_trend.get())
-            evidence_require_independent = bool(self.v_evidence_require_independent.get())
+            evidence_min_families = int(self._runtime_gui_value("e_evidence_min_families"))
+            evidence_family_min_score = float(self._runtime_gui_value("e_evidence_family_min_score"))
+            evidence_require_trend = bool(self._runtime_gui_value("v_evidence_require_trend"))
+            evidence_require_independent = bool(self._runtime_gui_value("v_evidence_require_independent"))
             if not 1 <= evidence_min_families <= len(EVIDENCE_FAMILY_ORDER):
                 raise ValueError("Evidence Minimum Families must be between 1 and 4.")
             if not 0.0 < evidence_family_min_score <= 1.0:
@@ -10540,13 +10572,13 @@ class UniversalFuturesBotGUI:
                 )
 
             size_mode = (
-                self.v_size_mode.get()
+                self._runtime_gui_value("v_size_mode")
             )
 
-            risk_pct = float(self.e_risk_pct.get())
+            risk_pct = float(self._runtime_gui_value("e_risk_pct"))
 
             fixed_qty = float(
-                self.e_fixed_qty.get()
+                self._runtime_gui_value("e_fixed_qty")
             )
             if risk_pct <= 0 or risk_pct >= 100.0:
                 raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
@@ -10555,46 +10587,46 @@ class UniversalFuturesBotGUI:
 
             max_dd = (
                 float(
-                    self.e_max_dd.get()
+                    self._runtime_gui_value("e_max_dd")
                 ) / 100.0
             )
             if not 0.0 <= max_dd < 1.0:
                 raise ValueError("Max Daily Drawdown must be between 0% and less than 100%. Use 0% to disable it.")
-            emergency_capital_loss = float(self.e_emergency_capital_pct.get()) / 100.0
-            emergency_scope = self.v_emergency_scope.get().strip().upper()
+            emergency_capital_loss = float(self._runtime_gui_value("e_emergency_capital_pct")) / 100.0
+            emergency_scope = self._runtime_gui_value("v_emergency_scope").strip().upper()
             if emergency_scope not in ("BOT_SYMBOL", "ALL_ACCOUNT"):
                 raise ValueError("Emergency Scope must be BOT_SYMBOL or ALL_ACCOUNT.")
             if not 0.0 <= emergency_capital_loss < 1.0:
                 raise ValueError("Emergency Capital Loss Stop must be between 0% and less than 100%.")
 
             leverage = int(
-                self.e_lev.get().strip()
+                self._runtime_gui_value("e_lev").strip()
             )
 
-            sl_mode = self.v_sl_mode.get().strip().upper()
-            tp_mode = self.v_tp_mode.get().strip().upper()
+            sl_mode = self._runtime_gui_value("v_sl_mode").strip().upper()
+            tp_mode = self._runtime_gui_value("v_tp_mode").strip().upper()
             if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%"):
                 raise ValueError(f"Unknown SL mode: {sl_mode}")
             if tp_mode not in ("PRICE_%", "ROI_%"):
                 raise ValueError(f"Unknown TP mode: {tp_mode}")
 
             sl_target_pct = float(
-                self.e_sl_pct.get()
+                self._runtime_gui_value("e_sl_pct")
             )
             hold_sl_roi_pct = float(
-                self.e_hold_sl_roi.get()
+                self._runtime_gui_value("e_hold_sl_roi")
             )
             tp1_target_pct = float(
-                self.e_tp1_pct.get()
+                self._runtime_gui_value("e_tp1_pct")
             )
             tp2_target_pct = float(
-                self.e_tp2_pct.get()
+                self._runtime_gui_value("e_tp2_pct")
             )
 
-            use_atr_sl = bool(self.v_use_atr_sl.get())
-            atr_sl_mult = float(self.e_atr_sl_mult.get())
-            atr_tp1_mult = float(self.e_atr_tp1_mult.get())
-            atr_tp2_mult = float(self.e_atr_tp2_mult.get())
+            use_atr_sl = bool(self._runtime_gui_value("v_use_atr_sl"))
+            atr_sl_mult = float(self._runtime_gui_value("e_atr_sl_mult"))
+            atr_tp1_mult = float(self._runtime_gui_value("e_atr_tp1_mult"))
+            atr_tp2_mult = float(self._runtime_gui_value("e_atr_tp2_mult"))
             if use_atr_sl:
                 if atr_sl_mult <= 0 or atr_tp1_mult <= 0 or atr_tp2_mult <= 0:
                     raise ValueError("ATR SL/TP multipliers must be greater than 0.")
@@ -10605,15 +10637,15 @@ class UniversalFuturesBotGUI:
                     )
 
             tp_qty_mode = (
-                self.v_tp_qty_mode.get()
+                self._runtime_gui_value("v_tp_qty_mode")
             )
 
             tp1_close_value = float(
-                self.e_tp1_close.get()
+                self._runtime_gui_value("e_tp1_close")
             )
 
             tp2_close_value = float(
-                self.e_tp2_close.get()
+                self._runtime_gui_value("e_tp2_close")
             )
 
             # Basic configuration validation.
@@ -10659,7 +10691,7 @@ class UniversalFuturesBotGUI:
             # Hold-All-Reverse has its own dedicated hard-stop setting.
             # When ON, the stop is ALWAYS interpreted as ROI %, independent
             # of the normal SL Mode / SL Target controls.
-            hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
+            hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse"))
             effective_sl_target_pct = (
                 hold_sl_roi_pct if hold_all_reverse else sl_target_pct
             )
@@ -10722,7 +10754,7 @@ class UniversalFuturesBotGUI:
                 )
 
             if hold_all_reverse:
-                if self.v_hold_sl_wait_reversal.get():
+                if self._runtime_gui_value("v_hold_sl_wait_reversal"):
                     self.log(
                         f"HOLD-ALL-REVERSE SL: {hold_sl_roi_pct:g}% ROI | "
                         "WAIT-FOR-ALL-REVERSE mode ON | No exchange SL; "
@@ -11106,7 +11138,7 @@ class UniversalFuturesBotGUI:
                         )
                     )
 
-                    st_entry_mode = self.v_st_entry_mode.get().strip().upper()
+                    st_entry_mode = self._runtime_gui_value("v_st_entry_mode").strip().upper()
 
                     # FRESH_FLIP: only the newly completed candle's flip triggers.
                     # CURRENT_TREND: the current completed Supertrend direction
@@ -11787,7 +11819,7 @@ class UniversalFuturesBotGUI:
 
                         if not lock_already_active and (
                             exited_side in ("LONG", "SHORT")
-                            and self.v_require_opposite_after_exit.get()
+                            and self._runtime_gui_value("v_require_opposite_after_exit")
                             and exit_reason in ("SL", "UNKNOWN")
                         ):
                             self.reentry_direction_lock = exited_side
@@ -11858,8 +11890,8 @@ class UniversalFuturesBotGUI:
                         f"Mode={ema_cross_entry_mode} "
                         f"Cross={'BULL' if ema_cross_bull and use_ema_cross else 'BEAR' if ema_cross_bear and use_ema_cross else 'NONE'} | "
                         f"STEntry={st_entry_mode} SignalMode={signal_mode} "
-                        f"HoldAllReverse={'ON' if self.v_hold_until_all_reverse.get() else 'OFF'} "
-                        f"PostSL_Lock={'ON' if self.v_require_opposite_after_exit.get() else 'OFF'} "
+                        f"HoldAllReverse={'ON' if self._runtime_gui_value("v_hold_until_all_reverse") else 'OFF'} "
+                        f"PostSL_Lock={'ON' if self._runtime_gui_value("v_require_opposite_after_exit") else 'OFF'} "
                         f"LockSide={self.reentry_direction_lock or 'NONE'} "
                         f"Confirmations={'OFF' if signal_mode in ('SINGLE_SIGNAL','ANY_NON_CONFLICTING','2_SIGNALS','3_SIGNALS','4_SIGNALS','SCORE','ADAPTIVE_SCORE') else 'ON'} "
                          f"States={','.join(name + ':' + ('BULL' if bull and not bear else 'BEAR' if bear and not bull else 'CONFLICT' if bull and bear else 'NEUTRAL') for name, bull, bear in directional_modules) or 'NONE'} "
@@ -11962,7 +11994,7 @@ class UniversalFuturesBotGUI:
                     if (
                         pos_type in ("LONG", "SHORT")
                         and desired_side != pos_type
-                        and self.v_hold_until_all_reverse.get()
+                        and self._runtime_gui_value("v_hold_until_all_reverse")
                     ):
                         if self.hold_sl_wait_reversal and not self.hold_sl_threshold_hit:
                             # R6 FIX: Hold-SL WAIT is a hard prerequisite for
@@ -12144,7 +12176,7 @@ class UniversalFuturesBotGUI:
                         # FIXED_QTY means literal exchange quantity, not %.
                         # Validate before sending the market order so a bad
                         # TP split can never create an unprotected position.
-                        if not self.v_hold_until_all_reverse.get():
+                        if not self._runtime_gui_value("v_hold_until_all_reverse"):
                             if tp_qty_mode == "FIXED_QTY":
                                 requested_tp1 = self.safe_amount(
                                     self.symbol,
@@ -12252,7 +12284,7 @@ class UniversalFuturesBotGUI:
                                 f"SL MODE: {effective_sl_mode} | TP MODE: {tp_mode}"
                             )
 
-                            if use_atr_sl and not self.v_hold_until_all_reverse.get():
+                            if use_atr_sl and not self._runtime_gui_value("v_hold_until_all_reverse"):
                                 atr_for_log = float(atr_entry_value or 0.0)
                                 margin_for_roi = float(actual_position_margin or 0.0)
                                 def _roi_from_move(move):
@@ -12292,7 +12324,7 @@ class UniversalFuturesBotGUI:
                                     "ROI target conversion used configured leverage fallback."
                                 )
 
-                            if self.v_hold_until_all_reverse.get():
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
                                 self.log(
                                     f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
                                     f"Hold SL={hold_sl_roi_pct:g}% ROI | "
@@ -12306,7 +12338,7 @@ class UniversalFuturesBotGUI:
                                     f"TP2={tp2:.12g}"
                                 )
 
-                            if self.v_hold_until_all_reverse.get():
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
                                 self.log(
                                     f"PRICE MOVE EQUIVALENTS: SL={sl_move * 100:.6g}% | "
                                     "TP1/TP2 disabled"
@@ -12323,8 +12355,8 @@ class UniversalFuturesBotGUI:
                             # Create protection.
                             # ------------------------------------------------
                             hold_wait_reversal = (
-                                bool(self.v_hold_until_all_reverse.get())
-                                and bool(self.v_hold_sl_wait_reversal.get())
+                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
+                                and bool(self._runtime_gui_value("v_hold_sl_wait_reversal"))
                             )
                             self.hold_sl_wait_reversal = hold_wait_reversal
                             self.hold_sl_threshold_hit = False
@@ -12407,7 +12439,7 @@ class UniversalFuturesBotGUI:
                             # lock has already been cleared or satisfied.
                             self.reentry_direction_lock = None
                             self.reentry_lock_reason = ""
-                            if hold_wait_reversal or self.v_hold_until_all_reverse.get():
+                            if hold_wait_reversal or self._runtime_gui_value("v_hold_until_all_reverse"):
                                 self.log(
                                     "TP1 BREAK-EVEN: DISABLED BY HOLD-ALL-REVERSE | "
                                     "TP1/TP2 are disabled in this mode."
@@ -12417,7 +12449,7 @@ class UniversalFuturesBotGUI:
                                     "TP1 BREAK-EVEN: "
                                     + (
                                         "ON | TP1 fill will move the remaining SL to actual entry."
-                                        if self.v_tp1_be.get()
+                                        if self._runtime_gui_value("v_tp1_be")
                                         else "OFF"
                                     )
                                 )
@@ -12435,7 +12467,7 @@ class UniversalFuturesBotGUI:
                             self.log(
                                 f"SL  = {sl:.12g}"
                             )
-                            if self.v_hold_until_all_reverse.get():
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
                                 if hold_wait_reversal:
                                     self.log(
                                         "TP1/TP2 = DISABLED | Hold-SL WAIT mode: no exchange SL; "
