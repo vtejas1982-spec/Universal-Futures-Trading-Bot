@@ -22,6 +22,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 ### Build scripts
 
 - `BUILD_CRYPTO_EXE.bat`
+- `BUILD_CRYPTO_AI_AGENT_R6.5_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
 
@@ -38,6 +39,8 @@ The active root is now consolidated to one current Crypto R9.6 engine, one curre
 - `UniversalForexBot_MT5_BACKTESTER.py`
 
 The changelog below is historical by design; old release numbers in it do not represent active root files.
+
+`UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py` is the dedicated R6.5 AI-Agent simulator. It uses completed-candle signals, AI-family thresholds and bounded AI risk/SL/TP management; its historical results are not a guarantee of live performance.
 
 ## V8.4.2-CRYPTO-AI-AGENT-R5 — Confirmed AI-Agent recommended preset + decision-diagnostic hardening — 2026-09-27
 
