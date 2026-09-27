@@ -475,6 +475,22 @@ R6.3 now:
 
 See docs/CRYPTO_AI_AGENT_R6_3_RELEASE_NOTES.md.
 
+## 2026-09-27 — Crypto AI Agent R6.4 non-blocking GUI shutdown hotfix
+
+A Windows test exposed a GUI freeze ("Not Responding") during window close. The shutdown callback was performing the mandatory Bybit/CCXT kill-switch exchange operations directly on the Tkinter main thread.
+
+R6.4 changes shutdown to a non-blocking fail-closed lifecycle:
+- The window-close callback no longer performs exchange API calls directly.
+- Exchange flatten/cancel/verification runs in the existing background cleanup worker.
+- The GUI polls worker and cleanup state without blocking the Tk event loop.
+- The window is destroyed only after FLAT + NO OPEN ORDERS is verified.
+- If exchange cleanup cannot be verified, the window remains open and reports that safe close is blocked so cleanup can be retried.
+- Stop-wait diagnostics now account for both the execution worker and cleanup worker.
+- Internal source version: V8.4.2-CRYPTO-AI-AGENT-R6.4.
+- Configuration/runtime schema: 21.
+
+See docs/CRYPTO_AI_AGENT_R6_4_RELEASE_NOTES.md.
+
 ## Release documentation
 
 - [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
