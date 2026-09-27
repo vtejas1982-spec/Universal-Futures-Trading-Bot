@@ -1,4 +1,4 @@
-# Current Production Manifest — V8.4.2-R9.1
+# Current Production Manifest — V8.4.2-R9.3
 
 ## Live
 - UniversalFuturesBot_CRYPTO.py
@@ -23,6 +23,7 @@
 ## Documentation
 - README.md
 - CHANGELOG.md
+- docs/CRYPTO_R9_3_RELEASE_NOTES.md
 - docs/CRYPTO_R9_1_RELEASE_NOTES.md
 - docs/CRYPTO_R9_RELEASE_NOTES.md
 - docs/CRYPTO_R8_RELEASE_NOTES.md
@@ -32,10 +33,10 @@
 - docs/R5_ENGINE_AUDIT_2026-09-22.md
 
 ## Version
-- Crypto: V8.4.2-R9.1
+- Crypto: V8.4.2-R9.3
 - Forex/MT5: V8.4.2-R5
 - Config schema: 10
 - Runtime schema: 9
 
 ## Rule
-Use Crypto R9.1 / Forex R5 as the current production line. Do not run superseded local V8.x copies.
+Use Crypto R9.3 / Forex R5 as the current production line. Do not run superseded local R9.1/R9.2 copies. Do not run superseded local V8.x copies.
