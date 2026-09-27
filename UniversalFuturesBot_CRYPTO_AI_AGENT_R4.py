@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.1"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.1 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.1-CONFIG-PROTECTION-HOTFIX"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.2"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.2 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.2-DECISION-REASON-AI-FLOW-HOTFIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 18  # R6.1 repairs protection-variable migration and config compatibility.
-RUNTIME_SCHEMA_VERSION = 18  # R6.1 runtime schema parity with repaired protection configuration.
+CONFIG_SCHEMA_VERSION = 19  # R6.2 repairs AI decision-reason parameter contract and AI-Agent runtime flow diagnostics.
+RUNTIME_SCHEMA_VERSION = 19  # R6.2 runtime schema parity with repaired AI decision-reason contract.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -114,7 +114,7 @@ AI_AGENT_ATR_SL_MULT = 1.8
 AI_AGENT_FALLBACK_SL_ROI = 30.0
 AI_AGENT_TP1_ROI = 60.0
 AI_AGENT_TP2_ROI = 120.0
-AI_AGENT_HOLD_ENABLED = True
+AI_AGENT_HOLD_ENABLED = False
 AI_AGENT_HOLD_RULE = "MIN_FAMILIES"
 AI_AGENT_HOLD_MIN_FAMILIES = 2
 
@@ -138,7 +138,7 @@ AI_AGENT_LOW_VOL_ATR_PCT = 0.50
 # preset for a conservative/aggressive crypto trend-momentum profile; it is NOT
 # a profitability guarantee and it never changes API credentials, account mode,
 # symbol, or profile identity. The user must explicitly confirm before it applies.
-AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.1"
+AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.2"
 AI_AGENT_PRESET = {
     # Council / decision engine — the six AI-Agent controls.
     "ai_min_families": 3,
@@ -205,7 +205,7 @@ AI_AGENT_PRESET = {
     "simple_tp2_enabled": True,
     "simple_roi_tp1": "60.0",
     "simple_roi_tp2": "120.0",
-    "simple_atr_tp_enabled": False,
+    "simple_atr_tp_enabled": True,
     "simple_tp1_be_enabled": True,
     "atr_sl_mult": "1.8",
     # AI reversal behavior. Keep hard protection active; do not disable the
@@ -288,7 +288,7 @@ DEFAULT_SIMPLE_TP2_ENABLED = True
 DEFAULT_SIMPLE_ATR_TP_ENABLED = False
 DEFAULT_LEGACY_PROTECTION_ENABLED = False
 DEFAULT_SIMPLE_TP1_BE_ENABLED = True
-DEFAULT_SIMPLE_HOLD_ENABLED = AI_AGENT_HOLD_ENABLED
+DEFAULT_SIMPLE_HOLD_ENABLED = False
 DEFAULT_SIMPLE_HOLD_WAIT = False
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10
@@ -5992,8 +5992,7 @@ class UniversalFuturesBotGUI:
         ]
         if missing_protection_attrs:
             raise RuntimeError(
-                "GUI/Protection configuration contract is incomplete. "
-                f"Missing: {', '.join(missing_protection_attrs)}"
+                "GUI/Protection configuration contract is incomplete. "                f"Missing: {', '.join(missing_protection_attrs)}"
             )
 
         cfg = {
@@ -6013,6 +6012,7 @@ class UniversalFuturesBotGUI:
             "require_opposite_after_sl": self.v_require_opposite_after_exit.get(),
             # Keep the old key for backward compatibility with existing configs.
             "require_opposite_after_exit": self.v_require_opposite_after_exit.get(),
+
             "use_st": self.v_use_st.get(),
             "st_len": self.e_st_len.get().strip(),
             "st_mult": self.e_st_mult.get().strip(),
@@ -6991,8 +6991,7 @@ class UniversalFuturesBotGUI:
 
             # R6.1 compatibility: older profiles stored the ATR-SL toggle
             # under use_atr_sl. The canonical GUI variable is
-            # v_simple_atr_sl_enabled; no obsolete v_use_atr_sl attribute exists.
-            # ATR-TP has its own independent persisted setting.
+            # v_simple_atr_sl_enabled; no obsolete v_use_atr_sl attribute exists.            # ATR-TP has its own independent persisted setting.
             self.e_atr_sl_mult.delete(0, tk.END)
             self.e_atr_sl_mult.insert(0, cfg.get("atr_sl_mult", DEFAULT_ATR_SL_MULTIPLIER))
             self.e_atr_tp1_mult.delete(0, tk.END)
@@ -7010,7 +7009,8 @@ class UniversalFuturesBotGUI:
             self.e_tele_token.delete(
                 0,
                 tk.END,
-            )            self.e_tele_token.insert(
+            )
+            self.e_tele_token.insert(
                 0,
                 cfg.get(
                     "tele_token",
@@ -7990,8 +7990,7 @@ class UniversalFuturesBotGUI:
             When the exchange exposes the actual position margin, use it
             to calculate the trigger price. This is more accurate than
             simply dividing ROI by leverage, especially in Bybit cross
-            margin where the displayed position margin can include the
-            closing-fee component.
+            margin where the displayed position margin can include the            closing-fee component.
 
             Fallback:
                 if position margin is unavailable, use:
@@ -8009,7 +8008,8 @@ class UniversalFuturesBotGUI:
             )
 
         if leverage <= 0:
-            raise RuntimeError(                "Leverage must be greater than zero."
+            raise RuntimeError(
+                "Leverage must be greater than zero."
             )
 
         mode = str(protection_mode).upper()
@@ -8989,8 +8989,7 @@ class UniversalFuturesBotGUI:
         normal for a pending stop/TP; it means the trigger has not fired yet.
         This routine is specifically for the dangerous case where a live
         position exists but one of the expected protective orders has
-        disappeared.  The SL is treated as mandatory.
-        """
+        disappeared.  The SL is treated as mandatory.        """
         if not position or not self.last_protected_position:
             return
 
@@ -9008,6 +9007,7 @@ class UniversalFuturesBotGUI:
         if now - self.last_protection_reconcile < self.protection_reconcile_interval:
             return
         self.last_protection_reconcile = now
+
         sl_id = str(protected.get("sl_id") or "")
         tp1_id = str(protected.get("tp1_id") or "")
         tp2_id = str(protected.get("tp2_id") or "")
@@ -9988,8 +9988,7 @@ class UniversalFuturesBotGUI:
             )
             return True
 
-        if cfg["mode"] == "SHORT_GRID" and pos and pos["side"] != "SHORT":
-            self._grid_stop(
+        if cfg["mode"] == "SHORT_GRID" and pos and pos["side"] != "SHORT":            self._grid_stop(
                 symbol,
                 "Unexpected LONG position in SHORT_GRID",
                 cfg["cooldown"],
@@ -10007,7 +10006,8 @@ class UniversalFuturesBotGUI:
             )
 
             if not self._grid_switch_neutral_direction(
-                symbol, cfg, neutral_direction            ):
+                symbol, cfg, neutral_direction
+            ):
                 return True
 
             # Re-read the position after any safe direction transition.
@@ -10987,8 +10987,7 @@ class UniversalFuturesBotGUI:
             self.log(
                 f"GLOBAL SAFETY: DailyDD={'ON' if self.v_max_dd_enabled.get() else 'OFF'}({self.e_max_dd.get().strip()}%) | "
                 f"EmergencyStop={'ON' if self.v_emergency_enabled.get() else 'OFF'}({self.e_emergency_capital_pct.get().strip()}%) | "
-                f"Scope={self.v_emergency_scope.get().strip().upper()}"
-            )
+                f"Scope={self.v_emergency_scope.get().strip().upper()}"            )
             self.log(
                 "DEFAULT PROFILE CONTRACT: "
                 f"Adaptive Edge={adaptive_edge:.2f} | MinWeight={adaptive_min_weight:.2f} | "
@@ -11006,7 +11005,8 @@ class UniversalFuturesBotGUI:
             if signal_mode == "SINGLE_SIGNAL":
                 self.log(
                     "SINGLE SIGNAL MODE: ONE enabled signal is enough; "
-                    "Volume/ADX/ATR/MTF are NOT required."                )
+                    "Volume/ADX/ATR/MTF are NOT required."
+                )
             elif signal_mode == "ADAPTIVE_SCORE":
                 self.log(
                     f"ADAPTIVE SCORE: correlation-aware weights | Edge>={adaptive_edge:.2f} | "
@@ -11986,8 +11986,7 @@ class UniversalFuturesBotGUI:
                 )
             if trendline_retest_candles <= 0:
                 raise ValueError("Trendline Retest Candles must be greater than 0.")
-            if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
-                raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
+            if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):                raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
 
             use_divergence = bool(self._runtime_gui_value("v_use_divergence"))
             div_pivot = int(self._runtime_gui_value("e_div_pivot"))
@@ -12005,7 +12004,8 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Divergence Type is invalid.")
             if div_min_count < 1 or div_min_count > 10:
                 raise ValueError("Minimum Divergence must be 1-10.")
-            if div_max_pivots < 1 or div_max_pivots > 20:                raise ValueError("Maximum Divergence Pivots must be 1-20.")
+            if div_max_pivots < 1 or div_max_pivots > 20:
+                raise ValueError("Maximum Divergence Pivots must be 1-20.")
             if div_max_bars < 30 or div_max_bars > 200:
                 raise ValueError("Maximum Divergence Bars must be 30-200.")
             if div_entry_mode not in ("FRESH", "CURRENT_STATE"):
@@ -12131,6 +12131,13 @@ class UniversalFuturesBotGUI:
             if signal_mode not in allowed_signal_modes:
                 raise ValueError(
                     f"Unknown signal mode: {signal_mode}"
+                )
+
+            if signal_mode == "AI_AGENT" and not self.ai_agent_preset_applied:
+                self.log(
+                    "AI_AGENT CONFIG NOTICE: Recommended R6.2 preset is not marked as applied; "
+                    "current saved GUI settings are being used unchanged. "
+                    "Select AI_AGENT and confirm YES to apply the full AI-Agent preset."
                 )
 
             if min_score <= 0:
@@ -12985,8 +12992,7 @@ class UniversalFuturesBotGUI:
                     )
 
                     atr_pass = (
-                        not use_atr
-                        or atr_pct >= atr_min_pct
+                        not use_atr                        or atr_pct >= atr_min_pct
                     )
 
                     vol_pass = (
@@ -13005,6 +13011,7 @@ class UniversalFuturesBotGUI:
                             >= adx_thresh
                         )
                     )
+
                     # ------------------------------------------------
                     # 5. Signal decision
                     # ------------------------------------------------
@@ -13266,10 +13273,10 @@ class UniversalFuturesBotGUI:
                         evidence_require_independent=evidence_require_independent,
                         ai_min_families=ai_min_families,
                         ai_min_edge=ai_min_edge,
-                        ai_family_confidence=ai_family_confidence,
+                        ai_min_family_confidence=ai_family_confidence,
                         ai_require_trend=ai_require_trend,
                         ai_require_structure=ai_require_structure,
-                        ai_max_conflicts=ai_max_conflicts,
+                        ai_max_conflicting_families=ai_max_conflicts,
                     )
 
                     signal = "NONE"
@@ -13773,6 +13780,18 @@ class UniversalFuturesBotGUI:
                                 f"TP2={ai_effective_atr_tp2_mult:.2f}R"
                             )
 
+                        elif (
+                            signal_mode == "AI_AGENT"
+                            and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED
+                            and not use_legacy_protection
+                            and hold_all_reverse
+                            and desired_side in ("LONG", "SHORT")
+                        ):
+                            self.log(
+                                "AI TRADE MANAGER BLOCKED: HOLD-ALL-REVERSE is ON. "
+                                "Turn HOLD-ALL-REVERSE OFF to enable dynamic AI risk/ATR-SL/ATR-TP management."
+                            )
+
                         # AI TP management uses R-multiples of the resolved ATR
                         # stop. Therefore the protection resolver must use the
                         # ATR TP branch for this trade.
@@ -13984,8 +14003,7 @@ class UniversalFuturesBotGUI:
                             else:
                                 self.log(
                                     f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
-                                    f"TP1={(f'{tp1:.12g}' if tp1 is not None else 'OFF')} | "
-                                    f"TP2={(f'{tp2:.12g}' if tp2 is not None else 'OFF')} | Source={protection_source}"
+                                    f"TP1={(f'{tp1:.12g}' if tp1 is not None else 'OFF')} | "                                    f"TP2={(f'{tp2:.12g}' if tp2 is not None else 'OFF')} | Source={protection_source}"
                                 )
 
                             if self._runtime_gui_value("v_hold_until_all_reverse"):
@@ -14003,7 +14021,8 @@ class UniversalFuturesBotGUI:
                             # ------------------------------------------------
                             # Create protection.
                             # ------------------------------------------------
-                            hold_wait_reversal = (                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
+                            hold_wait_reversal = (
+                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
                                 and bool(self._runtime_gui_value("v_hold_sl_wait_reversal"))
                             )
                             self.hold_sl_wait_reversal = hold_wait_reversal
