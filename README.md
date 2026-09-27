@@ -1,6 +1,7 @@
 # Universal Futures & Forex Trading Bot
 
-**Current production release: V8.4.2-R9.6**
+**Current production release: V8.4.2-R9.6**  
+**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R5**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -23,6 +24,42 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+
+## V8.4.2-CRYPTO-AI-AGENT-R5 — Confirmed AI-Agent recommended preset + decision-diagnostic hardening — 2026-09-27
+
+### Added
+- Selecting **AI_AGENT** in Decision Engine now asks for confirmation before changing strategy settings.
+- **YES — Apply Recommended AI Agent Settings** applies the complete deterministic R5 preset.
+- **NO — Continue With Current Settings** keeps the user's existing settings unchanged while AI_AGENT remains enabled.
+- The six AI-Agent council controls remain individually editable and persisted per profile:
+  - AI Min Families
+  - AI Min Edge
+  - AI Family Confidence
+  - AI Max Conflicts
+  - AI Require Trend
+  - AI Require Structure
+- The preset also normalizes execution, evidence modules, risk sizing, protection, reversal behavior and audited indicator parameters.
+- Profile metadata records whether the recommended preset was applied.
+
+### Fixed
+- AI-Agent blocked-reason diagnostics now use the **effective profile values** instead of hard-coded global thresholds.
+- Configuration/runtime schema advanced to 16 for preset metadata.
+- AI-Agent preset application refreshes the worker snapshot after all changes.
+
+### Safety
+- The preset does not change API credentials, exchange/account mode, symbol or bot profile identity.
+- It uses 15m, 5x leverage, one net position, 0.35% equity risk, completed-candle safety, 15-minute cooldown, and exchange-side protection.
+- The preset is a configuration recommendation, **not a guarantee of maximum profit or profitability**.
+
+### Validation
+- Python compile: PASS.
+- AST parse: PASS.
+- Deterministic AI-Agent smoke test: PASS.
+- GitHub production source updated.
+
+See `docs/CRYPTO_AI_AGENT_R5_RELEASE_NOTES.md`.
+
+---
 
 ## V8.4.2-CRYPTO-AI-AGENT-R4 — Full engine audit + AI Agent configuration hardening — 2026-09-27
 
