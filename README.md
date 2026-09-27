@@ -25,7 +25,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 
 ## V8.4.2-R8 — Crypto lifecycle + risk-boundary hardening — 2026-09-27
 
-R8 is a production safety release following Bybit Demo validation. It fixes profile lifecycle state, corrects percentage risk sizing, and enforces exchange maximum order quantity before submission.
+R8 is a production safety release following Bybit Demo validation. It fixes profile lifecycle state, corrects percentage risk sizing, adds explicit FIXED_QTY + RISK_% hard-SL semantics, enforces exchange maximum order quantity, and removes direct Tkinter setting reads from the trading worker.
 
 ### Fixed
 
@@ -33,6 +33,8 @@ R8 is a production safety release following Bybit Demo validation. It fixes prof
 - **Phantom/stale RUNNING state:** a flat profile with no live process and no saved position/Grid state is normalized to STOPPED.
 - **Profile deletion:** stale lifecycle status alone no longer blocks deletion; live locks, saved positions, active trades and Grid state still block destructive operations.
 - **Risk sizing:** `0.75` now means **0.75% of equity**, not 75%.
+- **FIXED_QTY + RISK_% SL:** selecting FIXED_QTY can automatically select RISK_% SL; the configured Risk Per Trade becomes the account-risk budget and the stop is calculated from the actual filled quantity and entry.
+- **RISK_% safety:** RISK_% is rejected with Equity-Risk sizing or Hold-All-Reverse, preventing ambiguous stop ownership.
 - **Exchange quantity cap:** final order quantity is clamped to CCXT/exchange maximum amount and precision before entry.
 - **ATR default parity:** missing `use_atr` configuration now uses the same ON default as a new profile.
 - **Max Open Trades:** this single-symbol engine now explicitly normalizes any value other than 1 to its hard limit of one net position.
@@ -40,14 +42,15 @@ R8 is a production safety release following Bybit Demo validation. It fixes prof
 
 ### Added
 
-- Runtime schema 6 with explicit stop-request state.
+- Runtime schema 7 with explicit stop-request state plus sizing/protection-basis metadata.
+- GUI-setting snapshot layer for worker-thread safety.
 - R8 regression suite: `tests/test_crypto_r8_regressions.py`.
 - Exchange-cap and actual-risk diagnostics.
 - R8 release documentation.
 
 ### Preserved
 
-R8 does not loosen the ADAPTIVE_EVIDENCE contract, Evidence-family thresholds, completed-candle signal logic, ATR/ADX regime gates, Hold-All-Reverse, post-SL lock, ATR 1.50 / 1.20 / 2.20 protection, or recovery identity checks.
+R8 does not loosen the ADAPTIVE_EVIDENCE contract, Evidence-family thresholds, completed-candle signal logic, ATR/ADX regime gates, Hold-All-Reverse, post-SL lock, ATR 1.50 / 1.20 / 2.20 protection, or recovery identity checks. Fixed-quantity RISK_% SL is an explicit protection mode; it does not change the entry quantity.
 
 See `docs/CRYPTO_R8_RELEASE_NOTES.md` for the complete fix/add/modify list.
 
