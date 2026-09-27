@@ -18,7 +18,7 @@ def load_live():
     for name in ("NetworkError", "RequestTimeout", "ExchangeNotAvailable", "DDoSProtection", "RateLimitExceeded"):
         setattr(stub, name, type(name, (Exception,), {}))
     sys.modules["ccxt"] = stub
-    spec = importlib.util.spec_from_file_location("crypto_r7_live_test", LIVE)
+    spec = importlib.util.spec_from_file_location("crypto_r8_live_test", LIVE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -59,8 +59,8 @@ def test_r8_source_compiles_and_release_contract_is_unique():
             methods[node.name] = methods.get(node.name, 0) + 1
     assert not {name: n for name, n in methods.items() if n > 1}
     assert 'APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R8"' in source
-    assert 'AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R7"' in source
-    assert "RUNTIME_SCHEMA_VERSION = 6" in source
+    assert 'AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R8"' in source
+    assert "RUNTIME_SCHEMA_VERSION = 7" in source
     assert source.count("DIVERGENCE_INDICATORS = (") == 1
 
 
