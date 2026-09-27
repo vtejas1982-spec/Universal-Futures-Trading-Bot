@@ -10672,7 +10672,13 @@ class UniversalFuturesBotGUI:
                 f"Leverage={leverage}x"
             )
 
-            if use_atr_sl:
+            if sl_mode == "RISK_%":
+                self.log(
+                    f"FIXED QTY RISK SL: Risk Budget={risk_pct:g}% of account equity | "
+                    "hard SL is calculated from the actual filled quantity and entry. "
+                    f"TP1={atr_tp1_mult:g}x SL distance | TP2={atr_tp2_mult:g}x SL distance"
+                )
+            elif use_atr_sl:
                 self.log(
                     f"ATR DYNAMIC SL/TP: ON | SL={atr_sl_mult:g} ATR | "
                     f"TP1={atr_tp1_mult:g}x SL distance | TP2={atr_tp2_mult:g}x SL distance"
