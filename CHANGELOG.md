@@ -793,6 +793,28 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 
 # Changelog
 
+# V8.4.2 Crypto AI Agent R6.3 — 2026-09-27
+
+## Fixed
+- Fixed repeated CONFIG MIGRATION schema 18 -> 19 messages.
+- Configuration migration now persists the new schema marker after the full GUI configuration load completes successfully.
+- Existing user values remain authoritative; migration does not replace saved trading settings.
+- Legacy use_atr_sl remains synchronized with canonical simple_atr_sl_enabled during migration.
+
+## Modified
+- Configuration schema: 19 -> 20.
+- Runtime schema: 19 -> 20.
+- Replaced the old R3-specific migration log with a clearer sizing-compatibility migration message.
+- Internal version: V8.4.2-CRYPTO-AI-AGENT-R6.3.
+- Audit marker: V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.3-MIGRATION-PERSISTENCE-HOTFIX.
+
+## Validation
+- Python compilation of the repaired local source: PASS.
+- Migration persistence logic: static audit PASS.
+- Existing-values-authoritative behavior retained.
+- No live exchange lifecycle claim in this patch.
+
+
 # V8.4.2 Crypto AI Agent R6.2 — 2026-09-27
 
 ## Fixed
