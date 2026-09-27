@@ -4,6 +4,8 @@
 - UniversalFuturesBot_CRYPTO.py
 - UniversalFuturesBot_CRYPTO_R9_PRODUCTION.py
 - UniversalFuturesBot_CRYPTO_R9_6_UNIFIED_PROTECTION.py
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R4.py
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R3.py
 - UniversalFuturesBot_CRYPTO_AI_AGENT_R2.py
 - UniversalForexBot_MT5.py
 
@@ -26,6 +28,8 @@
 - README.md
 - CHANGELOG.md
 - docs/CRYPTO_R9_6_RELEASE_NOTES.md
+- docs/CRYPTO_AI_AGENT_R4_RELEASE_NOTES.md
+- docs/CRYPTO_AI_AGENT_R3_RELEASE_NOTES.md
 - docs/CRYPTO_AI_AGENT_R2_RELEASE_NOTES.md
 - docs/CRYPTO_R9_3_RELEASE_NOTES.md
 - docs/CRYPTO_R9_1_RELEASE_NOTES.md
@@ -38,7 +42,7 @@
 
 ## Version
 - Crypto: V8.4.2-R9.6
-- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R2
+- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R4
 - Forex/MT5: V8.4.2-R5
 - Config schema: 12 (R9.6) / 13 (AI Agent R2)
 - Runtime schema: 12 (R9.6) / 13 (AI Agent R2)
