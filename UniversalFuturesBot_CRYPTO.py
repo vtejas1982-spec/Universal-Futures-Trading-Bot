@@ -4480,6 +4480,7 @@ class UniversalFuturesBotGUI:
             "EQUITY_RISK_%",
             "EQUITY_RISK_%",
             "FIXED_QTY",
+            command=self._on_size_mode_changed,
         ).grid(row=0, column=1, padx=5)
 
         tk.Label(
@@ -4913,6 +4914,32 @@ class UniversalFuturesBotGUI:
         self._on_worker_finished()
 
     # -------------------- SETTINGS ---------------------------
+
+    def _on_size_mode_changed(self, selected=None):
+        """Keep sizing and hard-SL semantics explicit when the user switches modes."""
+        try:
+            mode = str(selected or self.v_size_mode.get()).strip().upper()
+            if mode == "FIXED_QTY":
+                if bool(self.v_hold_until_all_reverse.get()):
+                    self.log(
+                        "FIXED QTY SELECTED: Hold-All-Reverse is still ON. "
+                        "Risk Per Trade (%) cannot define the hard SL until Hold-All-Reverse is disabled."
+                    )
+                else:
+                    self.v_sl_mode.set("RISK_%")
+                    self.log(
+                        "FIXED QTY SELECTED: SL Mode automatically set to RISK_% | "
+                        "Risk Per Trade (%) now defines the hard-SL account-risk budget."
+                    )
+            elif mode == "EQUITY_RISK_%":
+                if self.v_sl_mode.get().strip().upper() == "RISK_%":
+                    self.v_sl_mode.set("PRICE_%")
+                    self.log(
+                        "EQUITY RISK SIZING SELECTED: SL Mode returned to PRICE_%; "
+                        "Risk Per Trade (%) controls position size."
+                    )
+        except Exception:
+            pass
 
     def save_settings(self):
         requested_profile = self._sanitize_profile_id(self.v_bot_id.get())
