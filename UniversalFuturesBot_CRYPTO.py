@@ -7008,6 +7008,13 @@ class UniversalFuturesBotGUI:
             sl_move = risk_amount / (float(position_qty) * float(actual_entry))
             if sl_move <= 0 or not np.isfinite(sl_move):
                 raise RuntimeError("RISK_% SL distance is invalid.")
+            if leverage > 0 and sl_move >= (0.80 / float(leverage)):
+                self.log(
+                    f"RISK_% LEVERAGE WARNING: required SL move={sl_move * 100:.3f}% "
+                    f"is close to/exceeds a conservative {0.80 / float(leverage) * 100:.3f}% "
+                    f"price-move envelope for {leverage:g}x leverage. "
+                    "Actual liquidation is exchange/margin dependent."
+                )
             tp1_move = sl_move * float(atr_tp1_multiplier)
             tp2_move = sl_move * float(atr_tp2_multiplier)
         elif str(sl_mode).upper() == "ATR_DYNAMIC":
