@@ -412,6 +412,38 @@ For Forex new profiles, the R5 recommendation now uses 0.50% risk, ATR regime ga
 
 See docs/R5_ENGINE_AUDIT_2026-09-22.md for the complete fix/add/modify list.
 
+
+## 2026-09-27 — Crypto AI Agent R6.1 configuration/protection hotfix
+
+The Crypto AI-Agent engine was audited after a startup failure exposed a stale GUI-variable reference in the SL configuration path. R6.1 keeps the R6 deterministic AI risk/SL/TP manager and repairs the configuration contract around it.
+
+### Fixed
+- Removed executable references to the obsolete 'v_use_atr_sl' GUI variable.
+- Canonicalized ATR-SL configuration on 'v_simple_atr_sl_enabled'.
+- Preserved the old 'use_atr_sl' JSON key as a backward-compatible alias so existing profiles can still load.
+- Fixed legacy-protection ATR-SL runtime lookup to use the canonical GUI variable.
+- Fixed ATR-TP migration so its own 'simple_atr_tp_enabled' setting is never derived from the ATR-SL toggle.
+- Updated profile summaries to read the canonical ATR-SL setting.
+- Added a protection GUI/configuration contract check before settings are persisted, producing a clear configuration error instead of an opaque AttributeError.
+
+### Retained from R6
+- Deterministic AI-Agent evidence-family decision engine.
+- Bounded per-trade AI risk adjustment (0.20%–0.50%).
+- Bounded AI ATR-SL adjustment (1.50–2.40 ATR).
+- AI TP1/TP2 management using bounded R-multiples.
+- Risk sizing uses the AI-selected stop distance before entry.
+- Final SL/TP resolution is recalculated from the actual filled entry and actual position quantity.
+- Exchange-side protection verification/fail-closed behavior remains intact.
+
+### Validation
+- Uploaded R6 source plus the R6.1 hotfix was compiled successfully with Python.
+- Static GUI attribute audit found no remaining executable references to the missing 'v_use_atr_sl' variable.
+- AI trade-manager smoke test passed.
+- Actual-fill protection resolver smoke test passed with valid LONG SL/TP ordering.
+- Full live exchange lifecycle was **not** claimed by this audit; continue using Bybit Demo/Testnet before live deployment.
+
+See [Crypto AI Agent R6.1 release notes](docs/CRYPTO_AI_AGENT_R6_1_RELEASE_NOTES.md).
+
 ## Release documentation
 
 - [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
