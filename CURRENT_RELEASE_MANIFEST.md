@@ -1,4 +1,4 @@
-# Current Production Manifest — V8.4.2-R5
+# Current Production Manifest — V8.4.2-R6
 
 ## Live
 - UniversalFuturesBot_CRYPTO.py
@@ -6,6 +6,7 @@
 
 ## Backtest
 - UniversalFuturesBot_CRYPTO_BACKTESTER.py
+- tests/test_crypto_r6_regressions.py
 - UniversalForexBot_MT5_BACKTESTER.py
 
 ## Tests
@@ -25,9 +26,9 @@
 - docs/R5_ENGINE_AUDIT_2026-09-22.md
 
 ## Version
-- Crypto: V8.4.2-R5
+- Crypto: V8.4.2-R6
 - Forex/MT5: V8.4.2-R5
 - Config schema: 9
 
 ## Rule
-These are the files to use for the current R5 production line. Do not run superseded V8.x copies from old local clones.
+These are the files to use for the current production line: Crypto R6 / Forex R5. Do not run superseded V8.x copies from old local clones.
