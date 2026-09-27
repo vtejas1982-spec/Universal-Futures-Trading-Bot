@@ -1,13 +1,13 @@
 """
-V8.4.2-R5 UNIVERSAL FUTURES BACKTESTER — CRYPTO EVIDENCE STRATEGY-PARITY EDITION
+V8.4.2-R6 UNIVERSAL FUTURES BACKTESTER — CRYPTO EVIDENCE STRATEGY-PARITY EDITION
 ===============================================================
 
-Historical simulator for Universal Futures Trading Bot V8.4.2-R5.
+Historical simulator for Universal Futures Trading Bot V8.4.2-R6.
 
 Design goal:
     Backtest the SAME completed-candle indicator calculations, directional
     modules, signal modes, normal risk/SL/TP logic, Hold-All-Reverse logic,
-    post-SL opposite-signal lock, and Grid modes used by the live V8.4.2-R5 bot.
+    post-SL opposite-signal lock, and Grid modes used by the live V8.4.2-R6 bot.
 
 Included:
     * 19 V8 directional modules
@@ -32,7 +32,7 @@ Included:
     * Cached public OHLCV download from Binance/Bybit
 
 Important:
-    This V8.4.2-R5 backtester mirrors the R5 strategy/indicator contract. The
+    This V8.4.2-R6 backtester mirrors the R5 strategy/indicator contract. The
     Live runtime-only protections (managed-order checkpoint retirement,
     strict open-order snapshot completeness, startup inventory ownership
     checks, and live exchange preflight) are not historical price signals
@@ -66,8 +66,8 @@ try:
 except Exception:
     HAS_MPL = False
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-BT-R5"
-APP_TITLE = "Universal Futures Bot V8.4.2-R5 — Strategy-Parity Backtester"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-BT-R6"
+APP_TITLE = "Universal Futures Bot V8.4.2-R6 — Strategy-Parity Backtester"
 APP_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = APP_DIR / "backtest_results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -82,7 +82,7 @@ EVIDENCE_DEFAULT_MIN_FAMILIES=2
 EVIDENCE_DEFAULT_FAMILY_MIN_SCORE=0.35
 EVIDENCE_DEFAULT_REQUIRE_TREND=True
 EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT=True
-LIVE_STRATEGY_PARITY_VERSION = "V8.4.2-R5"
+LIVE_STRATEGY_PARITY_VERSION = "V8.4.2-R6"
 LIVE_RUNTIME_SCHEMA_VERSION = 5
 MODULES = ["ST","EMA","EMA_CROSS","MACD","RSI","BB","STOCH","VWAP","VWAP_DELTA","VIDYA","NWE","LIQ_SWING","TRENDLINE","MTF","VOL","ADX","ATR","DIVERGENCE","VOL_SR"]
 
@@ -102,7 +102,7 @@ DEFAULTS.update({
 
 
 # ============================================================
-# R5 ADVANCED STRATEGY MODULES
+# R6 ADVANCED STRATEGY MODULES
 # ------------------------------------------------------------
 # Divergence source: "Divergence for Many Indicators v4"
 # © LonesomeTheBlue — Mozilla Public License 2.0.
@@ -6344,7 +6344,7 @@ def persistent_votes(df,i,cfg):
     return out
 
 def decide(votes,cfg,atr_pass=True,vol_pass=True,adx_pass=True,mtf_pass_bull=True,mtf_pass_bear=True):
-    """Compatibility helper using the same per-profile Adaptive parameters as live V8.4.2-R5."""
+    """Compatibility helper using the same per-profile Adaptive parameters as live V8.4.2-R6."""
     return StrategyEngine.decide_signal(
         votes, str(cfg["signal_mode"]).upper(), int(cfg["min_score"]),
         atr_pass=atr_pass, vol_pass=vol_pass, adx_pass=adx_pass,
@@ -6504,7 +6504,7 @@ def _tp_qtys(qty,cfg):
 
 
 
-# V8.4.2-R5 protection parity: ATR SL/TP uses the completed signal candle ATR.
+# V8.4.2-R6 protection parity: ATR SL/TP uses the completed signal candle ATR.
 # ATR is a regime gate in ADAPTIVE_EVIDENCE and is not a directional family vote.
 def _normal_position_from_entry(entry,side,equity,cfg):
     hold=bool(cfg["hold_until_all_reverse"])
