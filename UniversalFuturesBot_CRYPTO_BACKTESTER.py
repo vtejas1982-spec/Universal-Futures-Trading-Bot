@@ -17,7 +17,7 @@ Included:
     * 4H MTF EMA200 filter
     * Normal strategy sizing, cooldown, same-candle protection, max trades,
       daily drawdown and emergency capital-loss stop
-    * PRICE_% and ROI_% SL/TP
+    * PRICE_%, ROI_% and FIXED_QTY RISK_% SL/TP
     * TP1/TP2 split, TP1 break-even
     * Hold-All-Reverse and optional WAIT-FOR-ALL-REVERSE stop threshold
     * Post-SL opposite-signal re-entry lock
@@ -6379,7 +6379,9 @@ def validate_config(cfg):
     if int(c["leverage"])<=0: raise ValueError("Leverage must be > 0")
     if float(c["risk_pct"])<=0 or float(c["risk_pct"])>=100: raise ValueError("Risk Per Trade must be >0 and <100")
     if float(c["sl_pct"])<=0 or float(c["tp1_pct"])<=0 or float(c["tp2_pct"])<=0 or float(c["hold_sl_roi"])<=0: raise ValueError("SL/TP targets must be >0")
-    if c["tp_mode"] not in ("PRICE_%","ROI_%") or c["sl_mode"] not in ("PRICE_%","ROI_%"): raise ValueError("Invalid SL/TP mode")
+    if c["tp_mode"] not in ("PRICE_%","ROI_%") or c["sl_mode"] not in ("PRICE_%","ROI_%","RISK_%"): raise ValueError("Invalid SL/TP mode")
+    if c["sl_mode"]=="RISK_%" and c["size_mode"]!="FIXED_QTY": raise ValueError("RISK_% SL requires FIXED_QTY sizing")
+    if c["sl_mode"]=="RISK_%" and c["hold_until_all_reverse"]: raise ValueError("RISK_% SL cannot be combined with Hold-All-Reverse")
     if c["tp_qty_mode"] not in ("PERCENT_%","FIXED_QTY"): raise ValueError("Invalid TP quantity mode")
     if c["tp_qty_mode"]=="PERCENT_%" and abs(float(c["tp1_close"])+float(c["tp2_close"])-100)>1e-9: raise ValueError("TP1 + TP2 percentages must equal 100")
     if int(c["grid_levels"])<1 or int(c["grid_levels"])>50: raise ValueError("Grid levels must be 1-50")
@@ -6509,31 +6511,31 @@ def _tp_qtys(qty,cfg):
 def _normal_position_from_entry(entry,side,equity,cfg):
     hold=bool(cfg["hold_until_all_reverse"])
     atr=float(cfg.get("_entry_atr",0.0) or 0.0)
-    if bool(cfg.get("use_atr_sl",False)):
+    sl_mode=str(cfg.get("sl_mode","PRICE_%")).upper()
+    if sl_mode=="RISK_%":
+        qty=float(cfg["fixed_qty"])
+        if qty<=0 or equity<=0 or entry<=0:
+            raise ValueError("RISK_% SL requires positive Fixed Qty, equity and entry.")
+        risk_amount=equity*(float(cfg["risk_pct"])/100.0)
+        sl_move=risk_amount/(qty*entry)
+        if sl_move<=0 or not np.isfinite(sl_move) or sl_move>=0.95:
+            raise ValueError("RISK_% SL distance is invalid or too wide.")
+        tp1_move=target_to_price_fraction(float(cfg["tp1_pct"]),cfg["tp_mode"],float(cfg["leverage"]))
+        tp2_move=target_to_price_fraction(float(cfg["tp2_pct"]),cfg["tp_mode"],float(cfg["leverage"]))
+    elif bool(cfg.get("use_atr_sl",False)):
         if not np.isfinite(atr) or atr<=0: raise ValueError("ATR Dynamic SL requires completed-candle ATR.")
         sl_move=(atr*float(cfg.get("atr_sl_mult",1.5)))/entry
         tp1_move=sl_move*float(cfg.get("atr_tp1_mult",1.2))
         tp2_move=sl_move*float(cfg.get("atr_tp2_mult",2.2))
     else:
         effective_sl_pct=float(cfg["hold_sl_roi"]) if hold else float(cfg["sl_pct"])
-        effective_sl_mode="ROI_%" if hold else cfg["sl_mode"]
+        effective_sl_mode="ROI_%" if hold else sl_mode
         sl_move=target_to_price_fraction(effective_sl_pct,effective_sl_mode,float(cfg["leverage"]))
         tp1_move=target_to_price_fraction(float(cfg["tp1_pct"]),cfg["tp_mode"],float(cfg["leverage"]))
         tp2_move=target_to_price_fraction(float(cfg["tp2_pct"]),cfg["tp_mode"],float(cfg["leverage"]))
     if cfg["size_mode"]=="FIXED_QTY": qty=float(cfg["fixed_qty"])
     else: qty=(equity*(float(cfg["risk_pct"])/100.0))/(entry*sl_move)
     qty=max(qty,0.0)
-    if side=="LONG": sl=entry*(1-sl_move); tp1=entry*(1+tp1_move); tp2=entry*(1+tp2_move)
-    else: sl=entry*(1+sl_move); tp1=entry*(1-tp1_move); tp2=entry*(1-tp2_move)
-    q1=q2=0.0
-    if not hold:
-        q1,q2=_tp_qtys(qty,cfg)
-    return {"side":side,"entry":entry,"qty":qty,"remaining_qty":qty,"sl":sl,"tp1":tp1,"tp2":tp2,
-            "tp1_qty":q1,"tp2_qty":q2,"tp1_done":False,"tp2_done":False,"be":False,
-            "hold_wait":bool(hold and cfg["hold_sl_wait_reversal"]),"hold_threshold_hit":False,
-            "signal_time":None,"entry_time":None,"entry_candle":None,"gross_pnl":0.0,"fees":0.0,
-            "entry_notional":entry*qty}
-
 def _trade_fee(notional,cfg): return abs(notional)*float(cfg["fee_pct"])/100.0
 
 def _close_piece(pos,qty,exit_price,cfg,reason):
@@ -7065,7 +7067,7 @@ class BacktesterGUI:
         self.combo(f,"size_mode","Sizing Mode",["EQUITY_RISK_%","FIXED_QTY"],0,0,18); self.ent(f,"risk_pct","Risk / Trade %",0,2); self.ent(f,"fixed_qty","Fixed Qty",0,4)
         self.ent(f,"max_dd","Max Daily DD %",1,0); self.ent(f,"emergency_capital_pct","Emergency Capital Loss %",1,2)
         s=ttk.LabelFrame(p,text="Normal Strategy SL / TP"); s.pack(fill="x",padx=8,pady=6)
-        self.combo(s,"sl_mode","SL Mode",["PRICE_%","ROI_%"],0,0); self.combo(s,"tp_mode","TP Mode",["PRICE_%","ROI_%"],0,2)
+        self.combo(s,"sl_mode","SL Mode",["PRICE_%","ROI_%","RISK_%"],0,0); self.combo(s,"tp_mode","TP Mode",["PRICE_%","ROI_%"],0,2)
         self.ent(s,"sl_pct","SL Target %",1,0); self.ent(s,"tp1_pct","TP1 Target %",1,2); self.ent(s,"tp2_pct","TP2 Target %",1,4)
         self.ent(s,"hold_sl_roi","Hold-All-Reverse SL ROI %",2,0); self.combo(s,"tp_qty_mode","TP Close Mode",["PERCENT_%","FIXED_QTY"],2,2)
         self.ent(s,"tp1_close","TP1 Close % / Qty",3,0); self.ent(s,"tp2_close","TP2 Close % / Qty",3,2)
