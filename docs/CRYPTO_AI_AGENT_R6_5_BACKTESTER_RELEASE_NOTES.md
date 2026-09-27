@@ -56,3 +56,10 @@ Keep the R6.5 live engine in the same folder because the backtester imports its 
 ## Important
 
 Backtest outputs are historical research results. They do not establish future profitability or prove that the live exchange lifecycle will behave identically.
+
+
+## Backtest parity note
+
+The standalone R6.5 backtester intentionally does not fabricate a per-candle Volume S/R state from the live multi-timeframe chart module. Its default AI-Agent vote set uses the other Trend, Momentum, Flow and Structure inputs plus the live R6.5 StrategyEngine. This avoids claiming false indicator parity. The live production engine can still use Volume S/R when enabled.
+
+For the closest production comparison, run the backtester on the same symbol/timeframe/date range and compare accepted signal timestamps and AI risk/SL/TP values with the live Demo logs.
