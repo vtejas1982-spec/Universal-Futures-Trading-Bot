@@ -75,9 +75,12 @@ See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
 - Core strategy calculation parity was synchronized, including ADX and Volume/SR logic.
 - Missing AI runtime arguments are now propagated into signal and decision-reason paths.
 - Existing MT5 protection remains the execution authority: actual fill/lot quantity and broker precision are used for final SL/TP.
+- AI lot sizing now preserves the AI-selected dynamic ATR stop instead of overwriting it with the static GUI ATR multiplier.
 - Existing Hold-All-Reverse now supports both ALL_ACTIVE and MIN_FAMILIES.
-- Forex configuration schema advanced to 16 with AI-Agent fields persisted.
+- Forex configuration/runtime schema advanced to 21/22 with AI-Agent and parity fields persisted.
 - Max Open Trades is explicitly constrained to the current MT5 single-position contract of 1.
+- Liquidity Swing entry mode and Divergence minimum-count/entry-mode controls are now explicit and persisted.
+- Grid Mode is visible for parity but is OFF-only in the MT5 Forex runtime.
 
 ### Preserved
 - MT5 PAPER / TERMINAL / LIVE modes.
@@ -91,9 +94,9 @@ See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
 - AI preset values match Crypto R6.5 exactly (134/134).
 - AI decision and AI risk/SL/TP hard-envelope tests pass.
 - Forex backtester smoke test passes.
-- GUI initialization and AI preset save/load confirmation test passes.
+- Forex R6.5 regression contract suite covers compile, StrategyEngine parity, GUI contract and runtime binding checks.
 
-See `docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md` and `docs/CRYPTO_FX_PARITY_AUDIT_2026-09-28.md`.
+See `docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md` and `docs/FOREX_AI_AGENT_R6_5_FULL_AUDIT_2026-09-28.md`.
 
 ## Current repository cleanup — 2026-09-27
 
