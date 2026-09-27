@@ -199,3 +199,8 @@ R8 is an execution/lifecycle/risk-boundary hardening release. It does not guaran
 ## R8-specific change
 
 R8 adds explicit FIXED_QTY + RISK_% hard-stop semantics and fixes the live Risk Per Trade percentage double-conversion discovered during Bybit Demo validation. A 0.75 GUI value is now passed as 0.75 percentage points to the sizing engine, and RISK_% protection converts it to 0.0075 internally exactly once.
+
+
+## GUI callback behavior
+
+Switching Sizing Mode to FIXED_QTY automatically selects SL Mode RISK_% when Hold-All-Reverse is OFF. Switching back to EQUITY_RISK_% returns the SL selector to PRICE_%. If Hold-All-Reverse remains ON, the GUI keeps that mode intact and logs that Risk Per Trade (%) cannot own the hard SL until Hold-All-Reverse is disabled.
