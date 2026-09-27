@@ -57,8 +57,8 @@ CONFIG_FILE = str(APP_DIR / "config_universal_fixed.json")
 LOG_FILE = str(APP_DIR / "universal_trade_logs_fixed.csv")
 
 # V8.3.3 Forex-only strategy contract. No crypto/futures exchange is used.
-RUNTIME_SCHEMA_VERSION = 16
-CONFIG_SCHEMA_VERSION = 16
+RUNTIME_SCHEMA_VERSION = 22
+CONFIG_SCHEMA_VERSION = 21
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
 ADAPTIVE_MODULE_WEIGHTS = {
     "ST":1.50,"EMA":1.00,"EMA_CROSS":1.25,"MACD":1.25,"RSI":1.00,"BB":0.75,"STOCH":0.75,
@@ -72,7 +72,8 @@ DEFAULT_ADAPTIVE_EDGE = "0.18"
 DEFAULT_ADAPTIVE_MIN_WEIGHT = "3.5"
 DEFAULT_ADX_LEN = 14
 DIVERGENCE_INDICATORS = ("MACD","MACD_HIST","RSI","STOCH","CCI","MOMENTUM","OBV","VWMACD","CMF","MFI")
-MAX_DATA_STALENESS_MULTIPLIER = 3
+MAX_DATA_STALENESS_MULTIPLIER = 2.5
+MAX_GUI_LOG_LINES = 4000
 RUNTIME_STATE_FILE = str(APP_DIR / "forex_runtime_state_v834.json")
 PROFILE_LOCK_FILE = str(APP_DIR / "forex_bot_v834.lock")
 
@@ -2070,6 +2071,9 @@ class UniversalFuturesBotGUI:
         self.ai_agent_preset_name = "CURRENT_SETTINGS"
         self._ai_agent_mode_prompt_active = False
         self._ai_active_management = None
+        self.last_strategy_log_key = None
+        self._close_in_progress = False
+        self._settings_dirty = True
 
         self.exchange = None
         self.exchange_id = None
@@ -2204,20 +2208,20 @@ class UniversalFuturesBotGUI:
     def log(self, msg):
         def write():
             try:
-                timestamp = time.strftime("[%H:%M:%S]")
-                self.log_box.insert(tk.END, f"{timestamp} {msg}\n")
-
+                timestamp=time.strftime("[%H:%M:%S]")
+                self.log_box.insert(tk.END,f"[{timestamp}] {msg}\n")
+                try:
+                    lines=int(float(self.log_box.index("end-1c").split(".")[0]))
+                    if lines>MAX_GUI_LOG_LINES:
+                        self.log_box.delete("1.0",f"{lines-MAX_GUI_LOG_LINES+1}.0")
+                except Exception:
+                    pass
                 if self.log_autoscroll:
-                    # Scroll after Tk processes the insertion/layout.
                     self.root.after_idle(self._scroll_log_to_bottom)
-                    self.root.after(30, self._scroll_log_to_bottom)
             except Exception:
                 pass
-
-        try:
-            self.root.after(0, write)
-        except Exception:
-            pass
+        try: self.root.after(0,write)
+        except Exception: pass
 
 
     def send_telegram(self, msg):
@@ -2244,7 +2248,7 @@ class UniversalFuturesBotGUI:
     def _build_ui(self):
         title = tk.Label(
             self.root,
-            text="Universal Forex Trading Bot V2 - MT5",
+            text="Universal Forex Trading Bot V8.4.2-FOREX-AI-AGENT-R6.5 - MT5",
             font=("Arial", 16, "bold"),
         )
         title.pack(pady=5)
@@ -2628,10 +2632,12 @@ class UniversalFuturesBotGUI:
         _entry(fr, "D", "e_stoch_d", "3", 2, 6, 5)
         _check(fr, "Confirmed Divergence", "v_use_divergence", True, 3, 0, 2)
         _entry(fr, "Pivot", "e_div_pivot", "5", 3, 2, 5)
-        _entry(fr, "Max Pivots", "e_div_max_pivots", "10", 3, 4, 5)
-        _entry(fr, "Max Bars", "e_div_max_bars", "100", 3, 6, 5)
-        _option(fr, "Type", "v_div_type", "Regular/Hidden", ("Regular", "Hidden", "Regular/Hidden"), 4, 0, 2)
-        _option(fr, "Source", "v_div_source", "Close", ("Close", "High/Low"), 4, 4)
+        _entry(fr, "Min Div", "e_div_min_count", "1", 3, 4, 5)
+        _entry(fr, "Max Pivots", "e_div_max_pivots", "10", 3, 6, 5)
+        _entry(fr, "Max Bars", "e_div_max_bars", "100", 5, 4, 5)
+        _option(fr, "Type", "v_div_type", "Regular", ("Regular", "Hidden", "Regular/Hidden"), 4, 0, 2)
+        _option(fr, "Entry", "v_div_entry_mode", "FRESH", ("FRESH", "CURRENT_STATE"), 4, 4)
+        _option(fr, "Source", "v_div_source", "Close", ("Close", "High/Low"), 5, 0, 2)
         _check(fr, "Use all divergence sources", "v_div_use_all", True, 4, 6, 2)
         _entry(fr, "CCI Len", "e_div_cci", "10", 5, 0, 5)
         _entry(fr, "Momentum Len", "e_div_mom", "10", 5, 2, 5)
@@ -2666,7 +2672,8 @@ class UniversalFuturesBotGUI:
         _entry(fr, "Pivot", "e_liq_len", "14", 0, 2)
         _option(fr, "Area", "v_liq_area", "Wick Extremity", ("Wick Extremity", "Full Range"), 0, 4)
         _option(fr, "Filter", "v_liq_filter", "Count", ("Count", "Volume"), 0, 6)
-        _entry(fr, "Filter Value", "e_liq_filter_value", "3", 1, 0)
+        _option(fr, "Entry", "v_liq_entry_mode", "FRESH_BREAK", ("FRESH_BREAK", "CURRENT_TREND"), 1, 0, 2)
+        _entry(fr, "Filter Value", "e_liq_filter_value", "0", 1, 4)
         _check(fr, "Trendline Breakout", "v_use_trendline", True, 2, 0)
         _entry(fr, "Pivot", "e_trend_len", "14", 2, 2)
         _entry(fr, "Min Dist", "e_trend_min_dist", "5", 2, 4)
@@ -2723,6 +2730,8 @@ class UniversalFuturesBotGUI:
         tk.Label(aiui, text="Hard envelope — Risk 0.20–0.50% | SL 1.50–2.40 ATR | TP1 1.00–1.50R | TP2 2.00–3.00R", fg="#444444").grid(row=3,column=0,columnspan=8,sticky="w")
         tk.Label(aiui, text="YES when AI_AGENT is selected = apply recommended R6.5 Forex preset. NO = keep all current settings and leave AI_AGENT enabled.", fg="#444444", wraplength=900, justify="left").grid(row=4,column=0,columnspan=8,sticky="w")
         tk.Label(fr, text="V8.4.2 Forex R6.5: MT5 execution/data/lot rules remain Forex-native; strategy decisions, evidence-family logic, AI settings and bounded risk/SL/TP mirror Crypto AI-Agent R6.5.", fg="#444444", wraplength=980, justify="left").grid(row=5,column=0,columnspan=8,sticky="w",pady=3)
+        _option(fr, "Grid Mode", "v_grid_mode", "OFF", ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID"), 6, 0, 2)
+        tk.Label(fr, text="MT5 Forex R6.5 keeps grid execution OFF-only; other grid modes are rejected before startup.", fg="#555555").grid(row=6,column=3,columnspan=5,sticky="w",pady=2)
 
         # ---------------- Compatibility note ----------------
         tk.Label(f_strat, text="V8.4 preserves all V8.3.4 indicator formulas, entry modes, risk/SLTP controls, config keys and legacy signal modes. Only ADAPTIVE_EVIDENCE uses the new family-aware decision contract.", fg="#444444", wraplength=980, justify="left").pack(fill="x", padx=10, pady=(2,6))
@@ -3097,10 +3106,10 @@ class UniversalFuturesBotGUI:
             "rsi_len":"e_rsi_len","rsi_ob":"e_rsi_ob","rsi_os":"e_rsi_os","rsi_ma_len":"e_rsi_ma_len","stoch_k":"e_stoch_k","stoch_smooth":"e_stoch_smooth","stoch_d":"e_stoch_d","vwap_len":"e_vwap_len",
             "vwap_delta_smooth_len":"e_vwap_delta_smooth_len","vwap_delta_baseline":"e_vwap_delta_baseline","vidya_len":"e_vidya_len","vidya_momentum":"e_vidya_momentum","vidya_band":"e_vidya_band","nwe_bandwidth":"e_nwe_bandwidth","nwe_mult":"e_nwe_mult",
             "liq_length":"e_liq_len","liq_filter_value":"e_liq_filter_value","trendline_length":"e_trend_len","trendline_min_distance":"e_trend_min_dist","trendline_buffer":"e_trend_buffer","trendline_retest_candles":"e_trend_retest","atr_min_pct":"e_atr_min_pct","vol_len":"e_vol_len","adx_len":"e_adx_len","adx_thresh":"e_adx_thresh",
-            "bb_len":"e_bb_len","bb_std":"e_bb_std","div_pivot":"e_div_pivot","div_max_pivots":"e_div_max_pivots","div_max_bars":"e_div_max_bars","div_cci_len":"e_div_cci","div_mom_len":"e_div_mom","div_vwmacd_fast":"e_div_vwfast","div_vwmacd_slow":"e_div_vwslow","div_cmf_len":"e_div_cmf","div_mfi_len":"e_div_mfi","sr_volume_ma":"e_sr_vol_ma","min_reverse_families":"e_min_reverse_families",
+            "bb_len":"e_bb_len","bb_std":"e_bb_std","div_pivot":"e_div_pivot","div_min_count":"e_div_min_count","div_max_pivots":"e_div_max_pivots","div_max_bars":"e_div_max_bars","div_cci_len":"e_div_cci","div_mom_len":"e_div_mom","div_vwmacd_fast":"e_div_vwfast","div_vwmacd_slow":"e_div_vwslow","div_cmf_len":"e_div_cmf","div_mfi_len":"e_div_mfi","sr_volume_ma":"e_sr_vol_ma","min_reverse_families":"e_min_reverse_families",
         }
         vm={
-            "signal_mode":"v_signal_mode","timeframe":"v_tf","no_same_candle":"v_no_same_candle","require_opposite_after_sl":"v_require_opposite_after_exit","use_st":"v_use_st","use_ema":"v_use_ema","use_ema_cross":"v_use_ema_cross","use_macd":"v_use_macd","use_rsi":"v_use_rsi","use_stoch":"v_use_stoch","use_vwap":"v_use_vwap","use_vwap_delta":"v_use_vwap_delta","use_vidya":"v_use_vidya","use_nwe":"v_use_nwe","use_liq_swings":"v_use_liq_swing","use_trendline":"v_use_trendline","use_divergence":"v_use_divergence","div_use_all":"v_div_use_all","use_vol_sr":"v_use_vol_sr","use_vol":"v_use_vol","use_adx":"v_use_adx","use_atr":"v_use_atr","use_mtf":"v_use_mtf","use_bb":"v_use_bb","evidence_require_trend":"v_evidence_require_trend","evidence_require_independent":"v_evidence_require_independent","size_mode":"v_size_mode","emergency_scope":"v_emergency_scope","sl_mode":"v_sl_mode","tp_mode":"v_tp_mode","tp1_be":"v_tp1_be","tp_qty_mode":"v_tp_qty_mode","hold_until_all_reverse":"v_hold_until_all_reverse","reverse_exit_mode":"v_reverse_exit_mode","hold_sl_wait_reversal":"v_hold_sl_wait_reversal","st_source":"v_st_source","st_entry_mode":"v_st_entry_mode","st_change_atr":"v_st_change_atr","ema_cross_entry_mode":"v_ema_cross_entry_mode","rsi_logic":"v_rsi_logic","rsi_ma_type":"v_rsi_ma_type","vwap_delta_smooth":"v_vwap_delta_smooth","vwap_delta_logic":"v_vwap_delta_logic","vidya_entry_mode":"v_vidya_entry_mode","nwe_entry_mode":"v_nwe_entry_mode","nwe_repaint":"v_nwe_repaint","liq_area":"v_liq_area","liq_filter":"v_liq_filter","trendline_entry_mode":"v_trend_entry","div_type":"v_div_type","div_source":"v_div_source","sr_vote_mode":"v_sr_vote","sr_entry_mode":"v_sr_entry","ai_require_trend":"v_ai_require_trend","ai_require_structure":"v_ai_require_structure",
+            "signal_mode":"v_signal_mode","timeframe":"v_tf","no_same_candle":"v_no_same_candle","require_opposite_after_sl":"v_require_opposite_after_exit","use_st":"v_use_st","use_ema":"v_use_ema","use_ema_cross":"v_use_ema_cross","use_macd":"v_use_macd","use_rsi":"v_use_rsi","use_stoch":"v_use_stoch","use_vwap":"v_use_vwap","use_vwap_delta":"v_use_vwap_delta","use_vidya":"v_use_vidya","use_nwe":"v_use_nwe","use_liq_swings":"v_use_liq_swing","use_trendline":"v_use_trendline","use_divergence":"v_use_divergence","div_use_all":"v_div_use_all","use_vol_sr":"v_use_vol_sr","use_vol":"v_use_vol","use_adx":"v_use_adx","use_atr":"v_use_atr","use_mtf":"v_use_mtf","use_bb":"v_use_bb","evidence_require_trend":"v_evidence_require_trend","evidence_require_independent":"v_evidence_require_independent","size_mode":"v_size_mode","emergency_scope":"v_emergency_scope","sl_mode":"v_sl_mode","tp_mode":"v_tp_mode","tp1_be":"v_tp1_be","tp_qty_mode":"v_tp_qty_mode","hold_until_all_reverse":"v_hold_until_all_reverse","reverse_exit_mode":"v_reverse_exit_mode","hold_sl_wait_reversal":"v_hold_sl_wait_reversal","grid_mode":"v_grid_mode","st_source":"v_st_source","st_entry_mode":"v_st_entry_mode","st_change_atr":"v_st_change_atr","ema_cross_entry_mode":"v_ema_cross_entry_mode","rsi_logic":"v_rsi_logic","rsi_ma_type":"v_rsi_ma_type","vwap_delta_smooth":"v_vwap_delta_smooth","vwap_delta_logic":"v_vwap_delta_logic","vidya_entry_mode":"v_vidya_entry_mode","nwe_entry_mode":"v_nwe_entry_mode","nwe_repaint":"v_nwe_repaint","liq_area":"v_liq_area","liq_filter":"v_liq_filter","liq_entry_mode":"v_liq_entry_mode","trendline_entry_mode":"v_trend_entry","div_type":"v_div_type","div_source":"v_div_source","div_entry_mode":"v_div_entry_mode","sr_vote_mode":"v_sr_vote","sr_entry_mode":"v_sr_entry","ai_require_trend":"v_ai_require_trend","ai_require_structure":"v_ai_require_structure",
         }
         for k,a in em.items():
             if k in p and hasattr(self,a): self._set_entry_value(a,p[k])
@@ -5934,25 +5943,31 @@ class UniversalFuturesBotGUI:
         )
 
     def on_close(self):
-        if self.is_running:
-            if not messagebox.askyesno(
-                "Stop bot?",
-                "Bot is running. Stop it and close?",
-            ):
-                return
+        if self._close_in_progress: return
+        if self.is_running and not messagebox.askyesno("Stop bot?","Bot is running. Stop it and close?",parent=self.root): return
+        self._close_in_progress=True
+        try:
+            self.btn_start.config(state="disabled"); self.btn_stop.config(state="disabled")
+        except Exception: pass
+        self.log("WINDOW CLOSE: background MT5 shutdown started; GUI remains responsive.")
+        def _shutdown():
+            try:
+                self.is_running=False; self.v2_watchdog_running=False
+                try:
+                    if getattr(self,"exchange",None) and self.symbol:
+                        p=fx_fetch_position(self,self.symbol)
+                        if p: self.log(f"WINDOW CLOSE: open MT5 position detected {p['side']} Qty={p['qty']:g}; broker position left unchanged.")
+                        else: fx_clear_runtime_state(self)
+                except Exception as e: self.log(f"WINDOW CLOSE POSITION CHECK WARNING: {e}")
+                try: fx_clear_runtime_state(self)
+                except Exception: pass
+                try: fx_release_profile_lock(self)
+                except Exception as e: self.log(f"WINDOW CLOSE PROFILE LOCK WARNING: {e}")
+            finally:
+                try: self.root.after(0,self.root.destroy)
+                except Exception: pass
+        threading.Thread(target=_shutdown,name="ForexGuiCloseWorker",daemon=True).start()
 
-        self.is_running = False
-        try:
-            p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) and self.symbol else None
-            if not p:
-                fx_clear_runtime_state(self)
-        except Exception:
-            pass
-        try:
-            fx_release_profile_lock(self)
-        except Exception:
-            pass
-        self.root.destroy()
 
     # -------------------- PERFORMANCE / TRADE ACCOUNTING ----
 
@@ -9900,98 +9915,25 @@ def fx_v2_calculate_protection_prices(self, symbol, side, actual_entry, position
     sl = fx_v2_apply_atr_sl(self, symbol, side, actual_entry, vals[0], position_qty)
     return (sl, vals[1], vals[2], abs(sl-actual_entry)/actual_entry, vals[4], vals[5])
 
-def fx_v2_calculate_entry_qty(self, symbol, balance, reference_price,
-                              risk_pct, sl_price_fraction, size_mode, fixed_qty):
-    # When ATR SL or PIPS SL is enabled, size from the actual intended stop distance
-    # rather than the generic V1 percentage/ROI approximation.
-    if size_mode == "FIXED_QTY":
-        return fx_calculate_entry_qty(self, symbol, balance, reference_price,
-                                       risk_pct, sl_price_fraction, size_mode, fixed_qty)
-    fraction = float(sl_price_fraction)
-    if _v2_bool(self, "v_use_atr_sl", False):
+def fx_v2_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty):
+    if size_mode=="FIXED_QTY":
+        return fx_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty)
+    fraction=float(sl_price_fraction)
+    ai_active=(str(self.v_signal_mode.get()).strip().upper()=="AI_AGENT" and bool(getattr(self,"_ai_active_management",None)))
+    if ai_active:
+        self.log(f"AI SIZING AUTHORITY | Risk={float(risk_pct)*100.0:.3f}% | StopFraction={fraction:.8g} | Dynamic AI SL preserved")
+    elif _v2_bool(self,"v_use_atr_sl",False):
         try:
-            rows = self.exchange.fetch_ohlcv(symbol, self.v_tf.get(), 120)
-            d = pd.DataFrame(rows, columns=["time","open","high","low","close","vol"])
-            tr = pd.concat([d["high"]-d["low"], (d["high"]-d["close"].shift(1)).abs(),
-                            (d["low"]-d["close"].shift(1)).abs()], axis=1).max(axis=1)
-            atr = float(calculate_rma(tr, 14).iloc[-2])
-            fraction = (max(0.1, _v2_float(self, "e_atr_sl_mult", 1.5)) * atr) / float(reference_price)
-        except Exception as e:
-            self.log(f"ATR SIZING WARNING: {e}")
-    elif str(self.v_sl_mode.get()).upper() == "PIPS":
-        try:
-            fraction = (fx_v2_pip_size(symbol) * float(self.e_sl_pct.get())) / float(reference_price)
-        except Exception:
-            pass
-    return fx_calculate_entry_qty(self, symbol, balance, reference_price,
-                                  risk_pct, fraction, size_mode, fixed_qty)
+            rows=self.exchange.fetch_ohlcv(symbol,self.v_tf.get(),120)
+            d=pd.DataFrame(rows,columns=["time","open","high","low","close","vol"]); prev=d["close"].shift(1)
+            tr=pd.concat([d["high"]-d["low"],(d["high"]-prev).abs(),(d["low"]-prev).abs()],axis=1).max(axis=1)
+            fraction=(max(0.1,_v2_float(self,"e_atr_sl_mult",1.5))*float(calculate_rma(tr,14).iloc[-2]))/float(reference_price)
+        except Exception as e: self.log(f"ATR SIZING WARNING: {e}")
+    elif str(self.v_sl_mode.get()).upper()=="PIPS":
+        try: fraction=(fx_v2_pip_size(symbol)*float(self.e_sl_pct.get()))/float(reference_price)
+        except Exception: pass
+    return fx_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,fraction,size_mode,fixed_qty)
 
-def fx_v2_normalize_symbol(self, exchange, exchange_id, raw_symbol):
-    raw = str(raw_symbol).strip()
-    if _v2_bool(self, "v_auto_symbol", True):
-        return fx_normalize_symbol(self, exchange, exchange_id, raw)
-    info = mt5.symbol_info(raw)
-    if info is None:
-        raise RuntimeError(f"Broker Symbol Auto-Discovery is OFF and exact symbol was not found: {raw}")
-    mt5.symbol_select(raw, True)
-    return raw
-
-def fx_v2_finalize_performance(self, reason="UNKNOWN", balance=None):
-    _v2_original_finalize(self, reason=reason, balance=balance)
-    # Infer streak from the latest completed trade P/L.
-    try:
-        pnl = float(self.trade_pnls[-1]) if self.trade_pnls else 0.0
-        if pnl < 0:
-            self.v2_loss_streak += 1
-        elif pnl > 0:
-            self.v2_loss_streak = 0
-    except Exception:
-        pass
-
-def fx_v2_recover_position(self):
-    if not _v2_bool(self, "v_position_recovery", True):
-        return
-    try:
-        p = fx_fetch_position(self, self.symbol)
-        if not p:
-            fx_clear_runtime_state(self)
-            return
-        state = fx_load_runtime_state(self) or {}
-        saved = state.get("protected") if isinstance(state, dict) else None
-        raw = p.get("raw", {})
-        info = raw.get("info", {}) if isinstance(raw, dict) else {}
-        broker_sl = float(info.get("sl") or 0.0)
-        if isinstance(saved, dict) and saved.get("side") == p["side"]:
-            saved["qty"] = p["qty"]; saved["entry"] = p["entry"]; saved["sl"] = broker_sl or float(saved.get("sl") or 0.0)
-            self.last_protected_position = saved
-            self.tp1_be_done = bool(state.get("tp1_be_done", False))
-            self.reentry_direction_lock = state.get("reentry_direction_lock")
-            self.log(f"RUNTIME RECOVERY ✓ | Restored {p['side']} {p['qty']} lots | SL={saved.get('sl')} TP1={saved.get('tp1')} TP2={saved.get('tp2')}")
-        else:
-            self.last_protected_position = {
-                "side": p["side"], "qty": p["qty"], "entry": p["entry"],
-                "sl": broker_sl, "tp1": 0.0, "tp2": 0.0,
-                "sl_id": "RECOVERED", "tp1_id": None, "tp2_id": None,
-                "tp_orders_enabled": False, "hold_sl_wait_reversal": False,
-            }
-            self.log(f"POSITION RECOVERY ✓ | Existing {p['side']} {p['qty']} lots @ {p['entry']:.8f} | Broker SL={broker_sl:.8f}")
-    except Exception as e:
-        self.log(f"POSITION RECOVERY WARNING: {e}")
-
-# Capture V1 methods before replacing them.
-_fx_v2_original_open = fx_open_market_position
-_fx_v2_original_calc_protection = fx_calculate_protection_prices
-_v2_original_finalize = UniversalFuturesBotGUI._finalize_performance_trade
-
-# Override V1 methods with V2-aware wrappers.
-UniversalFuturesBotGUI.open_market_position = fx_v2_open_market_position
-UniversalFuturesBotGUI.calculate_entry_qty = fx_v2_calculate_entry_qty
-UniversalFuturesBotGUI.normalize_symbol = fx_v2_normalize_symbol
-UniversalFuturesBotGUI.calculate_protection_prices = fx_v2_calculate_protection_prices
-UniversalFuturesBotGUI._finalize_performance_trade = fx_v2_finalize_performance
-
-# Start wrapper: keeps V1 startup and adds V2 state/watchdog/recovery.
-_fx_v2_original_start = fx_start_bot
 def fx_v2_start_bot(self):
     if self.is_running:
         return
@@ -10133,32 +10075,51 @@ def _r65_load_ai(self, cfg):
         w.delete(0,tk.END); w.insert(0,cfg.get(k,default))
     self.v_ai_require_trend.set(cfg.get("ai_require_trend",True)); self.v_ai_require_structure.set(cfg.get("ai_require_structure",True))
     self.v_reverse_exit_mode.set(cfg.get("reverse_exit_mode","MIN_FAMILIES"))
+    self.v_grid_mode.set(cfg.get("grid_mode","OFF"))
+    self.v_liq_entry_mode.set(cfg.get("liq_entry_mode","FRESH_BREAK"))
+    self.e_div_min_count.delete(0,tk.END); self.e_div_min_count.insert(0,cfg.get("div_min_count","1"))
+    self.v_div_entry_mode.set(cfg.get("div_entry_mode","FRESH"))
     self.ai_agent_preset_name=cfg.get("ai_agent_preset_name","CURRENT_SETTINGS")
     self.ai_agent_preset_applied=bool(cfg.get("ai_agent_preset_applied",False))
 
 
 def r65_load(self):
-    _prev_load(self)
+    """Additive migration: preserve existing saved values; fill only missing fields."""
     try:
         with open(CONFIG_FILE,encoding="utf-8") as f: cfg=json.load(f)
-        schema=int(cfg.get("config_schema_version",0) or 0)
-    except Exception:
-        cfg={}; schema=0
-    if schema < CONFIG_SCHEMA_VERSION:
-        self._apply_ai_agent_recommended_defaults()
-        self.ai_agent_preset_applied=True; self.ai_agent_preset_name=AI_AGENT_PRESET_NAME
-        self.log(f"CONFIG MIGRATION R6.5: schema {schema} -> {CONFIG_SCHEMA_VERSION}; Forex strategy/risk settings migrated to Crypto AI-Agent R6.5 parity; MT5 credentials/broker mode/symbol preserved.")
-    else:
-        _r65_load_ai(self,cfg)
+        if not isinstance(cfg,dict): cfg={}
+    except Exception: cfg={}
+    try: schema=int(cfg.get("config_schema_version",0) or 0)
+    except Exception: schema=0
+    if schema<CONFIG_SCHEMA_VERSION:
+        missing=[]
+        for k,v in AI_AGENT_PRESET.items():
+            if k not in cfg:
+                cfg[k]=v
+                missing.append(k)
+        cfg.setdefault("ai_agent_preset_name","CURRENT_SETTINGS")
+        cfg.setdefault("ai_agent_preset_applied",False)
+        cfg["config_schema_version"]=CONFIG_SCHEMA_VERSION
+        cfg["runtime_schema_version"]=RUNTIME_SCHEMA_VERSION
+        cfg["app_version"]=APP_VERSION
+        try:
+            with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
+            self.log(f"CONFIG MIGRATION R6.5: schema {schema} -> {CONFIG_SCHEMA_VERSION}; initialized {len(missing)} missing fields; existing saved values preserved.")
+        except Exception as e: self.log(f"CONFIG MIGRATION SAVE WARNING: {e}")
+    _prev_load(self)
+    try:
+        with open(CONFIG_FILE,encoding="utf-8") as f: final_cfg=json.load(f)
+    except Exception: final_cfg=cfg
+    _r65_load_ai(self,final_cfg)
+    self._settings_dirty=False
     return None
-
 
 def r65_save(self):
     _prev_save(self)
     try:
         with open(CONFIG_FILE,encoding="utf-8") as f: cfg=json.load(f)
         cfg.update({
-            "config_schema_version":CONFIG_SCHEMA_VERSION,"app_version":APP_VERSION,
+            "config_schema_version":CONFIG_SCHEMA_VERSION,"runtime_schema_version":RUNTIME_SCHEMA_VERSION,"app_version":APP_VERSION,
             "ai_agent_preset_name":self.ai_agent_preset_name,"ai_agent_preset_applied":self.ai_agent_preset_applied,
             "ai_min_families":self.e_ai_min_families.get(),"ai_min_edge":self.e_ai_min_edge.get(),"ai_family_confidence":self.e_ai_family_confidence.get(),"ai_max_conflicts":self.e_ai_max_conflicts.get(),
             "ai_require_trend":self.v_ai_require_trend.get(),"ai_require_structure":self.v_ai_require_structure.get(),
@@ -10167,7 +10128,7 @@ def r65_save(self):
             "ai_min_tp1_r_mult":AI_AGENT_MIN_TP1_R_MULT,"ai_max_tp1_r_mult":AI_AGENT_MAX_TP1_R_MULT,
             "ai_min_tp2_r_mult":AI_AGENT_MIN_TP2_R_MULT,"ai_max_tp2_r_mult":AI_AGENT_MAX_TP2_R_MULT,
             "reverse_exit_mode":self.v_reverse_exit_mode.get(),"min_reverse_families":self.e_min_reverse_families.get(),
-            "max_open_trades":self.e_max_open_trades.get(),
+            "grid_mode":self.v_grid_mode.get(),"liq_entry_mode":self.v_liq_entry_mode.get(),"div_min_count":self.e_div_min_count.get(),"div_entry_mode":self.v_div_entry_mode.get(),"max_open_trades":self.e_max_open_trades.get(),
         })
         with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
     except Exception as e: self.log(f"R6.5 AI config save warning: {e}")
