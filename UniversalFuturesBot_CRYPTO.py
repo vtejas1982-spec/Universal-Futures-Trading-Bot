@@ -997,8 +997,7 @@ def _volume_sr_series(frame, vol_threshold=6):
     fresh_bull=np.zeros(n,dtype=bool); fresh_bear=np.zeros(n,dtype=bool)
     res_hi=res_zone=sup_lo=sup_zone=np.nan
     vma=x["vol"].rolling(int(vol_threshold)).mean()
-    for i in range(n):
-        if i>=5:
+    for i in range(n):        if i>=5:
             p=i-3
             up=(float(x.high.iloc[p])>float(x.high.iloc[p-1])>float(x.high.iloc[p-2])
                 and float(x.high.iloc[p+1])<float(x.high.iloc[p])>float(x.high.iloc[p+2])
@@ -1997,8 +1996,7 @@ class UniversalFuturesBotGUI:
             "bot_id": self._sanitize_profile_id(),
             "session_id": self.session_id,
             "exchange": self.exchange_id,
-            "account_mode": self.runtime_account_mode,
-            "symbol": self.symbol,
+            "account_mode": self.runtime_account_mode,            "symbol": self.symbol,
             "timeframe": self.runtime_timeframe,
             "strategy_mode": self.runtime_strategy_mode,
             "strategy_modules": self.runtime_strategy_modules,
@@ -2998,7 +2996,6 @@ class UniversalFuturesBotGUI:
         )
         legacy_path = Path(CONFIG_FILE) if profile == "BOT-01" else None
         has_legacy = bool(legacy_path and legacy_path.exists())
-
         if not has_profile_files and not has_legacy:
             messagebox.showinfo(
                 "Delete Profile",
@@ -3997,8 +3994,7 @@ class UniversalFuturesBotGUI:
 
         # The crypto implementation exposes these source toggles as individual
         # BooleanVars. Keep them inside MOMENTUM, matching the Forex V8.4 GUI.
-        div_names = [
-            ("div_use_macd", "MACD"),
+        div_names = [            ("div_use_macd", "MACD"),
             ("div_use_macd_hist", "Hist"),
             ("div_use_rsi", "RSI"),
             ("div_use_stoch", "Stoch"),
@@ -4997,8 +4993,7 @@ class UniversalFuturesBotGUI:
             "grid_score_min": self.e_grid_score_min.get().strip(),
             "grid_trend_filter": self.v_grid_trend_filter.get(),
             "grid_recenter": self.v_grid_recenter.get(),
-            "grid_recenter_distance": self.e_grid_recenter.get().strip(),
-            "grid_cooldown": self.e_grid_cooldown.get().strip(),
+            "grid_recenter_distance": self.e_grid_recenter.get().strip(),            "grid_cooldown": self.e_grid_cooldown.get().strip(),
 
             "use_atr": self.v_use_atr.get(),
             "atr_min_pct": self.e_atr_min_pct.get().strip(),
@@ -5997,8 +5992,7 @@ class UniversalFuturesBotGUI:
 
         market = self.exchange.market(symbol)
 
-        min_amount = (
-            (market.get("limits") or {})
+        min_amount = (            (market.get("limits") or {})
             .get("amount", {})
             .get("min")
         )
@@ -6997,8 +6991,7 @@ class UniversalFuturesBotGUI:
             symbol,
             order_type,
             side,
-            qty,
-            None,
+            qty,            None,
             params,
         )
 
@@ -7997,8 +7990,7 @@ class UniversalFuturesBotGUI:
                 order = self._fetch_specific_order(symbol, oid)
                 if not order:
                     self.log(
-                        f"GRID SYNC VERIFY NOTICE: no definitive order record for ID={oid}; "
-                        "retaining local order state."
+                        f"GRID SYNC VERIFY NOTICE: no definitive order record for ID={oid}; "                        "retaining local order state."
                     )
                     continue
                 status = str(order.get("status") or "").lower()
@@ -8997,8 +8989,7 @@ class UniversalFuturesBotGUI:
 
                 grid_cfg = self._grid_initialize(
                     self.symbol,
-                    self.start_balance,
-                    current_equity,
+                    self.start_balance,                    current_equity,
                 )
 
                 # A genuinely new session must never silently adopt an existing
@@ -9997,8 +9988,7 @@ class UniversalFuturesBotGUI:
         try:
             timeframe = str(self.v_tf.get()).strip().lower()
             supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "45m", "1h", "4h"}
-            if timeframe not in supported_timeframes:
-                raise ValueError(
+            if timeframe not in supported_timeframes:                raise ValueError(
                     f"Unsupported timeframe: {timeframe}. Use 1m, 3m, 5m, 15m, 30m, 45m, 1h or 4h."
                 )
 
@@ -10997,8 +10987,7 @@ class UniversalFuturesBotGUI:
                             float(df["rsi"].iloc[-3])
                             >= float(df["rsi_ma"].iloc[-3])
                             and
-                            float(df["rsi"].iloc[-2])
-                            < float(df["rsi_ma"].iloc[-2])
+                            float(df["rsi"].iloc[-2])                            < float(df["rsi_ma"].iloc[-2])
                         )
 
                         if rsi_logic == "CROSS_MA":
@@ -11538,6 +11527,15 @@ class UniversalFuturesBotGUI:
                         exited_side = None
                         exit_reason = "UNKNOWN"
                         previous_protection = self.last_protected_position
+                        # A flat cycle is not itself a new exit. Preserve the
+                        # cooldown timestamp only when this cycle actually
+                        # observes a previously-live bot trade/position.
+                        # Otherwise refreshing last_flat_time every polling
+                        # cycle makes a 15-minute cooldown effectively infinite.
+                        had_live_state = (
+                            previous_protection is not None
+                            or self.active_trade is not None
+                        )
                         if previous_protection:
                             exited_side = previous_protection.get("side")
                             exit_reason = self._detect_protection_exit_reason(
@@ -11600,7 +11598,11 @@ class UniversalFuturesBotGUI:
                         self.hold_sl_threshold_hit = False
                         self.hold_sl_threshold_logged = False
                         self.last_protection_reconcile = 0.0
-                        self.last_flat_time = time.time()
+                        # Only start/restart cooldown when a real live state
+                        # transitioned to flat. A continuously-flat bot must
+                        # not reset the cooldown on every 30-second poll.
+                        if had_live_state:
+                            self.last_flat_time = time.time()
 
                     closed_candle_ts = int(df["time"].iloc[-2])
                     closed_candle_time = time.strftime(
@@ -11984,8 +11986,7 @@ class UniversalFuturesBotGUI:
                                     desired_side,
                                     actual_entry,
                                     actual_qty,
-                                    new_position.get("initial_margin", 0.0),
-                                    effective_sl_target_pct,
+                                    new_position.get("initial_margin", 0.0),                                    effective_sl_target_pct,
                                     tp1_target_pct,
                                     tp2_target_pct,
                                     effective_sl_mode,
