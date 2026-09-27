@@ -12,6 +12,29 @@
 - `BUILD_CRYPTO_AI_AGENT_R6.5_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+## R6.5 Full engine audit + UI/runtime hardening
+
+### Fixed
+- GUI execution-log newline defect fixed; long messages now wrap vertically.
+- Periodic configuration writes now occur only when settings are dirty.
+- Repeated identical completed-candle strategy diagnostics are suppressed.
+- CCXT exchange time-difference correction and receive-window hardening added.
+- Active R6.5 source comments cleaned of obsolete release labels.
+
+### Added
+- Copy Log, Clear Log and Auto Scroll controls.
+- Bounded GUI log retention.
+- Settings dirty tracking.
+- Exchange/account-mode callback validation.
+- R6.5 regression contract tests and a full audit report.
+
+### Verified
+- Python compilation passed.
+- 11/11 R6.5 contract tests passed locally.
+- AI decision and AI risk/SL/TP hard-envelope smoke tests passed.
+
+See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
+
 ## Repository cleanup
 - Removed superseded duplicate Crypto root engines (generic, R9 production, and R9.6 unified-protection copies).
 - Removed superseded Crypto AI Agent R2/R3/R4 root copies.
