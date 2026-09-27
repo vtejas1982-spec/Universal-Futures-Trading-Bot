@@ -48,7 +48,7 @@ from pathlib import Path
 
 APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.5"
 APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.5 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.5-THREAD-SAFETY-PROTECTION-CONTRACT-AUDIT"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.5-UI-LOG-CONFIG-EXCHANGE-CONTRACT-AUDIT"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -100,7 +100,7 @@ EVIDENCE_DEFAULT_REQUIRE_TREND = True
 EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT = True
 
 # ---------------------------------------------------------------------------
-# AI AGENT R2 — deterministic market-intelligence council.
+# AI AGENT R6.5 — deterministic market-intelligence council.
 # Inspired by the attached research-desk guide: specialists -> leads ->
 # adversarial review -> chief decision. This is NOT an LLM; it uses only
 # verified completed-candle/module evidence and explicit rules.
@@ -215,7 +215,7 @@ AI_AGENT_PRESET = {
     "reverse_exit_mode": "MIN_FAMILIES",
     "min_reverse_families": "2",
     "hold_sl_wait_reversal": False,
-    # Indicator parameters / entry semantics. These are the audited R4 GUI
+    # Indicator parameters / entry semantics. These are the audited GUI
     # defaults, made explicit so selecting the preset is fully reproducible.
     "st_len": "10", "st_mult": "2.0", "st_source": "CLOSE", "st_entry_mode": "FRESH_FLIP", "st_change_atr": True,
     "ema_len": "200", "ema_fast": "9", "ema_slow": "20", "ema_cross_entry_mode": "FRESH_CROSS",
@@ -309,6 +309,7 @@ REMOTE_STOP_STALE_SECONDS = 300.0
 ACCOUNT_READ_RETRIES = 3
 ACCOUNT_READ_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
+MAX_GUI_LOG_LINES = 4000
 DEFAULT_ADX_LEN = 14
 PROFILE_OPERATION_SCHEMA_VERSION = 2  # V8.2.2 explicit current-vs-selected profile controls
 # V8.3.0 advanced strategy defaults
@@ -333,7 +334,7 @@ def _kill_switch_log(path, message):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).isoformat()
         with open(path, "a", encoding="utf-8") as fh:
-            fh.write(f"[{stamp}] {message}\\n")
+            fh.write(f"[{stamp}] {message}\n")
     except Exception:
         pass
 
@@ -368,7 +369,11 @@ def _kill_switch_exchange(exchange_id, api_key, api_secret, account_mode):
         "secret": api_secret,
         "enableRateLimit": True,
         "timeout": 20000,
-        "options": {"defaultType": supported[exchange_id]},
+        "options": {
+            "defaultType": supported[exchange_id],
+            "adjustForTimeDifference": True,
+            "recvWindow": 10000,
+        },
     })
     if exchange_id == "bybit":
         if account_mode == "BYBIT_DEMO":
@@ -2320,6 +2325,9 @@ class UniversalFuturesBotGUI:
         self._gui_thread_ident = threading.get_ident()
         self._ui_queue = queue.Queue(maxsize=10000)
         self._ui_queue_shutdown = False
+        self._settings_tracking_ready = False
+        self._settings_dirty = True
+        self._settings_trace_handles = []
         self.ai_agent_preset_applied = False
         self.ai_agent_preset_name = ""
         self._ai_agent_mode_prompt_active = False
@@ -2361,6 +2369,9 @@ class UniversalFuturesBotGUI:
 
         # Execution log is configured to auto-follow the newest message.
         self.log_autoscroll = True
+        self.v_log_autoscroll = None
+        self._log_status_var = None
+        self._log_scroll_job = None
 
         self.exchange = None
         self.exchange_id = None
@@ -2426,6 +2437,7 @@ class UniversalFuturesBotGUI:
         self.volume_sr_cache = {}
         self.volume_sr_cache_time = 0.0
         self.last_advanced_signal_log = None
+        self.last_strategy_signal_log_key = None
 
         self._init_csv_log()
         self._init_master_db()
@@ -2437,6 +2449,7 @@ class UniversalFuturesBotGUI:
         self.update_estimated_window()
         self.load_settings()
         self._refresh_runtime_gui_snapshot()
+        self._install_settings_dirty_tracking()
         self._refresh_profile_list(select_profile=self.bot_profile_id)
         self._schedule_profile_status_heartbeat()
 
@@ -2446,6 +2459,109 @@ class UniversalFuturesBotGUI:
         self.root.after(500, self._check_resume_candidate)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # -------------------- SETTINGS / UI SAFETY HELPERS ----------
+    def _on_exchange_selected(self, selected_exchange=None):
+        """Keep Account Mode valid when the selected exchange changes."""
+        try:
+            exchange_id = str(selected_exchange or self.v_exchange.get()).strip().lower()
+            allowed = {
+                "bybit": ("BYBIT_DEMO", "BYBIT_TESTNET", "LIVE"),
+                "binance": ("TESTNET", "LIVE"),
+                "gate": ("TESTNET", "LIVE"),
+                "bitget": ("DEMO", "LIVE"),
+                "weex": ("DEMO", "LIVE"),
+            }
+            modes = allowed.get(exchange_id)
+            if not modes:
+                return
+            current = str(self.v_account_mode.get()).strip().upper()
+            if current not in modes:
+                self.v_account_mode.set(modes[0])
+                self.log(
+                    f"ACCOUNT MODE AUTO-ADJUSTED: {exchange_id.upper()} -> {modes[0]} "
+                    f"(previous mode {current or 'EMPTY'} was invalid for this exchange)."
+                )
+        except Exception as e:
+            self.log(f"EXCHANGE MODE CALLBACK WARNING: {e}")
+
+    def _mark_settings_dirty(self, *_args):
+        if self._settings_tracking_ready:
+            self._settings_dirty = True
+
+    def _mark_settings_saved(self):
+        self._settings_dirty = False
+
+    def _install_settings_dirty_tracking(self):
+        """Track GUI edits without rewriting the profile every scan cycle."""
+        if self._settings_trace_handles:
+            self._settings_tracking_ready = True
+            return
+        self._settings_tracking_ready = False
+        for attr in dir(self):
+            if not (attr.startswith("v_") or attr.startswith("e_")):
+                continue
+            try:
+                widget = getattr(self, attr)
+            except Exception:
+                continue
+            if attr.startswith("v_") and hasattr(widget, "trace_add"):
+                try:
+                    token = widget.trace_add("write", lambda *_args: self._mark_settings_dirty())
+                    self._settings_trace_handles.append(("trace", widget, token))
+                except Exception:
+                    pass
+            if attr.startswith("e_") and hasattr(widget, "bind"):
+                try:
+                    widget.bind("<KeyRelease>", lambda _event: self._mark_settings_dirty(), add="+")
+                    widget.bind("<FocusOut>", lambda _event: self._mark_settings_dirty(), add="+")
+                except Exception:
+                    pass
+        self._settings_tracking_ready = True
+        self._settings_dirty = False
+
+    def _log_status(self, message):
+        try:
+            if self._log_status_var is not None:
+                self._log_status_var.set(str(message))
+        except Exception:
+            pass
+
+    def _sync_log_autoscroll(self):
+        try:
+            self.log_autoscroll = bool(self.v_log_autoscroll.get())
+            self._log_status("Auto-scroll " + ("ON" if self.log_autoscroll else "OFF"))
+            if self.log_autoscroll:
+                self._scroll_log_to_bottom()
+        except Exception:
+            pass
+
+    def copy_log(self):
+        """Copy the complete GUI execution log to the Windows clipboard."""
+        try:
+            content = self.log_box.get("1.0", "end-1c")
+            if not content.strip():
+                self._log_status("Log is empty")
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            self.root.update_idletasks()
+            self._log_status(f"Copied {len(content.splitlines()):,} log lines")
+        except Exception as e:
+            self._log_status("Copy failed")
+            messagebox.showerror("Copy Log", f"Could not copy the execution log:\n{e}", parent=self.root)
+
+    def clear_log(self):
+        """Clear only the GUI log; CSV/database history remains untouched."""
+        try:
+            self.log_box.delete("1.0", tk.END)
+            self._log_status("Log cleared")
+        except Exception as e:
+            self._log_status(f"Clear failed: {e}")
+
+    def _run_pending_log_scroll(self):
+        self._log_scroll_job = None
+        self._scroll_log_to_bottom()
 
     # -------------------- AI-AGENT PRESET ---------------------
 
@@ -2461,7 +2577,7 @@ class UniversalFuturesBotGUI:
             var.set(value)
 
     def _apply_ai_agent_recommended_defaults(self):
-        """Apply the explicit R6.3 AI-Agent preset to the current profile UI.
+        """Apply the explicit R6.5 AI-Agent preset to the current profile UI.
 
         Credentials, exchange/account mode, symbol and profile identity are
         deliberately untouched. This method is called only after confirmation.
@@ -3063,12 +3179,16 @@ class UniversalFuturesBotGUI:
         state = self._read_json_file(path)
         return state if isinstance(state, dict) else None
 
+
     def _checkpoint_gui_config(self):
-        """Run on Tk's main thread so live GUI edits are safely persisted."""
+        """Persist changed GUI configuration, then checkpoint runtime state."""
         try:
             if not self.is_running:
                 return
-            self.save_settings()
+            if self._settings_dirty:
+                self.save_settings()
+            else:
+                self._refresh_runtime_gui_snapshot()
             self.runtime_config_hash = self._config_hash()
             self._persist_runtime_state(status="RUNNING")
         except Exception as e:
@@ -4519,9 +4639,15 @@ class UniversalFuturesBotGUI:
             try:
                 timestamp = time.strftime("[%H:%M:%S]")
                 self.log_box.insert(tk.END, f"[{timestamp}] {msg}\n")
-                if self.log_autoscroll:
-                    self.root.after_idle(self._scroll_log_to_bottom)
-                    self.root.after(30, self._scroll_log_to_bottom)
+                try:
+                    line_count = int(float(self.log_box.index("end-1c").split(".")[0]))
+                    if line_count > MAX_GUI_LOG_LINES:
+                        excess = line_count - MAX_GUI_LOG_LINES
+                        self.log_box.delete("1.0", f"{excess + 1}.0")
+                except Exception:
+                    pass
+                if self.log_autoscroll and self._log_scroll_job is None:
+                    self._log_scroll_job = self.root.after(30, self._run_pending_log_scroll)
             except Exception:
                 pass
         self._post_ui(write)
@@ -4638,30 +4764,36 @@ class UniversalFuturesBotGUI:
 
         # Execution log stays permanently visible below the settings.
         right_frame = tk.LabelFrame(main_frame, text=" Execution Log ")
-        right_frame.configure(height=185)
+        right_frame.configure(height=220)
         right_frame.pack(side="bottom", fill="x", pady=(6, 0))
         right_frame.pack_propagate(False)
 
+        log_toolbar = tk.Frame(right_frame)
+        log_toolbar.pack(fill="x", padx=5, pady=(4, 2))
+        ttk.Button(log_toolbar, text="Copy Log", width=12, command=self.copy_log).pack(side="left", padx=2)
+        ttk.Button(log_toolbar, text="Clear Log", width=12, command=self.clear_log).pack(side="left", padx=2)
+
+        self.v_log_autoscroll = tk.BooleanVar(value=True)
+        ttk.Checkbutton(log_toolbar, text="Auto Scroll", variable=self.v_log_autoscroll, command=self._sync_log_autoscroll).pack(side="left", padx=8)
+
+        self._log_status_var = tk.StringVar(value="Ready")
+        tk.Label(log_toolbar, textvariable=self._log_status_var, anchor="w", fg="#555555").pack(side="left", padx=8)
+
         log_text_frame = tk.Frame(right_frame)
-        log_text_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        log_text_frame.pack(fill="both", expand=True, padx=5, pady=(2, 5))
         self.log_box = tk.Text(
             log_text_frame,
-            height=9,
+            height=10,
             bg="#111111",
             fg="#00ff66",
             font=("Consolas", 9),
-            wrap="none",
+            wrap="word",
         )
-        self.log_scrollbar = ttk.Scrollbar(
-            log_text_frame, orient="vertical", command=self.log_box.yview
-        )
+        self.log_scrollbar = ttk.Scrollbar(log_text_frame, orient="vertical", command=self.log_box.yview)
         self.log_box.configure(yscrollcommand=self.log_scrollbar.set)
         self.log_box.pack(side="left", fill="both", expand=True)
         self.log_scrollbar.pack(side="right", fill="y")
-        self.log_box.bind(
-            "<Configure>",
-            lambda _event: self.root.after_idle(self._scroll_log_to_bottom),
-        )
+        self.log_box.bind("<Configure>", lambda _event: self.root.after_idle(self._scroll_log_to_bottom))
 
         # 1. Exchange
         f_api = tk.LabelFrame(
@@ -4684,6 +4816,7 @@ class UniversalFuturesBotGUI:
             "gate",
             "bitget",
             "weex",
+            command=self._on_exchange_selected,
         ).grid(row=0, column=1, padx=5, pady=2, sticky="w")
 
         tk.Label(f_api, text="API Key:").grid(
@@ -6312,6 +6445,7 @@ class UniversalFuturesBotGUI:
         try:
             config_path = self._get_config_path(self.bot_profile_id, for_save=True)
             self._write_json_atomic(config_path, cfg)
+            self._mark_settings_saved()
             self._refresh_runtime_gui_snapshot()
             self.log(
                 f"Configuration saved | Profile={self.bot_profile_id} | "
@@ -7127,7 +7261,7 @@ class UniversalFuturesBotGUI:
 
             self._refresh_runtime_gui_snapshot()
 
-            # R6.3: persist a successful schema migration so a profile does not
+            # R6.5: persist a successful schema migration so a profile does not
             # emit the same "schema X -> Y" notice on every subsequent load.
             # Only the schema marker and compatibility aliases are normalized;
             # existing user values remain authoritative.
@@ -7149,6 +7283,7 @@ class UniversalFuturesBotGUI:
                     f"{CONFIG_SCHEMA_VERSION} persisted to {config_path}."
                 )
 
+            self._mark_settings_saved()
             self.log(
                 "Configuration loaded."
             )
@@ -7200,6 +7335,8 @@ class UniversalFuturesBotGUI:
             "timeout": 20000,
             "options": {
                 "defaultType": supported[exchange_id],
+                "adjustForTimeDifference": True,
+                "recvWindow": 10000,
             },
         }
 
@@ -7252,6 +7389,13 @@ class UniversalFuturesBotGUI:
             else:
                 self.log("WEEX LIVE mode selected.")
 
+        try:
+            exchange.options["adjustForTimeDifference"] = True
+            if hasattr(exchange, "load_time_difference"):
+                exchange.load_time_difference()
+                self.log("EXCHANGE TIME SYNC: enabled before private requests.")
+        except Exception as e:
+            self.log(f"EXCHANGE TIME SYNC WARNING: {e}")
         exchange.load_markets()
         return exchange
 
@@ -10661,7 +10805,10 @@ class UniversalFuturesBotGUI:
             self.kill_switch_completed = False
             self.kill_switch_in_progress = False
             self.stop_cleanup_thread = None
-            self.save_settings()
+            if self._settings_dirty:
+                self.save_settings()
+            else:
+                self._refresh_runtime_gui_snapshot()
             self._validate_v83_preflight()
 
             # Validate credentials BEFORE acquiring the profile lock.  A missing
@@ -11326,7 +11473,10 @@ class UniversalFuturesBotGUI:
             return
 
         try:
-            self.save_settings()
+            if self._settings_dirty:
+                self.save_settings()
+            else:
+                self._refresh_runtime_gui_snapshot()
         except Exception as e:
             self.log(f"STOP CONFIG SAVE WARNING: {e}")
 
@@ -11392,7 +11542,10 @@ class UniversalFuturesBotGUI:
         )
         if not requires_exchange_cleanup:
             try:
-                self.save_settings()
+                if self._settings_dirty:
+                    self.save_settings()
+                else:
+                    self._refresh_runtime_gui_snapshot()
             except Exception:
                 pass
             self._ui_queue_shutdown = True
@@ -11407,7 +11560,10 @@ class UniversalFuturesBotGUI:
         self.stop_started_at = time.time()
 
         try:
-            self.save_settings()
+            if self._settings_dirty:
+                self.save_settings()
+            else:
+                self._refresh_runtime_gui_snapshot()
         except Exception as e:
             self.log(f"GUI CLOSE CONFIG SAVE WARNING: {e}")
 
@@ -13652,46 +13808,56 @@ class UniversalFuturesBotGUI:
                     closed_candle_time = time.strftime(
                         "%H:%M:%S", time.gmtime(closed_candle_ts / 1000.0)
                     )
-                    self.log(
-                        f"[{self.exchange_id.upper()}] "
-                        f"TF={timeframe} | "
-                        f"Signal={signal} | "
-                        f"ClosedCandle={close:.8f} | "
-                        f"ClosedCandleTime={closed_candle_time} UTC | "
-                        f"EMA_Filter={'ON' if use_ema else 'OFF'} "
-                        f"EMA_Cross={'ON' if use_ema_cross else 'OFF'} "
-                        f"Mode={ema_cross_entry_mode} "
-                        f"Cross={'BULL' if ema_cross_bull and use_ema_cross else 'BEAR' if ema_cross_bear and use_ema_cross else 'NONE'} | "
-                        f"STEntry={st_entry_mode} SignalMode={signal_mode} "
-                        f"HoldAllReverse={'ON' if self._runtime_gui_value("v_hold_until_all_reverse") else 'OFF'} "
-                        f"PostSL_Lock={'ON' if self._runtime_gui_value("v_require_opposite_after_exit") else 'OFF'} "
-                        f"LockSide={self.reentry_direction_lock or 'NONE'} "
-                        f"Confirmations={'OFF' if signal_mode in ('SINGLE_SIGNAL','ANY_NON_CONFLICTING','2_SIGNALS','3_SIGNALS','4_SIGNALS','SCORE','ADAPTIVE_SCORE') else 'ON'} "
-                         f"States={','.join(name + ':' + ('BULL' if bull and not bear else 'BEAR' if bear and not bull else 'CONFLICT' if bull and bear else 'NEUTRAL') for name, bull, bear in directional_modules) or 'NONE'} "
-                         f"Score=B{buy_score}/S{sell_score} "
-                         f"Required={({'SINGLE_SIGNAL':1,'ANY_NON_CONFLICTING':1,'2_SIGNALS':2,'3_SIGNALS':3,'4_SIGNALS':4,'AI_AGENT':ai_min_families}.get(signal_mode, min_score))} | "
-                         f"DecisionReason={decision_reason} | "
-                        f"MACD={'ON' if use_macd else 'OFF'} "
-                        f"RSI={'ON' if use_rsi else 'OFF'} "
-                        f"BB={'ON' if use_bb else 'OFF'} "
-                        f"STOCH={'ON' if use_stoch else 'OFF'} "
-                        f"VWAP={'ON' if use_vwap else 'OFF'} "
-                        f"VWAP_DELTA={'ON' if use_vwap_delta else 'OFF'}"
-                        f"({vwap_delta_state}) "
-                        f"VIDYA={'ON' if use_vidya else 'OFF'}"
-                        f"({vidya_state}) "
-                        f"LIQ_SWING={'ON' if use_liq_swings else 'OFF'}"
-                        f"({liq_entry_mode if use_liq_swings else 'OFF'}) "
-                        f"TRENDLINE={'ON' if use_trendline else 'OFF'}"
-                        f"({trendline_entry_mode if use_trendline else 'OFF'}) "
-                        f"ATR={'ON' if use_atr else 'OFF'} "
-                        f"ATR%={atr_pct:.3f} "
-                        f"ADX={'ON' if use_adx else 'OFF'} "
-                        f"ADX={float(df['adx'].iloc[-2]):.2f} "
-                        f"ADXGate={'PASS' if adx_pass else 'FAIL'} | "
-                        f"Position={pos_type} "
-                        f"Qty={pos_qty}"
+                    strategy_log_key = (
+                        closed_candle_ts,
+                        signal,
+                        pos_type,
+                        round(float(pos_qty or 0.0), 12),
+                        self.reentry_direction_lock or "NONE",
+                        decision_reason,
                     )
+                    if strategy_log_key != self.last_strategy_signal_log_key:
+                        self.log(
+                            f"[{self.exchange_id.upper()}] "
+                            f"TF={timeframe} | "
+                            f"Signal={signal} | "
+                            f"ClosedCandle={close:.8f} | "
+                            f"ClosedCandleTime={closed_candle_time} UTC | "
+                            f"EMA_Filter={'ON' if use_ema else 'OFF'} "
+                            f"EMA_Cross={'ON' if use_ema_cross else 'OFF'} "
+                            f"Mode={ema_cross_entry_mode} "
+                            f"Cross={'BULL' if ema_cross_bull and use_ema_cross else 'BEAR' if ema_cross_bear and use_ema_cross else 'NONE'} | "
+                            f"STEntry={st_entry_mode} SignalMode={signal_mode} "
+                            f"HoldAllReverse={'ON' if self._runtime_gui_value("v_hold_until_all_reverse") else 'OFF'} "
+                            f"PostSL_Lock={'ON' if self._runtime_gui_value("v_require_opposite_after_exit") else 'OFF'} "
+                            f"LockSide={self.reentry_direction_lock or 'NONE'} "
+                            f"Confirmations={'OFF' if signal_mode in ('SINGLE_SIGNAL','ANY_NON_CONFLICTING','2_SIGNALS','3_SIGNALS','4_SIGNALS','SCORE','ADAPTIVE_SCORE') else 'ON'} "
+                             f"States={','.join(name + ':' + ('BULL' if bull and not bear else 'BEAR' if bear and not bull else 'CONFLICT' if bull and bear else 'NEUTRAL') for name, bull, bear in directional_modules) or 'NONE'} "
+                             f"Score=B{buy_score}/S{sell_score} "
+                             f"Required={({'SINGLE_SIGNAL':1,'ANY_NON_CONFLICTING':1,'2_SIGNALS':2,'3_SIGNALS':3,'4_SIGNALS':4,'AI_AGENT':ai_min_families}.get(signal_mode, min_score))} | "
+                             f"DecisionReason={decision_reason} | "
+                            f"MACD={'ON' if use_macd else 'OFF'} "
+                            f"RSI={'ON' if use_rsi else 'OFF'} "
+                            f"BB={'ON' if use_bb else 'OFF'} "
+                            f"STOCH={'ON' if use_stoch else 'OFF'} "
+                            f"VWAP={'ON' if use_vwap else 'OFF'} "
+                            f"VWAP_DELTA={'ON' if use_vwap_delta else 'OFF'}"
+                            f"({vwap_delta_state}) "
+                            f"VIDYA={'ON' if use_vidya else 'OFF'}"
+                            f"({vidya_state}) "
+                            f"LIQ_SWING={'ON' if use_liq_swings else 'OFF'}"
+                            f"({liq_entry_mode if use_liq_swings else 'OFF'}) "
+                            f"TRENDLINE={'ON' if use_trendline else 'OFF'}"
+                            f"({trendline_entry_mode if use_trendline else 'OFF'}) "
+                            f"ATR={'ON' if use_atr else 'OFF'} "
+                            f"ATR%={atr_pct:.3f} "
+                            f"ADX={'ON' if use_adx else 'OFF'} "
+                            f"ADX={float(df['adx'].iloc[-2]):.2f} "
+                            f"ADXGate={'PASS' if adx_pass else 'FAIL'} | "
+                            f"Position={pos_type} "
+                            f"Qty={pos_qty}"
+                        )
+                        self.last_strategy_signal_log_key = strategy_log_key
 
                     # ------------------------------------------------
                     # 6. If there is already a position in the same
