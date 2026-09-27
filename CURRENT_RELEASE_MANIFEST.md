@@ -1,56 +1,43 @@
-# Current Production Manifest — V8.4.2-R9.6
+# Current Release Manifest — 2026-09-27
 
-## Live
-- UniversalFuturesBot_CRYPTO.py
-- UniversalFuturesBot_CRYPTO_R9_PRODUCTION.py
-- UniversalFuturesBot_CRYPTO_R9_6_UNIFIED_PROTECTION.py
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R4.py
-- UniversalForexBot_MT5.py
+This main branch contains the current active production code only. Superseded root-level bot copies have been removed; their history remains available in Git history.
 
-## Backtest
-- UniversalFuturesBot_CRYPTO_BACKTESTER.py
-- tests/test_crypto_r8_regressions.py
-- tests/test_crypto_r6_regressions.py
-- UniversalForexBot_MT5_BACKTESTER.py
+## Live engines
+- UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py — Crypto Futures production engine
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py — Crypto AI-Agent production/Demo engine
+- UniversalForexBot_MT5.py — Forex/MT5 production engine
+
+## Backtesters
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py — AI-Agent strategy/risk/SL/TP backtester
+- UniversalForexBot_MT5_BACKTESTER.py — Forex/MT5 backtester
 
 ## Tests
 - tests/test_crypto_engine.py
 - tests/test_crypto_gui.py
 - tests/test_forex_engine.py
+- tests/test_crypto_ai_agent_r6_5_contract.py
 
 ## Build
 - BUILD_CRYPTO_EXE.bat
+- BUILD_CRYPTO_AI_AGENT_R6.5_EXE.bat
 - BUILD_FOREX_EXE.bat
 
 ## Documentation
 - README.md
 - CHANGELOG.md
+- docs/CRYPTO_AI_AGENT_R6_5_RELEASE_NOTES.md
+- docs/CRYPTO_AI_AGENT_R6_5_BACKTESTER_RELEASE_NOTES.md
 - docs/CRYPTO_R9_6_RELEASE_NOTES.md
-- docs/CRYPTO_AI_AGENT_R4_RELEASE_NOTES.md
-- docs/CRYPTO_AI_AGENT_R3_RELEASE_NOTES.md
-- docs/CRYPTO_AI_AGENT_R2_RELEASE_NOTES.md
-- docs/CRYPTO_R9_3_RELEASE_NOTES.md
-- docs/CRYPTO_R9_1_RELEASE_NOTES.md
-- docs/CRYPTO_R9_RELEASE_NOTES.md
-- docs/CRYPTO_R8_RELEASE_NOTES.md
-- docs/CRYPTO_R6_RELEASE_NOTES.md
-- docs/CRYPTO_R5_RELEASE_NOTES.md
 - docs/FOREX_R5_RELEASE_NOTES.md
-- docs/R5_ENGINE_AUDIT_2026-09-22.md
 
-## Version
+## Current versions
 - Crypto: V8.4.2-R9.6
-- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R4
+- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R6.5
 - Forex/MT5: V8.4.2-R5
-- Config schema: 12 (R9.6) / 13 (AI Agent R2)
-- Runtime schema: 12 (R9.6) / 13 (AI Agent R2)
+- Crypto AI config schema: 21
+- Crypto AI runtime schema: 22
+- Crypto R9.6 config/runtime schema: 12
+- Forex/MT5: V8.4.2-R5
 
-## Rule
-Use Crypto R9.6 / Forex R5 as the current production line. AI Agent R2 is a separate controlled strategy build for Demo/backtest evaluation. Do not run superseded local R9.1/R9.2/R9.3/R9.5 copies.
-
-
-## Historical / Superseded AI Builds
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R3.py
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R2.py
-- docs/CRYPTO_AI_AGENT_R3_RELEASE_NOTES.md
-- docs/CRYPTO_AI_AGENT_R2_RELEASE_NOTES.md
+## Naming policy
+Active production root files use the release-identifying filename. New experimental revisions should be kept in Git branches/tags or a dedicated development directory rather than accumulating duplicate root files.
