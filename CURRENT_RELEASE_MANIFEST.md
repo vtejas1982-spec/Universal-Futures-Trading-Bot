@@ -5,7 +5,7 @@ This main branch contains the current active production code only. Superseded ro
 ## Live engines
 - UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py — Crypto Futures production engine
 - UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py — Crypto AI-Agent production/Demo engine
-- UniversalForexBot_MT5.py — Forex/MT5 production engine
+- UniversalForexBot_MT5.py — Forex/MT5 AI-Agent R6.5 production engine
 
 ## Backtesters
 - UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py — AI-Agent strategy/risk/SL/TP backtester
@@ -32,6 +32,7 @@ This main branch contains the current active production code only. Superseded ro
 - docs/CRYPTO_R9_6_RELEASE_NOTES.md
 - docs/FOREX_R5_RELEASE_NOTES.md
 - docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md
+- docs/FOREX_AI_AGENT_R6_5_FULL_AUDIT_2026-09-28.md
 - docs/CRYPTO_FX_PARITY_AUDIT_2026-09-28.md
 
 ## Current versions
@@ -41,6 +42,7 @@ This main branch contains the current active production code only. Superseded ro
 - Crypto AI config schema: 21
 - Crypto AI runtime schema: 22
 - Crypto R9.6 config/runtime schema: 12
+- Forex AI Agent config/runtime schema: 21 / 22
 
 ## Naming policy
 Active production root files use the release-identifying filename. New experimental revisions should be kept in Git branches/tags or a dedicated development directory rather than accumulating duplicate root files.
