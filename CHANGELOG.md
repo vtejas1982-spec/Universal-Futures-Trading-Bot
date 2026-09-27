@@ -1,3 +1,35 @@
+# V8.4.2 Crypto repository cleanup + AI-Agent R6.5 current release — 2026-09-27
+
+## Current production files
+- `UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py`
+- `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py`
+- `UniversalForexBot_MT5.py`
+
+## Current backtest/build files
+- `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py`
+- `UniversalForexBot_MT5_BACKTESTER.py`
+- `BUILD_CRYPTO_EXE.bat`
+- `BUILD_CRYPTO_AI_AGENT_R6.5_EXE.bat`
+- `BUILD_FOREX_EXE.bat`
+
+## Repository cleanup
+- Removed superseded duplicate Crypto root engines (generic, R9 production, and R9.6 unified-protection copies).
+- Removed superseded Crypto AI Agent R2/R3/R4 root copies.
+- Removed old V8.2/V8.3 development bot/backtester duplicates from the root.
+- Removed the old generic R8 Crypto backtester from the root after introducing the dedicated R6.5 AI-Agent backtester.
+- Removed an obsolete root-level V8.4 evidence release-note file.
+- Historical code remains recoverable from Git history.
+
+## AI-Agent current release
+- Version: `V8.4.2-CRYPTO-AI-AGENT-R6.5`
+- AI recommended preset: `AI_AGENT_RECOMMENDED_R6.5`
+- Config schema: 21
+- Runtime schema: 22
+
+The older R5/R4/R3/R2 entries below are historical changelog entries and do not indicate active files in the main branch.
+
+---
+
 ## V8.4.2-CRYPTO-AI-AGENT-R5 — Confirmed AI-Agent recommended preset + decision-diagnostic hardening — 2026-09-27
 
 ### Added
