@@ -44,9 +44,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R6"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-R6 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R6"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R7"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-R7 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R7"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -59,7 +59,7 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 
 # V8.2 configuration/runtime contracts.
 CONFIG_SCHEMA_VERSION = 9
-RUNTIME_SCHEMA_VERSION = 5  # V8.3.3 runtime adds persistent retired managed-order IDs.
+RUNTIME_SCHEMA_VERSION = 6  # R7 adds explicit stop-request/runtime lifecycle state.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
@@ -121,6 +121,7 @@ DEFAULT_DIV_USE_ALL = True
 RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10
+MAX_STOP_WAIT_SECONDS = 20.0
 ACCOUNT_READ_RETRIES = 3
 ACCOUNT_READ_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
@@ -1783,6 +1784,9 @@ class UniversalFuturesBotGUI:
 
         self.is_running = False
         self.bot_thread = None
+        self.stop_requested = False
+        self.stop_started_at = 0.0
+        self._stop_completion_scheduled = False
 
         # Persistent bot profile / crash-recovery state.
         self.bot_profile_id = "BOT-01"
@@ -2002,6 +2006,8 @@ class UniversalFuturesBotGUI:
             "strategy_modules": self.runtime_strategy_modules,
             "config_hash": self.runtime_config_hash,
             "resumed": bool(self.runtime_resumed),
+            "stop_requested": bool(self.stop_requested),
+            "stop_started_at": self.stop_started_at or None,
             "session_started_at": self.session_started_at,
             "session_max_trades": self.session_max_trades,
             "start_balance": self.start_balance,
@@ -2081,8 +2087,37 @@ class UniversalFuturesBotGUI:
             exchange = str(state.get("exchange") or "").upper()
             symbol = state.get("symbol") or self.e_symbol.get().strip().upper()
             updated = state.get("updated_at_utc", "unknown")
-            position = (state.get("position_state") or {}).get("last_protected_position")
+            position_state = state.get("position_state") or {}
+            position = position_state.get("last_protected_position")
+            active_trade = position_state.get("active_trade")
             grid = state.get("grid_state") or {}
+            has_grid_state = bool(
+                grid.get("active")
+                or grid.get("filled_levels")
+                or grid.get("entry_orders")
+                or grid.get("tp_order_id")
+                or grid.get("sl_order_id")
+            )
+            if (
+                status in ("RUNNING", "STOPPING", "CRASHED")
+                and not position
+                and not active_trade
+                and not has_grid_state
+                and not self._profile_lock_is_active(bot_id)
+            ):
+                state["status"] = "STOPPED"
+                state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+                state["last_error"] = ""
+                try:
+                    self._write_json_atomic(self._get_runtime_state_path(), state)
+                except Exception:
+                    pass
+                self.log(
+                    f"RECOVERY CHECK: stale {status} checkpoint had no saved "
+                    "position/Grid state and no live process; normalized to STOPPED."
+                )
+                self._refresh_profile_list(select_profile=bot_id)
+                return
             mode = state.get("strategy_mode") or grid.get("mode") or "UNKNOWN"
             detail = (
                 f"Previous bot session found.\n\n"
@@ -2135,6 +2170,10 @@ class UniversalFuturesBotGUI:
             self.log(f"Recovery configuration restore warning: {e}")
 
     def _restore_runtime_state(self, state):
+        # A successful resume starts a new live worker lifecycle. A checkpoint
+        # saying STOPPING must never re-arm the stop flag inside the new worker.
+        self.stop_requested = False
+        self.stop_started_at = 0.0
         self.session_id = state.get("session_id") or str(uuid.uuid4())
         self.runtime_account_mode = str(state.get("account_mode") or self.v_account_mode.get())
         self.runtime_timeframe = str(state.get("timeframe") or self.v_tf.get()).lower()
@@ -2575,6 +2614,17 @@ class UniversalFuturesBotGUI:
         except Exception:
             pid = 0
         if pid and pid == os.getpid():
+            current_profile = self._sanitize_profile_id(getattr(self, "bot_profile_id", "BOT-01"))
+            worker_alive = bool(
+                getattr(self, "bot_thread", None)
+                and self.bot_thread.is_alive()
+            )
+            if profile == current_profile and (
+                bool(getattr(self, "is_running", False))
+                or worker_alive
+                or bool(getattr(self, "stop_requested", False))
+            ):
+                return True
             return False
         if pid:
             try:
@@ -2624,8 +2674,31 @@ class UniversalFuturesBotGUI:
         runtime_path = PROFILE_DIR / profile / "runtime_state.json"
         runtime = self._read_json_file(runtime_path) or {}
         status = str(runtime.get("status") or "CONFIGURED").upper()
-        if self._profile_lock_is_active(profile):
-            status = "RUNNING"
+        position_state = runtime.get("position_state") or {}
+        saved_position = position_state.get("last_protected_position")
+        active_trade = position_state.get("active_trade")
+        grid_state = runtime.get("grid_state") or {}
+        has_saved_position = bool(saved_position) or bool(active_trade)
+        has_grid_state = bool(
+            grid_state.get("active")
+            or grid_state.get("filled_levels")
+            or grid_state.get("entry_orders")
+            or grid_state.get("tp_order_id")
+            or grid_state.get("sl_order_id")
+        )
+        lock_active = self._profile_lock_is_active(profile)
+        same_profile_worker_alive = bool(
+            profile == self._sanitize_profile_id(getattr(self, "bot_profile_id", "BOT-01"))
+            and getattr(self, "bot_thread", None)
+            and self.bot_thread.is_alive()
+        )
+        if lock_active or same_profile_worker_alive:
+            status = "STOPPING" if bool(getattr(self, "stop_requested", False)) else "RUNNING"
+        elif status in {"RUNNING", "CRASHED", "STOPPING"} and not has_saved_position and not has_grid_state:
+            # A previous process may have died after writing RUNNING. With no
+            # live process lock and no saved position/Grid inventory, this is
+            # only a stale lifecycle marker, not an active trading process.
+            status = "STOPPED"
         grid_mode = str(cfg.get("grid_mode") or "OFF").upper()
         signal_mode = str(cfg.get("signal_mode") or "SINGLE_SIGNAL").upper()
         strategy_mode = grid_mode if grid_mode not in ("OFF", "DIRECT_SHOT") else signal_mode
@@ -2975,7 +3048,10 @@ class UniversalFuturesBotGUI:
             or bool(grid_state.get("sl_order_id"))
         )
 
-        if status in risky_statuses or has_saved_position or has_grid_state:
+        # A stale RUNNING/CRASHED marker by itself is not proof of an active
+        # bot. The profile lock, saved position, active trade, or Grid state
+        # are the actual safety blockers.
+        if has_saved_position or has_grid_state:
             messagebox.showerror(
                 "Delete Profile BLOCKED",
                 f"Profile {profile} has recovery/trading state that may represent "
@@ -4789,17 +4865,52 @@ class UniversalFuturesBotGUI:
         self.btn_save, self.btn_start, self.btn_stop = self.control_buttons[0]
         self._set_bot_button_states(running=False)
 
-    def _set_bot_button_states(self, running=None):
+    def _set_bot_button_states(self, running=None, stopping=None):
         """Synchronize Save/Start/Stop buttons across every GUI tab."""
         if running is None:
             running = bool(self.is_running)
+        if stopping is None:
+            stopping = bool(self.stop_requested and self.bot_thread and self.bot_thread.is_alive())
         for save_btn, start_btn, stop_btn in getattr(self, "control_buttons", []):
             try:
                 save_btn.config(state="normal")
-                start_btn.config(state="disabled" if running else "normal")
-                stop_btn.config(state="normal" if running else "disabled")
+                start_btn.config(state="disabled" if (running or stopping) else "normal")
+                stop_btn.config(state="normal" if (running and not stopping) else "disabled")
             except Exception:
                 pass
+
+    def _on_worker_finished(self):
+        """Finalize GUI/profile lifecycle after the execution worker exits."""
+        self.bot_thread = None
+        self.stop_requested = False
+        self.stop_started_at = 0.0
+        self._stop_completion_scheduled = False
+        self._release_profile_lock()
+        self._set_bot_button_states(running=False, stopping=False)
+        try:
+            self._refresh_profile_list(select_profile=self.bot_profile_id)
+        except Exception as e:
+            self.log(f"PROFILE UI REFRESH WARNING: {e}")
+
+    def _poll_stop_completion(self):
+        """Keep the GUI responsive while waiting for the worker to terminate."""
+        thread = self.bot_thread
+        if thread is not None and thread.is_alive():
+            elapsed = time.time() - float(self.stop_started_at or time.time())
+            if elapsed >= MAX_STOP_WAIT_SECONDS:
+                self.log(
+                    f"STOP WAIT: worker still active after {MAX_STOP_WAIT_SECONDS:g}s; "
+                    "profile remains locked until the worker exits."
+                )
+                self._stop_completion_scheduled = False
+                return
+            try:
+                self.root.after(250, self._poll_stop_completion)
+            except Exception:
+                self._stop_completion_scheduled = False
+            return
+
+        self._on_worker_finished()
 
     # -------------------- SETTINGS ---------------------------
 
@@ -5521,7 +5632,7 @@ class UniversalFuturesBotGUI:
             self.v_use_atr.set(
                 cfg.get(
                     "use_atr",
-                    False,
+                    DEFAULT_USE_ATR,
                 )
             )
 
@@ -5975,35 +6086,67 @@ class UniversalFuturesBotGUI:
 
     # -------------------- PRECISION --------------------------
     def safe_amount(self, symbol, qty):
-        qty = float(qty)
-
-        if qty <= 0:
+        """Normalize quantity and enforce exchange min/max/precision limits."""
+        requested_qty = float(qty)
+        if requested_qty <= 0:
             return 0.0
-
-        try:
-            qty = float(
-                self.exchange.amount_to_precision(
-                    symbol,
-                    qty,
-                )
-            )
-        except Exception:
-            pass
 
         market = self.exchange.market(symbol)
+        limits = market.get("limits") or {}
+        amount_limits = limits.get("amount") or {}
+        min_amount = amount_limits.get("min")
+        max_amount = amount_limits.get("max")
 
-        min_amount = (            (market.get("limits") or {})
-            .get("amount", {})
-            .get("min")
-        )
+        if max_amount is None:
+            info = market.get("info") or {}
+            lot = info.get("lotSizeFilter") or info.get("lotSize") or {}
+            candidates = (
+                lot.get("maxMktOrderQty"),
+                lot.get("maxOrderQty"),
+                info.get("maxMktOrderQty"),
+                info.get("maxOrderQty"),
+            )
+            for candidate in candidates:
+                try:
+                    value = float(candidate)
+                    if value > 0:
+                        max_amount = value
+                        break
+                except Exception:
+                    pass
 
-        if (
-            min_amount is not None
-            and qty < float(min_amount)
-        ):
+        capped = False
+        if max_amount is not None and requested_qty > float(max_amount):
+            requested_qty = float(max_amount)
+            capped = True
+
+        try:
+            normalized = float(
+                self.exchange.amount_to_precision(symbol, requested_qty)
+            )
+        except Exception:
+            normalized = requested_qty
+
+        if min_amount is not None and normalized < float(min_amount):
             return 0.0
 
-        return qty
+        if max_amount is not None and normalized > float(max_amount):
+            try:
+                normalized = float(
+                    self.exchange.amount_to_precision(symbol, float(max_amount))
+                )
+            except Exception:
+                normalized = float(max_amount)
+            capped = True
+
+        if capped:
+            self.log(
+                f"EXCHANGE MAX QTY CAP | {symbol} | "
+                f"Requested={float(qty):g} | Max={float(max_amount):g} | "
+                f"Final={normalized:g}"
+            )
+
+        return normalized
 
     def safe_price(self, symbol, price):
         try:
@@ -6661,29 +6804,21 @@ class UniversalFuturesBotGUI:
                 raise ValueError(
                     "Risk Per Trade must be greater than 0."
                 )
-
             if sl_price_fraction <= 0:
                 raise ValueError(
                     "SL price distance must be greater than 0."
                 )
 
-            risk_amount = (
-                balance * risk_pct
-            )
+            # GUI label is "Risk Per Trade (%)", so 0.75 means 0.75%,
+            # not 75% of equity. R6 omitted /100 and could oversize orders
+            # by 100x before the exchange rejected them.
+            risk_fraction = float(risk_pct) / 100.0
+            risk_amount = balance * risk_fraction
+            stop_distance = reference_price * sl_price_fraction
+            qty = risk_amount / stop_distance
 
-            stop_distance = (
-                reference_price * sl_price_fraction
-            )
-
-            qty = (
-                risk_amount
-                / stop_distance
-            )
-
-        qty = self.safe_amount(
-            symbol,
-            qty,
-        )
+        requested_qty = float(qty)
+        qty = self.safe_amount(symbol, qty)
 
         if qty <= 0:
             raise RuntimeError(
@@ -6691,6 +6826,18 @@ class UniversalFuturesBotGUI:
                 "the exchange minimum/precision."
             )
 
+        if size_mode == "EQUITY_RISK_%" and balance > 0 and sl_price_fraction > 0:
+            actual_risk_pct = (
+                qty * reference_price * sl_price_fraction
+                / balance
+                * 100.0
+            )
+            if qty < requested_qty:
+                self.log(
+                    f"POSITION SIZE CAPPED/ROUNDED | Requested={requested_qty:g} | "
+                    f"Final={qty:g} | ConfigRisk={risk_pct:g}% | "
+                    f"ActualRiskAtSL={actual_risk_pct:.4f}%"
+                )
         return qty
 
     # -------------------- SL / TP CALCULATION ----------------
@@ -8603,10 +8750,10 @@ class UniversalFuturesBotGUI:
         max_open_trades = int(str(self.e_max_open_trades.get()).strip())
         if max_open_trades < 0:
             raise ValueError("Max Open Trades cannot be negative.")
-        if max_open_trades > 1:
+        if max_open_trades != 1:
             self.log(
                 f"Max Open Trades={max_open_trades} requested, but this "
-                "single-symbol engine supports one net position per bot profile. "
+                "single-symbol engine has a hard limit of 1 net position. "
                 "Normalizing to 1."
             )
             self.e_max_open_trades.delete(0, tk.END)
@@ -8844,8 +8991,14 @@ class UniversalFuturesBotGUI:
     def start_bot(self):
         if self.is_running:
             return
+        if self.bot_thread is not None and self.bot_thread.is_alive():
+            self.log("START BLOCKED: previous bot worker is still shutting down. Please wait for STOPPED.")
+            return
 
         try:
+            self.stop_requested = False
+            self.stop_started_at = 0.0
+            self._stop_completion_scheduled = False
             self.save_settings()
             self._validate_v83_preflight()
 
@@ -8923,13 +9076,13 @@ class UniversalFuturesBotGUI:
             try:
                 max_open_trades = int(self.e_max_open_trades.get().strip())
             except Exception:
-                raise ValueError("Max Open Trades must be a whole number. Use 0 for unlimited.")
+                raise ValueError("Max Open Trades must be a whole number. Use 1 for this single-symbol engine.")
             if max_open_trades < 0:
                 raise ValueError("Max Open Trades cannot be negative.")
-            if max_open_trades > 1:
+            if max_open_trades != 1:
                 self.log(
                     f"Max Open Trades={max_open_trades} requested, but this "
-                    "single-symbol engine supports one net position per bot profile. "
+                    "single-symbol engine has a hard limit of 1 net position. "
                     "Normalizing to 1."
                 )
                 self.e_max_open_trades.delete(0, tk.END)
@@ -9126,7 +9279,7 @@ class UniversalFuturesBotGUI:
                 f"SL mode: {self.v_sl_mode.get()} | TP mode: {self.v_tp_mode.get()}"            )
             self.log(
                 f"TRADE SESSION: Max Completed Trades={max_trades if max_trades > 0 else 'UNLIMITED'} | "
-                f"Max Open Trades={max_open_trades if max_open_trades > 0 else 'UNLIMITED'} | "
+                f"Max Open Trades={max_open_trades} | "
                 f"Estimated Window={self.lbl_est_time.cget('text')} | "
                 f"Actual duration may be longer if signals do not occur every candle."
             )
@@ -9419,21 +9572,52 @@ class UniversalFuturesBotGUI:
             )
 
     def stop_bot(self):
+        """Request a graceful stop and finalize the profile only after the worker exits."""
+        if not self.is_running:
+            if self.bot_thread is not None and self.bot_thread.is_alive():
+                self.stop_requested = True
+                if not self.stop_started_at:
+                    self.stop_started_at = time.time()
+                self._set_bot_button_states(running=False, stopping=True)
+                if not self._stop_completion_scheduled:
+                    self._stop_completion_scheduled = True
+                    try:
+                        self.root.after(250, self._poll_stop_completion)
+                    except Exception:
+                        self._stop_completion_scheduled = False
+                return
+
+            self.stop_requested = False
+            self.stop_started_at = 0.0
+            self._release_profile_lock()
+            self._set_bot_button_states(running=False, stopping=False)
+            try:
+                self._refresh_profile_list(select_profile=self.bot_profile_id)
+            except Exception:
+                pass
+            return
+
         try:
             self.save_settings()
+        except Exception as e:
+            self.log(f"STOP CONFIG SAVE WARNING: {e}")
+
+        self.stop_requested = True
+        self.stop_started_at = time.time()
+        self.is_running = False
+        self._set_bot_button_states(running=False, stopping=True)
+
+        try:
+            self._persist_runtime_state(status="STOPPING")
         except Exception:
             pass
-        # Flip the run flag first so the worker cannot begin another execution
-        # cycle while Grid shutdown is cleaning up exchange orders/positions.
-        self.is_running = False
+
         try:
             grid_mode = self.v_grid_mode.get().strip().upper()
             if self.symbol and grid_mode in ("LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID"):
                 if self.grid_state.get("active"):
                     self._grid_stop(self.symbol, "Manual bot stop", cooldown_seconds=0)
                 else:
-                    # Retry symbol-wide cleanup even if local Grid state was
-                    # already marked inactive. This catches untracked duplicates.
                     if not self.fetch_position(self.symbol):
                         self._cancel_known_managed_orders(self.symbol)
                     else:
@@ -9461,14 +9645,19 @@ class UniversalFuturesBotGUI:
         except Exception as e:
             self.log(f"Runtime stop checkpoint warning: {e}")
 
-        self.log(
-            "Stopping execution thread..."
-        )
+        self.log("STOP REQUESTED: waiting for execution worker to terminate...")
 
-        try:
-            self.root.after(0, lambda: self._set_bot_button_states(running=False))
-        except Exception:
-            pass
+        thread = self.bot_thread
+        if thread is None or not thread.is_alive():
+            self._on_worker_finished()
+            return
+
+        if not self._stop_completion_scheduled:
+            self._stop_completion_scheduled = True
+            try:
+                self.root.after(100, self._poll_stop_completion)
+            except Exception:
+                self._stop_completion_scheduled = False
 
     def on_close(self):
         if self.is_running:
@@ -9996,10 +10185,10 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Max Open Trades must be a whole number. Use 0 for unlimited.")
             if max_open_trades < 0:
                 raise ValueError("Max Open Trades cannot be negative.")
-            if max_open_trades > 1:
+            if max_open_trades != 1:
                 self.log(
                     f"Max Open Trades={max_open_trades} requested, but this "
-                    "single-symbol engine supports one net position per bot profile. "
+                    "single-symbol engine has a hard limit of 1 net position. "
                     "Normalizing to 1."
                 )
                 self.e_max_open_trades.delete(0, tk.END)
@@ -12469,10 +12658,10 @@ class UniversalFuturesBotGUI:
             try:
                 self.root.after(
                     0,
-                    lambda: self._set_bot_button_states(running=False),
+                    self._on_worker_finished,
                 )
             except Exception:
-                pass
+                self._release_profile_lock()
 
             self.log(
                 "Bot execution thread halted."
