@@ -491,6 +491,46 @@ R6.4 changes shutdown to a non-blocking fail-closed lifecycle:
 
 See docs/CRYPTO_AI_AGENT_R6_4_RELEASE_NOTES.md.
 
+## 2026-09-27 — Crypto AI Agent R6.5 full engine/configuration audit
+
+R6.5 is a deeper hardening pass after the R6.1-R6.4 production/Demo fixes. The audit covered the AI decision engine, evidence-family strategy path, risk/SL/TP management, configuration variables/defaults, persistence/recovery, callbacks, worker/thread boundaries, shutdown lifecycle and protection reconciliation.
+
+### Fixed
+- Added a worker-to-GUI callback queue so trading/safety workers no longer call Tkinter callbacks directly.
+- Removed worker-thread reads of Tkinter Entry/Variable objects from reachable execution paths; the worker uses the existing immutable runtime GUI snapshot instead.
+- Moved execution-loop dashboard/checkpoint/finish UI updates through the GUI bridge.
+- Made emergency-stop button updates thread-safe.
+- Prevented worker completion from releasing the profile lock while background kill-switch cleanup is still active.
+- Made idle window close local-only when there is no active/stale bot runtime, avoiding an unnecessary exchange call.
+- Changed the runtime protection-basis label to AI_DYNAMIC for accepted AI-Agent sessions instead of the generic SIMPLE_ROI label.
+- Persisted actual TP1/TP2 quantities and TP split metadata in recovery state.
+- Fixed TP2 protection reconstruction so it preserves the configured TP split; the old 50% calculation is now only a last-resort compatibility fallback for very old checkpoints.
+- Fixed the AI execution diagnostic so Required reports the AI minimum-family requirement instead of the legacy minimum-score field.
+
+### Added
+- R6.5 runtime schema 22 for the expanded protection/recovery checkpoint metadata.
+- UI queue back-pressure behavior: cosmetic UI updates are dropped rather than blocking trading/safety workers.
+- Automated contract test coverage for StrategyEngine keyword compatibility, worker Tk-thread safety, TP split persistence and migration persistence.
+
+### Retained
+- AI-Agent minimum Families=3, Edge>=0.20, Family Confidence>=0.55, Max Conflicts<=1, Trend/Structure requirements.
+- Bounded AI risk 0.20%-0.50%.
+- Bounded AI ATR SL 1.50-2.40 ATR.
+- Bounded AI TP1 1.00-1.50R and TP2 2.00-3.00R.
+- Actual-fill entry/quantity protection resolution.
+- Mandatory fail-closed kill switch and exchange-side protection verification.
+- Non-repainting/confirmed-candle strategy behavior.
+
+### Validation
+- Python AST parse and bytecode compilation: PASS.
+- AI-Agent decision and decision-reason smoke tests: PASS.
+- TP split calculation smoke tests: PASS.
+- Worker-reachable GUI/Tk audit: PASS; no direct Tk variable access remains in the execution call graph, and Tk root callbacks are routed through the GUI bridge.
+- StrategyEngine keyword audit: PASS.
+- Full live exchange lifecycle is not claimed by this static/functional audit; continue using Bybit Demo/Testnet before live deployment.
+
+See [Crypto AI Agent R6.5 release notes](docs/CRYPTO_AI_AGENT_R6_5_RELEASE_NOTES.md).
+
 ## Release documentation
 
 - [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
