@@ -58,8 +58,8 @@ MASTER_DB_FILE = str(APP_DIR / "universal_bot_master.db")
 MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 9
-RUNTIME_SCHEMA_VERSION = 6  # R7 adds explicit stop-request/runtime lifecycle state.
+CONFIG_SCHEMA_VERSION = 10  # R8 adds explicit FIXED_QTY + RISK_% SL semantics
+RUNTIME_SCHEMA_VERSION = 7  # R8 records sizing/protection basis.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
@@ -10632,7 +10632,7 @@ class UniversalFuturesBotGUI:
                     "Leverage must be greater than 0."
                 )
 
-            if sl_mode not in ("PRICE_%", "ROI_%") or tp_mode not in ("PRICE_%", "ROI_%"):
+            if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
                 raise ValueError(f"Unknown SL/TP mode: SL={sl_mode} TP={tp_mode}")
 
             if tp_qty_mode not in (
