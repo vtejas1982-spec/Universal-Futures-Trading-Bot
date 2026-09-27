@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.3"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.3 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.3-MIGRATION-PERSISTENCE-HOTFIX"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.4"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.4 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.4-GUI-SHUTDOWN-NONBLOCKING-HOTFIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 20  # R6.3 persists successful config migrations so schema notices do not repeat.
-RUNTIME_SCHEMA_VERSION = 20  # R6.3 runtime schema parity with persisted config migration.
+CONFIG_SCHEMA_VERSION = 21  # R6.4 makes GUI shutdown non-blocking and preserves persisted migration behavior.
+RUNTIME_SCHEMA_VERSION = 21  # R6.4 runtime schema parity with non-blocking shutdown lifecycle.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -134,11 +134,11 @@ AI_AGENT_MAX_TP2_R_MULT = 3.00
 AI_AGENT_HIGH_VOL_ATR_PCT = 1.50
 AI_AGENT_LOW_VOL_ATR_PCT = 0.50
 
-# R6.1 AI-Agent recommended trading preset + bounded trade manager + configuration hardening. This is a deterministic configuration
+# R6.2 AI-Agent recommended trading preset + bounded trade manager + configuration/decision-flow hardening. This is a deterministic configuration
 # preset for a conservative/aggressive crypto trend-momentum profile; it is NOT
 # a profitability guarantee and it never changes API credentials, account mode,
 # symbol, or profile identity. The user must explicitly confirm before it applies.
-AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.3"
+AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.4"
 AI_AGENT_PRESET = {
     # Council / decision engine — the six AI-Agent controls.
     "ai_min_families": 3,
@@ -2353,6 +2353,7 @@ class UniversalFuturesBotGUI:
         self.kill_switch_completed = False
         self.kill_switch_in_progress = False
         self.stop_cleanup_thread = None
+        self._close_requested = False
 
         # Execution log is configured to auto-follow the newest message.
         self.log_autoscroll = True
@@ -5835,27 +5836,72 @@ class UniversalFuturesBotGUI:
             self.log(f"PROFILE UI REFRESH WARNING: {e}")
 
     def _poll_stop_completion(self):
-        """Keep the GUI responsive while waiting for the worker to terminate."""
+        """Keep the GUI responsive while waiting for worker/cleanup completion."""
         thread = self.bot_thread
-        if thread is not None and thread.is_alive():
+        cleanup_thread = self.stop_cleanup_thread
+        worker_alive = bool(thread is not None and thread.is_alive())
+        cleanup_alive = bool(cleanup_thread is not None and cleanup_thread.is_alive())
+        kill_in_progress = bool(getattr(self, "kill_switch_in_progress", False))
+
+        if worker_alive or cleanup_alive or kill_in_progress:
             elapsed = time.time() - float(self.stop_started_at or time.time())
             if elapsed >= MAX_STOP_WAIT_SECONDS:
                 if self.kill_switch_completed:
                     self.log(
-                        f"STOP WAIT: exchange is FLAT + NO OPEN ORDERS, but worker thread is still active after "
-                        f"{MAX_STOP_WAIT_SECONDS:g}s. Waiting for worker exit; profile lock remains active."
+                        f"STOP WAIT: exchange is FLAT + NO OPEN ORDERS, but shutdown worker(s) "
+                        f"are still active after {MAX_STOP_WAIT_SECONDS:g}s. GUI remains responsive."
                     )
                 else:
                     self.log(
-                        f"STOP WAIT: worker still active after {MAX_STOP_WAIT_SECONDS:g}s and kill switch is not yet verified; "
-                        "continuing fail-closed shutdown."
+                        f"STOP WAIT: shutdown worker(s) still active after {MAX_STOP_WAIT_SECONDS:g}s "
+                        "and kill switch is not yet verified; continuing fail-closed shutdown."
                     )
-                # Keep polling. Releasing the profile lock while a worker is alive
-                # could allow a second bot to trade the same profile concurrently.
             try:
                 self.root.after(250, self._poll_stop_completion)
             except Exception:
                 self._stop_completion_scheduled = False
+            return
+
+        # GUI close requests are finalized only after background exchange cleanup
+        # has completed and the mandatory kill switch has verified FLAT + NO OPEN
+        # ORDERS. Never call exchange APIs from the Tk callback thread.
+        if self._close_requested:
+            self._stop_completion_scheduled = False
+            if self.kill_switch_completed:
+                try:
+                    self._write_kill_switch_heartbeat(status="STOPPED")
+                    self._persist_runtime_state(
+                        status="STOPPED",
+                        last_error=self.runtime_last_error or None,
+                    )
+                except Exception as e:
+                    self.log(f"GUI CLOSE FINAL STATE WARNING: {e}")
+                self._close_requested = False
+                self.stop_requested = False
+                self.stop_started_at = 0.0
+                self._release_profile_lock()
+                try:
+                    self.root.destroy()
+                except Exception:
+                    pass
+                return
+
+            self.log(
+                "GUI CLOSE BLOCKED: kill switch did not verify FLAT + NO OPEN ORDERS. "
+                "Window remains open so cleanup can be retried safely."
+            )
+            try:
+                messagebox.showerror(
+                    "Safe close blocked",
+                    "The exchange could not be verified FLAT + NO OPEN ORDERS. "
+                    "The bot window will remain open so shutdown can be retried safely.",
+                )
+            except Exception:
+                pass
+            self._close_requested = False
+            self.stop_requested = False
+            self.stop_started_at = 0.0
+            self._set_bot_button_states(running=False, stopping=False)
             return
 
         self._on_worker_finished()
@@ -6990,8 +7036,8 @@ class UniversalFuturesBotGUI:
 
             # R6.1 compatibility: older profiles stored the ATR-SL toggle
             # under use_atr_sl. The canonical GUI variable is
-            # v_simple_atr_sl_enabled; no obsolete v_use_atr_sl attribute exists.            # ATR-TP has its own independent persisted setting.
-            self.e_atr_sl_mult.delete(0, tk.END)
+            # v_simple_atr_sl_enabled; no obsolete v_use_atr_sl attribute exists.
+            # ATR-TP has its own independent persisted setting.            self.e_atr_sl_mult.delete(0, tk.END)
             self.e_atr_sl_mult.insert(0, cfg.get("atr_sl_mult", DEFAULT_ATR_SL_MULTIPLIER))
             self.e_atr_tp1_mult.delete(0, tk.END)
             self.e_atr_tp1_mult.insert(0, cfg.get("atr_tp1_mult", DEFAULT_ATR_TP1_MULTIPLIER))
@@ -7991,7 +8037,6 @@ class UniversalFuturesBotGUI:
         return qty
 
     # -------------------- SL / TP CALCULATION ----------------
-
     def target_to_price_fraction(
         self,
         target_pct,
@@ -8012,7 +8057,8 @@ class UniversalFuturesBotGUI:
             When the exchange exposes the actual position margin, use it
             to calculate the trigger price. This is more accurate than
             simply dividing ROI by leverage, especially in Bybit cross
-            margin where the displayed position margin can include the            closing-fee component.
+            margin where the displayed position margin can include the
+            closing-fee component.
 
             Fallback:
                 if position margin is unavailable, use:
@@ -8989,7 +9035,6 @@ class UniversalFuturesBotGUI:
                     unknown_is_open=False,
                 )
                 active = bool(state) if state is not None else False
-
             if active:
                 self.log(f"{label} VERIFIED ACTIVE. ID={oid}")
             else:
@@ -9011,7 +9056,8 @@ class UniversalFuturesBotGUI:
         normal for a pending stop/TP; it means the trigger has not fired yet.
         This routine is specifically for the dangerous case where a live
         position exists but one of the expected protective orders has
-        disappeared.  The SL is treated as mandatory.        """
+        disappeared.  The SL is treated as mandatory.
+        """
         if not position or not self.last_protected_position:
             return
 
@@ -9988,8 +10034,7 @@ class UniversalFuturesBotGUI:
             and abs(price - center) / center >= cfg["recenter_distance"]
         ):
             self._grid_cancel_managed_orders(symbol)
-            self.grid_state["center"] = price
-            center = price
+            self.grid_state["center"] = price            center = price
             self.log(
                 f"GRID RECENTERED | New center={price:.12g}"
             )
@@ -10010,7 +10055,8 @@ class UniversalFuturesBotGUI:
             )
             return True
 
-        if cfg["mode"] == "SHORT_GRID" and pos and pos["side"] != "SHORT":            self._grid_stop(
+        if cfg["mode"] == "SHORT_GRID" and pos and pos["side"] != "SHORT":
+            self._grid_stop(
                 symbol,
                 "Unexpected LONG position in SHORT_GRID",
                 cfg["cooldown"],
@@ -10987,8 +11033,7 @@ class UniversalFuturesBotGUI:
             startup_st_mult = self.e_st_mult.get().strip()
             startup_st_source = self.v_st_source.get().strip().upper()
             startup_st_change_atr = bool(self.v_st_change_atr.get())
-            startup_st_entry_mode = self.v_st_entry_mode.get().strip().upper()
-            self.log(
+            startup_st_entry_mode = self.v_st_entry_mode.get().strip().upper()            self.log(
                 f"SUPERTREND: ATR={startup_st_len} | Mult={startup_st_mult} | "
                 f"Source={startup_st_source} | "
                 f"ATR Method={'RMA' if startup_st_change_atr else 'SMA(TR)'} | "
@@ -11009,7 +11054,8 @@ class UniversalFuturesBotGUI:
             self.log(
                 f"GLOBAL SAFETY: DailyDD={'ON' if self.v_max_dd_enabled.get() else 'OFF'}({self.e_max_dd.get().strip()}%) | "
                 f"EmergencyStop={'ON' if self.v_emergency_enabled.get() else 'OFF'}({self.e_emergency_capital_pct.get().strip()}%) | "
-                f"Scope={self.v_emergency_scope.get().strip().upper()}"            )
+                f"Scope={self.v_emergency_scope.get().strip().upper()}"
+            )
             self.log(
                 "DEFAULT PROFILE CONTRACT: "
                 f"Adaptive Edge={adaptive_edge:.2f} | MinWeight={adaptive_min_weight:.2f} | "
@@ -11224,37 +11270,56 @@ class UniversalFuturesBotGUI:
                 self._stop_completion_scheduled = False
 
     def on_close(self):
-        if self.is_running:
+        """Start a non-blocking safe GUI shutdown.
+
+        Exchange/CCXT calls must never run directly inside the Tk window-close
+        callback. The background cleanup worker performs the mandatory kill
+        switch, while _poll_stop_completion keeps Tk responsive and destroys
+        the window only after FLAT + NO OPEN ORDERS is verified.
+        """
+        worker_alive = bool(self.bot_thread is not None and self.bot_thread.is_alive())
+        if self.is_running or worker_alive:
             if not messagebox.askyesno(
                 "Stop bot?",
                 "Bot is running. Stop it and close?",
             ):
                 return
 
-        # Save the latest GUI configuration before shutting down so a
-        # recovery checkpoint contains the exact settings the user was using.
-        self.stop_requested = bool(self.is_running)
-        self.stop_started_at = time.time() if self.is_running else 0.0
+        self._close_requested = True
+        self.stop_requested = bool(self.is_running or worker_alive)
+        self.stop_started_at = time.time()
+
+        # Save latest GUI configuration. This is local file IO only; no
+        # exchange API is touched from this Tk callback.
         try:
             self.save_settings()
-        except Exception:
-            pass
+        except Exception as e:
+            self.log(f"GUI CLOSE CONFIG SAVE WARNING: {e}")
 
-        # R9.2: GUI shutdown is also a hard bot stop. Flatten first, then
-        # destroy Tk so the kill-switch operation cannot be skipped.
+        # Move all exchange cleanup to the background thread so Bybit/CCXT
+        # latency can never freeze the Windows GUI.
         self.is_running = False
+        self._set_bot_button_states(running=False, stopping=True)
+
         try:
             self._persist_runtime_state(status="STOPPING")
             self._write_kill_switch_heartbeat(status="STOPPING")
-            self._activate_kill_switch("GUI SHUTDOWN")
-            self._persist_runtime_state(
-                status="STOPPED" if self.kill_switch_completed else "CRASHED",
-                last_error=self.runtime_last_error or None,
-            )
+            self._start_stop_cleanup_worker("GUI SHUTDOWN")
         except Exception as e:
-            self.log(f"GUI shutdown KILL SWITCH warning: {e}")
+            self.log(f"GUI shutdown cleanup scheduling warning: {e}")
 
-        self.root.destroy()
+        self.log(
+            "GUI CLOSE REQUESTED: exchange cleanup is running in background; "
+            "waiting for verified FLAT + NO OPEN ORDERS before closing."
+        )
+
+        if not self._stop_completion_scheduled:
+            self._stop_completion_scheduled = True
+            try:
+                self.root.after(100, self._poll_stop_completion)
+            except Exception as e:
+                self._stop_completion_scheduled = False
+                self.log(f"GUI CLOSE POLL SCHEDULING WARNING: {e}")
 
     # -------------------- PERFORMANCE / TRADE ACCOUNTING ----
 
@@ -11986,8 +12051,7 @@ class UniversalFuturesBotGUI:
             if liq_area not in ("Wick Extremity", "Full Range"):
                 raise ValueError("Liquidity Swing Area must be Wick Extremity or Full Range.")
             if liq_filter not in ("Count", "Volume"):
-                raise ValueError("Liquidity Swing Filter must be Count or Volume.")
-            if liq_filter_value < 0:
+                raise ValueError("Liquidity Swing Filter must be Count or Volume.")            if liq_filter_value < 0:
                 raise ValueError("Liquidity Swing Filter Value cannot be negative.")
             if liq_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND"):
                 raise ValueError("Liquidity Swing Entry must be FRESH_BREAK or CURRENT_TREND.")
@@ -12008,7 +12072,8 @@ class UniversalFuturesBotGUI:
                 )
             if trendline_retest_candles <= 0:
                 raise ValueError("Trendline Retest Candles must be greater than 0.")
-            if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):                raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
+            if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
+                raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
 
             use_divergence = bool(self._runtime_gui_value("v_use_divergence"))
             div_pivot = int(self._runtime_gui_value("e_div_pivot"))
@@ -12985,8 +13050,7 @@ class UniversalFuturesBotGUI:
                     # CURRENT_TREND: persist after a breakout until opposite.
                     # BREAK_RETEST: require a later retest of the broken line
                     # and a close back in the breakout direction.
-                    if use_trendline:
-                        tl_up_break = bool(df["trendline_break_up"].iloc[-2])
+                    if use_trendline:                        tl_up_break = bool(df["trendline_break_up"].iloc[-2])
                         tl_down_break = bool(df["trendline_break_down"].iloc[-2])
                         tl_up_retest = bool(df["trendline_retest_up"].iloc[-2])
                         tl_down_retest = bool(df["trendline_retest_down"].iloc[-2])
@@ -13014,7 +13078,8 @@ class UniversalFuturesBotGUI:
                     )
 
                     atr_pass = (
-                        not use_atr                        or atr_pct >= atr_min_pct
+                        not use_atr
+                        or atr_pct >= atr_min_pct
                     )
 
                     vol_pass = (
@@ -13801,7 +13866,6 @@ class UniversalFuturesBotGUI:
                                 f"TP1={ai_effective_atr_tp1_mult:.2f}R | "
                                 f"TP2={ai_effective_atr_tp2_mult:.2f}R"
                             )
-
                         elif (
                             signal_mode == "AI_AGENT"
                             and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED
@@ -13985,8 +14049,7 @@ class UniversalFuturesBotGUI:
                                     float(actual_qty) * float(actual_entry) * float(sl_move)
                                     / float(curr_balance) * 100.0
                                 )
-                                self.log(
-                                    f"ESTIMATED GROSS STOP RISK: {stop_risk_pct:.4f}% of current balance"
+                                self.log(                                    f"ESTIMATED GROSS STOP RISK: {stop_risk_pct:.4f}% of current balance"
                                 )
 
                             # Unified protection diagnostics: report the resolved source only;
@@ -14025,7 +14088,8 @@ class UniversalFuturesBotGUI:
                             else:
                                 self.log(
                                     f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
-                                    f"TP1={(f'{tp1:.12g}' if tp1 is not None else 'OFF')} | "                                    f"TP2={(f'{tp2:.12g}' if tp2 is not None else 'OFF')} | Source={protection_source}"
+                                    f"TP1={(f'{tp1:.12g}' if tp1 is not None else 'OFF')} | "
+                                    f"TP2={(f'{tp2:.12g}' if tp2 is not None else 'OFF')} | Source={protection_source}"
                                 )
 
                             if self._runtime_gui_value("v_hold_until_all_reverse"):
