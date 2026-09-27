@@ -1,3 +1,29 @@
+## V8.4.2-R9.1 — Profile lifecycle + recovery decision + fixed-quantity hardening — 2026-09-27
+
+R9.1 is a corrective maintenance release based on the R9 Demo test. It addresses three concrete behaviors observed during profile testing.
+
+### Fixed
+- **NO on Recovery is now persisted:** choosing **NO / Start New Bot** immediately writes the selected profile runtime state as STOPPED with a START_NEW recovery decision. A previous RUNNING checkpoint can no longer remain visible simply because recovery was declined.
+- **Stale profile locks:** profile lock checks now reject Linux zombie/reused-PID cases where possible and remove stale locks. A dead worker must not keep a profile looking RUNNING.
+- **Individual profile STOP controls:** every saved profile receives its own STOP <PROFILE> button in Profile Manager, in addition to STOP Selected Bot.
+- **Fixed Qty is preserved:** selecting FIXED_QTY no longer automatically changes SL mode to RISK_%. Fixed Qty remains literal exchange/base quantity; SL mode is an independent control. Existing saved Fixed Qty values are preserved during configuration loading.
+- **Sizing diagnostics:** Profile Details shows sizing mode, Fixed Qty and Risk % together.
+
+### Important contract
+- FIXED_QTY = literal requested exchange/base quantity, rounded only to the exchange's allowed precision/minimum by safe_amount().
+- EQUITY_RISK_% = quantity calculated from account risk and stop distance.
+- RISK_% SL mode remains available only for FIXED_QTY and remains incompatible with Hold-All-Reverse, as enforced by validation.
+- ATR Dynamic SL/TP does not silently convert Fixed Qty into risk sizing.
+
+### Validation
+- R9.1 source compiled successfully with Python py_compile.
+- AST audit of the GUI class: 139 methods; no missing self.* method references.
+- Live Bybit Demo validation remains required for order/position behavior.
+
+See docs/CRYPTO_R9_1_RELEASE_NOTES.md.
+
+---
+
 # Crypto R9 Release Notes — 2026-09-27
 
 ## Problem addressed
