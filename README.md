@@ -9,6 +9,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 | Area | Live engine | Backtester |
 |---|---|---|
 | Crypto / Futures | `UniversalFuturesBot_CRYPTO.py` | `UniversalFuturesBot_CRYPTO_BACKTESTER.py` |
+| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R4.py` | `UniversalFuturesBot_CRYPTO_BACKTESTER.py` |
 | Forex / MT5 | `UniversalForexBot_MT5.py` | `UniversalForexBot_MT5_BACKTESTER.py` |
 
 ### Tests
