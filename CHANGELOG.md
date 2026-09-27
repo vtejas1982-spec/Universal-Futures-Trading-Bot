@@ -1,3 +1,47 @@
+## V8.4.2-R7 — 2026-09-27 Crypto Lifecycle + Risk-Boundary Hardening
+
+### Fixed
+- **Critical risk-sizing bug:** live `0.75` Risk Per Trade was being interpreted as 75% of equity. R7 correctly interprets the GUI percentage as `risk_pct / 100`.
+- **Critical exchange-size boundary:** live entries are now clamped to CCXT/exchange maximum amount and precision before order submission.
+- **Critical profile lifecycle bug:** Stop now has an explicit STOPPING phase and waits for the worker to exit before the profile lock is released.
+- Same-process profile ownership is now recognized while the worker is running/stopping.
+- Flat stale RUNNING/STOPPING/CRASHED runtime checkpoints without saved position/Grid state are normalized to STOPPED.
+- Stale lifecycle status alone no longer blocks deletion of an otherwise flat orphaned profile.
+- Missing `use_atr` configuration now falls back to `DEFAULT_USE_ATR`, matching the new-profile default.
+- Max Open Trades is explicitly normalized to the single-symbol engine hard limit of 1; 0 is no longer presented as unlimited.
+- Removed duplicate `DIVERGENCE_INDICATORS` definition.
+
+### Added
+- Runtime schema 6 with explicit stop-request state.
+- Non-blocking stop-completion polling and worker-finished GUI callback.
+- Exchange quantity-cap diagnostics and actual-risk-after-cap diagnostics.
+- `tests/test_crypto_r7_regressions.py`.
+- `docs/CRYPTO_R7_RELEASE_NOTES.md`.
+
+### Modified
+- Crypto live marker: `V8.4.2-CRYPTO-EVIDENCE-HARDENED-R7`.
+- Crypto audit marker: `V8.4.2-ENGINE-AUDIT-2026-09-27-R7`.
+- Crypto backtester marker/parity version aligned to R7; its risk percentage formula was already percentage-correct.
+- README and production manifest updated to Crypto R7.
+
+### Preserved
+- ADAPTIVE_EVIDENCE thresholds and Evidence-family definitions.
+- Completed-candle strategy logic.
+- ATR/ADX regime-gate semantics.
+- Hold-All-Reverse and post-SL opposite lock.
+- Actual-fill SL/TP protection architecture.
+- Recovery identity checks and one-net-position-per-profile execution model.
+
+### Validation
+- R6 regression suite: **5 passed**
+- R7 regression suite: **8 passed**
+- Combined local regression tests: **13 passed**
+- Python `py_compile`: PASS
+- Module import: PASS
+- Live exchange order lifecycle is not claimed by the local unit tests; Bybit Demo validation remains required.
+
+---
+
 ## V8.4.2-R6 — 2026-09-27 Crypto Execution Hardening
 
 ### Fixed
