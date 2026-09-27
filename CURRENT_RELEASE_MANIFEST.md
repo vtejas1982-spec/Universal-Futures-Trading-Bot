@@ -31,7 +31,8 @@
 ## Version
 - Crypto: V8.4.2-R8
 - Forex/MT5: V8.4.2-R5
-- Config schema: 9
+- Config schema: 10
+- Runtime schema: 7
 
 ## Rule
 These are the files to use for the current production line: Crypto R8 / Forex R5. Do not run superseded V8.x copies from old local clones.
