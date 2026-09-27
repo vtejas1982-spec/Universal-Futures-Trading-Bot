@@ -1,7 +1,8 @@
 # Universal Futures & Forex Trading Bot
 
 **Current production release: V8.4.2-R9.6**  
-**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.5**
+**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.5**  
+**Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.5**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -18,6 +19,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `tests/test_crypto_engine.py`
 - `tests/test_crypto_gui.py`
 - `tests/test_forex_engine.py`
+- `tests/test_forex_ai_agent_r6_5_contract.py`
 
 ### Build scripts
 
@@ -91,7 +93,8 @@ See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
 - Forex backtester smoke test passes.
 - GUI initialization and AI preset save/load confirmation test passes.
 
-See docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md and docs/CRYPTO_FX_PARITY_AUDIT_2026-09-28.md.
+See `docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md` and `docs/CRYPTO_FX_PARITY_AUDIT_2026-09-28.md`.
+
 ## Current repository cleanup — 2026-09-27
 
 The active root is now consolidated to one current Crypto R9.6 engine, one current Crypto AI-Agent R6.5 engine, one Forex/MT5 engine, and their current backtest/build files. Superseded duplicate bot files were removed from the main branch; historical versions remain in Git history.
