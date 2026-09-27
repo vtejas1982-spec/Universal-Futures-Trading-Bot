@@ -6,11 +6,15 @@
 - **Risk-based hard SL:** added explicit RISK_% SL mode. With FIXED_QTY, Risk Per Trade (%) becomes the account-risk budget and the hard SL is calculated from the actual filled quantity and actual entry price.
 - RISK_% protection uses the actual filled position, so the final SL is recalculated after the exchange confirms the fill.
 - ATR sizing/protection is not silently mixed with RISK_% SL mode.
+- Fixed a worker-thread Tkinter access hazard: runtime strategy/settings reads now come from a GUI-thread snapshot instead of calling Tk variables directly from the trading worker.
+- RISK_% TP1/TP2 remain governed by the existing ATR-derived distance relationship used by the R8 contract; the new mode changes the hard-SL basis only.
 - RISK_% is fail-closed unless Sizing Mode is FIXED_QTY; it is also incompatible with Hold-All-Reverse because Hold-All-Reverse intentionally owns the hard-stop semantics.
 - Added a GUI callback: switching to FIXED_QTY automatically selects RISK_% SL when Hold-All-Reverse is OFF; switching back to EQUITY_RISK_% returns the SL selector to PRICE_%.
 
 ### Added
 - SL Mode option: RISK_%.
+- Config schema 10 and runtime schema 7.
+- Worker-safe GUI configuration snapshot and persisted sizing/protection-basis metadata.
 - Runtime diagnostics for fixed-quantity risk SL.
 - R8 regression suite: tests/test_crypto_r8_regressions.py.
 - Clear separation between EQUITY_RISK_% quantity sizing and FIXED_QTY + RISK_% stop-risk budgeting.
