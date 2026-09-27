@@ -25,7 +25,7 @@ def main():
     s=LIVE.read_text(encoding="utf-8"); b=BT.read_text(encoding="utf-8")
     ast.parse(s); ast.parse(b); fx=load(LIVE,"crypto_r6_live"); bt=load(BT,"crypto_r6_bt")
     checks=[
-        fx.APP_VERSION.endswith("R6"), fx.AUDIT_BUILD.endswith("R6"), fx.CONFIG_SCHEMA_VERSION==9,
+        fx.APP_VERSION.endswith("R7"), fx.AUDIT_BUILD.endswith("R7"), fx.CONFIG_SCHEMA_VERSION==9,
         "evidence_min_families = int" in s, "evidence_family_min_score = float" in s,
         "Normalizing to 1." in s, "ATR SL Multiplier must be greater than 0." in s,
         "def run_backtest" in b, "atr_sl_mult" in b, "atr_tp1_mult" in b, "atr_tp2_mult" in b,
@@ -44,12 +44,12 @@ def main():
                c["use_atr"] is True,c["grid_mode"]=="OFF",c["risk_pct"]==0.75,c["cooldown_min"]==15.0,c["use_atr_sl"] is True,c["atr_sl_mult"]==1.5,c["atr_tp1_mult"]==1.2,c["atr_tp2_mult"]==2.2,c["max_open_trades"]==1,c["max_loss_streak"]==3]
     r=bt.run_backtest(bt.load_ohlcv(synthetic()),dict(c))
     checks += [isinstance(r,tuple) and len(r)==4]
-    print(f"CRYPTO V8.4.2-R6 AUDIT: {sum(checks)}/{len(checks)} PASS")
+    print(f"CRYPTO V8.4.2-R7 AUDIT: {sum(checks)}/{len(checks)} PASS")
     if not all(checks): raise SystemExit(1)
 
 if __name__=="__main__": main()
 
-def test_r6_exchange_resilience_contract():
+def test_r7_exchange_resilience_contract():
     src = Path(__file__).resolve().parents[1].joinpath("UniversalFuturesBot_CRYPTO.py").read_text(encoding="utf-8")
     assert "ACCOUNT_READ_RETRIES = 3" in src
     assert "MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10" in src
