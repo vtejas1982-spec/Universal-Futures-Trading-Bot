@@ -793,6 +793,34 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 
 # Changelog
 
+# V8.4.2 Crypto AI Agent R6.2 — 2026-09-27
+
+## Fixed
+- Repaired the direct `StrategyEngine.decision_reason()` call that passed `ai_family_confidence` instead of `ai_min_family_confidence`.
+- Repaired the direct call that passed `ai_max_conflicts` instead of `ai_max_conflicting_families`.
+- This removes the cycle error observed in Bybit Demo and prevents the three-cycle fail-closed halt caused by the bad keyword contract.
+
+## Added / Modified
+- AI-Agent recommended preset now shows ATR-TP ON in the GUI/configuration, matching the runtime AI TP-management path.
+- NEW-profile Hold-All-Reverse default changed from ON to OFF because the R6.x dynamic AI manager intentionally does not run while Hold-All-Reverse is active.
+- When AI_AGENT is active but the recommended preset was not explicitly confirmed, the worker logs a notice and continues using the current saved GUI settings without silently overwriting them.
+- When HOLD-ALL-REVERSE blocks the AI manager, the worker logs the reason explicitly.
+- Configuration schema: 18 -> 19.
+- Runtime schema: 18 -> 19.
+
+## Retained
+- Deterministic AI evidence-family decision engine.
+- AI bounded risk, ATR-SL and R-multiple TP management.
+- Actual-fill-based final protection resolution and exchange-side verification.
+- Fail-closed kill-switch behavior.
+
+## Validation
+- Python AST/syntax parse: PASS.
+- Direct StrategyEngine call keyword audit: PASS; no unexpected keyword arguments remain for decision_reason, decide_signal or ai_agent_decision.
+- decision_reason AI_AGENT smoke test: PASS.
+- Full live/demo exchange lifecycle was not claimed; continue with Bybit Demo/Testnet validation.
+
+
 # V8.4.2 Crypto AI Agent R6.1 — 2026-09-27
 
 ## Fixed
