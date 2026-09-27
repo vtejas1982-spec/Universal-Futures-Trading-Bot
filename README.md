@@ -460,6 +460,21 @@ The AI manager remains deterministic and bounded; these changes do not create a 
 
 See [Crypto AI Agent R6.2 release notes](docs/CRYPTO_AI_AGENT_R6_2_RELEASE_NOTES.md).
 
+## 2026-09-27 — Crypto AI Agent R6.3 migration-persistence hotfix
+
+R6.3 fixes repeated configuration migration messages. A profile saved under schema 18 could repeatedly report schema 18 -> 19 because the loader only announced the migration and did not persist the upgraded schema marker.
+
+R6.3 now:
+- Persists the current config_schema_version only after a complete configuration load succeeds.
+- Keeps existing saved configuration values authoritative.
+- Re-synchronizes the legacy use_atr_sl alias from canonical simple_atr_sl_enabled during migration.
+- Replaces the verbose legacy R3 migration message with a single sizing-compatibility message.
+- Prevents the same schema-upgrade notice from repeating on the next profile load.
+- Internal source version: V8.4.2-CRYPTO-AI-AGENT-R6.3.
+- Configuration/runtime schema: 20.
+
+See docs/CRYPTO_AI_AGENT_R6_3_RELEASE_NOTES.md.
+
 ## Release documentation
 
 - [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
