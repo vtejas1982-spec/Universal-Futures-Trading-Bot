@@ -137,8 +137,8 @@ def test_r8_equity_risk_percentage_is_not_double_divided():
     )
     # 0.75% of equity = 348.0393 USDT; 1% price stop on 5.423 costs
     # 0.05423 USDT per OP, so the quantity is approximately 6419.5.
-    expected = (46405.2433 * 0.0075) / (5.423 * 0.01)
-    assert abs(qty - expected) < 1e-6
+    expected = round((46405.2433 * 0.0075) / (5.423 * 0.01), 1)
+    assert abs(qty - expected) < 1e-9
 
 
 def test_r8_fixed_qty_risk_sl_uses_account_risk_budget():
