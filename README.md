@@ -1,6 +1,6 @@
 # Universal Futures & Forex Trading Bot
 
-**Current production release: V8.4.2-R8**
+**Current production release: V8.4.2-R9**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -22,6 +22,37 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+
+## V8.4.2-R9 — Crypto profile lifecycle + recovery-control hardening — 2026-09-27
+
+R9 fixes the profile-control problem where one GUI could show a saved profile as RUNNING even though its worker process was no longer owned by that GUI, and where a running profile in another GUI process could not be safely stopped from the Profile Manager.
+
+### Fixed
+
+- Cross-process profile stop: Profile Manager now has STOP Selected Bot. It sends a profile-scoped stop request that the running worker acknowledges and finalizes through its normal checkpoint path.
+- Truthful profile status: a historical RUNNING/STOPPING/CRASHED checkpoint without a live profile lock is no longer displayed as a live RUNNING bot. Profiles with saved inventory are shown as RECOVERY_REQUIRED; flat stale profiles are shown as STOPPED.
+- Live status refresh: the profile table refreshes automatically every 3 seconds.
+- Max Open Trades contract: the GUI now explicitly rejects values other than 1 for the current single-symbol/one-way execution engine instead of silently normalizing them. Max Completed Trades remains the session trade-count limit.
+- Default parity: missing saved cooldown_min and use_divergence values now use the declared R9/new-profile defaults.
+- Unused risk constant: removed the unused RISK_COST_BUFFER variable rather than implying that it affected live risk calculations.
+
+### Added
+
+- Profile-scoped control.json stop requests with request IDs and stale-request cleanup.
+- Runtime worker PID/start metadata.
+- Recovery-aware status RECOVERY_REQUIRED.
+- Profile-manager stop control for bots running in another process.
+- ATR Dynamic SL/TP values in the selected-profile details panel.
+
+### Preserved
+
+- ADAPTIVE_EVIDENCE thresholds and Evidence-family logic.
+- Completed-candle strategy calculations.
+- Actual-fill SL/TP calculation and protection verification.
+- Fixed-Qty + RISK_% hard-SL contract.
+- Post-SL opposite lock, Hold-All-Reverse, Grid fail-closed behavior, managed-order ownership, and restart identity checks.
+
+See docs/CRYPTO_R9_RELEASE_NOTES.md for the complete fix/add/modify list.
 
 ## V8.4.2-R8 — Crypto lifecycle + risk-boundary hardening — 2026-09-27
 
@@ -137,7 +168,7 @@ Therefore:
 ```
 Max Open Trades != 1
         ↓
-normalized safely
+rejected at validation
         ↓
 1 net position per bot/symbol
 ```
