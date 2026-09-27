@@ -2019,9 +2019,7 @@ class UniversalFuturesBotGUI:
             return
         if not messagebox.askyesno(
             "Stop selected bot?",
-            f"Send a safe stop request to {profile}?
-
-"
+            f"Send a safe stop request to {profile}?\n\n"
             "The running process will finish its current exchange operation, "
             "preserve protection for an open normal-strategy position, and write "
             "a final runtime checkpoint before stopping.",
