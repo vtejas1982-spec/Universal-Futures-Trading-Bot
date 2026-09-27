@@ -26,6 +26,7 @@ This main branch contains the current active production code only. Superseded ro
 - README.md
 - CHANGELOG.md
 - docs/CRYPTO_AI_AGENT_R6_5_RELEASE_NOTES.md
+- docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md
 - docs/CRYPTO_AI_AGENT_R6_5_BACKTESTER_RELEASE_NOTES.md
 - docs/CRYPTO_R9_6_RELEASE_NOTES.md
 - docs/FOREX_R5_RELEASE_NOTES.md
