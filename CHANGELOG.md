@@ -1,3 +1,32 @@
+## V8.4.2-R9.3 — Stop completion + Fixed-Qty execution hardening — 2026-09-27
+
+### Fixed
+- Manual STOP no longer blocks the GUI while kill-switch exchange cleanup runs.
+- STOP polling continues until the worker exits; the profile lock is retained while the worker is alive.
+- A verified kill-switch result is reused by worker finalization instead of submitting duplicate flatten operations.
+- FIXED_QTY is literal exchange/base quantity and is passed directly to the market entry order after precision/minimum normalization.
+- Fixed Qty no longer changes SL Mode automatically.
+- PRICE_%, ROI_%, ATR Dynamic and explicit RISK_% SL behavior remain independently validated.
+
+### Audited
+- Strategy/evidence-family engine.
+- Settings/defaults and callbacks.
+- Configuration save/load and profile isolation.
+- Recovery/resume and live exchange snapshot.
+- Entry sizing and order submission.
+- SL/TP calculation and protection verification.
+- Kill switch, watchdog and worker lifecycle.
+
+### Validation
+- Python compile: PASS.
+- GUI AST/self-call audit: PASS.
+- Fixed-Qty branch audit: PASS.
+- Live Bybit Demo lifecycle: still required.
+
+See docs/CRYPTO_R9_3_RELEASE_NOTES.md.
+
+---
+
 ## V8.4.2-R9.1 — Profile lifecycle + recovery decision + fixed-quantity hardening — 2026-09-27
 
 R9.1 is a corrective maintenance release based on the R9 Demo test. It addresses three concrete behaviors observed during profile testing.
