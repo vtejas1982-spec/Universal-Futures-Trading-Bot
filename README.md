@@ -1,6 +1,6 @@
 # Universal Futures & Forex Trading Bot
 
-**Current production release: V8.4.2-R9.1**
+**Current production release: V8.4.2-R9.3**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -22,6 +22,26 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+
+## V8.4.2-R9.3 — Stop completion + Fixed-Qty execution hardening — 2026-09-27
+
+R9.3 is a corrective production release following the R9.2 kill-switch implementation and Demo GUI testing.
+
+### Fixed
+- **STOPPING -> STOPPED:** manual STOP no longer blocks the Tk GUI during exchange flattening. Cleanup runs in a dedicated stop thread and the GUI keeps polling until the worker actually exits.
+- **Stop completion is explicit:** after the worker exits, the Profile Manager is refreshed and the execution log reports whether the exchange was verified FLAT with no open orders.
+- **Kill-switch idempotency:** manual stop, worker finalization and shutdown paths do not intentionally duplicate a verified flatten operation.
+- **Fixed Qty entry sizing:** FIXED_QTY is literal exchange/base quantity. For example, Fixed Qty=1500 requests 1500 units, subject only to exchange precision/minimum normalization. It is not recalculated from balance or Risk Per Trade.
+- **SL independence:** selecting FIXED_QTY no longer changes SL Mode. Fixed Qty can use the selected PRICE_%, ROI_%, ATR Dynamic or explicit RISK_% protection contract subject to validation.
+
+### Audit
+- Rechecked strategy engine, indicator/evidence-family logic, settings/defaults, callbacks, configuration load/save, recovery, entry sizing, SL/TP calculation, order submission, profile lifecycle and kill-switch paths.
+- Fixed-Qty static branch contains no equity-risk quantity formula.
+- Resume still performs a live exchange snapshot before recovery continuation.
+- Python compilation and GUI self-call audit passed.
+
+### Demo validation
+Live Bybit Demo order/position lifecycle testing is still required. See docs/CRYPTO_R9_3_RELEASE_NOTES.md.
 
 ## V8.4.2-R9.1 — Profile lifecycle + recovery decision + fixed-quantity hardening — 2026-09-27
 
