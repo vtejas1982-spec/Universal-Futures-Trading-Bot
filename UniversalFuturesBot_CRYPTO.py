@@ -7008,8 +7008,8 @@ class UniversalFuturesBotGUI:
             sl_move = risk_amount / (float(position_qty) * float(actual_entry))
             if sl_move <= 0 or not np.isfinite(sl_move):
                 raise RuntimeError("RISK_% SL distance is invalid.")
-            tp1_move = self.target_to_price_fraction(tp1_target_pct, tp_mode, leverage, actual_entry, position_qty, position_initial_margin)
-            tp2_move = self.target_to_price_fraction(tp2_target_pct, tp_mode, leverage, actual_entry, position_qty, position_initial_margin)
+            tp1_move = sl_move * float(atr_tp1_multiplier)
+            tp2_move = sl_move * float(atr_tp2_multiplier)
         elif str(sl_mode).upper() == "ATR_DYNAMIC":
             if atr_value is None or not np.isfinite(float(atr_value)) or float(atr_value) <= 0:
                 raise RuntimeError("ATR Dynamic SL requires a valid completed-candle ATR.")
