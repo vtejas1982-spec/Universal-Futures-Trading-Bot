@@ -44,9 +44,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R7"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-R7 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R7"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R8"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-R8 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R8"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -4542,7 +4542,7 @@ class UniversalFuturesBotGUI:
 
         tk.Label(f_sltp, text="SL Mode:").grid(row=0, column=2, sticky="w")
         self.v_sl_mode = tk.StringVar(value="PRICE_%")
-        ttk.OptionMenu(f_sltp, self.v_sl_mode, "PRICE_%", "PRICE_%", "ROI_%").grid(row=0, column=3, padx=5, sticky="w")
+        ttk.OptionMenu(f_sltp, self.v_sl_mode, "PRICE_%", "PRICE_%", "ROI_%", "RISK_%").grid(row=0, column=3, padx=5, sticky="w")
 
         tk.Label(f_sltp, text="TP Mode:").grid(row=0, column=4, sticky="w")
         self.v_tp_mode = tk.StringVar(value="ROI_%")
@@ -6927,6 +6927,8 @@ class UniversalFuturesBotGUI:
         sl_mode,
         tp_mode,
         leverage,
+        account_balance=None,
+        risk_pct=None,
         atr_value=None,
         atr_sl_multiplier=1.5,
         atr_tp1_multiplier=1.2,
@@ -6937,7 +6939,20 @@ class UniversalFuturesBotGUI:
                 "Actual entry price is invalid."
             )
 
-        if str(sl_mode).upper() == "ATR_DYNAMIC":
+        if str(sl_mode).upper() == "RISK_%":
+            if position_qty is None or float(position_qty) <= 0:
+                raise RuntimeError("RISK_% SL requires a valid actual position quantity.")
+            if account_balance is None or float(account_balance) <= 0:
+                raise RuntimeError("RISK_% SL requires a valid account balance.")
+            if risk_pct is None or float(risk_pct) <= 0:
+                raise RuntimeError("RISK_% SL requires Risk Per Trade (%) greater than 0.")
+            risk_amount = float(account_balance) * (float(risk_pct) / 100.0)
+            sl_move = risk_amount / (float(position_qty) * float(actual_entry))
+            if sl_move <= 0 or not np.isfinite(sl_move):
+                raise RuntimeError("RISK_% SL distance is invalid.")
+            tp1_move = sl_move * float(atr_tp1_multiplier)
+            tp2_move = sl_move * float(atr_tp2_multiplier)
+        elif str(sl_mode).upper() == "ATR_DYNAMIC":
             if atr_value is None or not np.isfinite(float(atr_value)) or float(atr_value) <= 0:
                 raise RuntimeError("ATR Dynamic SL requires a valid completed-candle ATR.")
             if float(atr_sl_multiplier) <= 0:
@@ -8902,7 +8917,7 @@ class UniversalFuturesBotGUI:
             raise ValueError("Emergency Scope must be BOT_SYMBOL or ALL_ACCOUNT.")
 
         sl_mode = self.v_sl_mode.get().strip().upper(); tp_mode = self.v_tp_mode.get().strip().upper()
-        if sl_mode not in ("PRICE_%", "ROI_%") or tp_mode not in ("PRICE_%", "ROI_%"):
+        if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
             raise ValueError(f"Unknown SL/TP mode: SL={sl_mode} TP={tp_mode}")
         if float(self.e_sl_pct.get()) <= 0 or float(self.e_hold_sl_roi.get()) <= 0 or float(self.e_tp1_pct.get()) <= 0 or float(self.e_tp2_pct.get()) <= 0:
             raise ValueError("SL/TP targets and Hold-All-Reverse SL ROI must be greater than 0.")
@@ -10501,16 +10516,12 @@ class UniversalFuturesBotGUI:
                 self.v_size_mode.get()
             )
 
-            risk_pct = (
-                float(
-                    self.e_risk_pct.get()
-                ) / 100.0
-            )
+            risk_pct = float(self.e_risk_pct.get())
 
             fixed_qty = float(
                 self.e_fixed_qty.get()
             )
-            if risk_pct <= 0 or risk_pct >= 1.0:
+            if risk_pct <= 0 or risk_pct >= 100.0:
                 raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
             if fixed_qty <= 0:
                 raise ValueError("Fixed Qty must be greater than 0.")
@@ -10535,7 +10546,7 @@ class UniversalFuturesBotGUI:
 
             sl_mode = self.v_sl_mode.get().strip().upper()
             tp_mode = self.v_tp_mode.get().strip().upper()
-            if sl_mode not in ("PRICE_%", "ROI_%"):
+            if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%"):
                 raise ValueError(f"Unknown SL mode: {sl_mode}")
             if tp_mode not in ("PRICE_%", "ROI_%"):
                 raise ValueError(f"Unknown TP mode: {tp_mode}")
@@ -10625,13 +10636,23 @@ class UniversalFuturesBotGUI:
             effective_sl_target_pct = (
                 hold_sl_roi_pct if hold_all_reverse else sl_target_pct
             )
+            if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
+                raise ValueError(
+                    "SL Mode RISK_% is only valid with Sizing Mode FIXED_QTY, "
+                    "because the stop risk is calculated from the actual fixed position quantity."
+                )
+            if sl_mode == "RISK_%" and hold_all_reverse:
+                raise ValueError(
+                    "SL Mode RISK_% cannot be combined with Hold-All-Reverse. "
+                    "Disable Hold-All-Reverse when Risk Per Trade (%) is intended to define the hard SL."
+                )
             effective_sl_mode = (
-                "ROI_%" if hold_all_reverse else ("ATR_DYNAMIC" if use_atr_sl else sl_mode)
+                "ROI_%" if hold_all_reverse else ("RISK_%" if sl_mode == "RISK_%" else ("ATR_DYNAMIC" if use_atr_sl else sl_mode))
             )
 
             # The sizing engine needs the actual market-price distance
             # of the effective stop.
-            if use_atr_sl and not hold_all_reverse:
+            if use_atr_sl and not hold_all_reverse and sl_mode != "RISK_%":
                 # Pre-entry fallback only; actual risk sizing is recalculated
                 # from the latest completed-candle ATR inside each cycle.
                 # Do not pass ATR_DYNAMIC into target_to_price_fraction because
@@ -12059,7 +12080,7 @@ class UniversalFuturesBotGUI:
                         # ------------------------------------------------
                         entry_sl_price_fraction = sl_price_fraction
                         atr_entry_value = None
-                        if use_atr_sl and not hold_all_reverse:
+                        if use_atr_sl and not hold_all_reverse and sl_mode != "RISK_%":
                             atr_entry_value = float(df["atr"].iloc[-2])
                             if not np.isfinite(atr_entry_value) or atr_entry_value <= 0:
                                 raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
@@ -12185,6 +12206,8 @@ class UniversalFuturesBotGUI:
                                     effective_sl_mode,
                                     tp_mode,
                                     leverage,
+                                    account_balance=curr_balance,
+                                    risk_pct=risk_pct,
                                     atr_value=atr_entry_value,
                                     atr_sl_multiplier=atr_sl_mult,
                                     atr_tp1_multiplier=atr_tp1_mult,
