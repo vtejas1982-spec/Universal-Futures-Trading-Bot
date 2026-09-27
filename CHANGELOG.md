@@ -1,3 +1,30 @@
+## V8.4.2-R9.6 — Unified ROI protection + configurable reversal hold — 2026-09-27
+
+### Fixed
+- Fixed Qty remains literal exchange/base quantity and never enters the Equity-Risk sizing formula.
+- Risk sizing, simple SL, fallback SL, ATR SL, TP and reversal-hold modules now have explicit ownership boundaries.
+- Only one resolved SL basis can be installed for a normal position.
+- Legacy R9.3 protection is isolated behind an explicit compatibility switch.
+- Hold-SL WAIT no longer hard-codes ALL_ACTIVE; it follows the selected reversal rule.
+
+### Added
+- Independent ON/OFF controls for normal risk/protection modules.
+- Simple ROI SL/TP protection.
+- Hold Position Until Reverse, ALL_ACTIVE and MIN_FAMILIES.
+- Minimum Reverse Families and Hold-SL threshold/WAIT controls.
+- R9.6 release documentation.
+
+### Validation
+- Python compile: PASS.
+- AST/GUI self-call audit: PASS.
+- R9.3 protection calculator parity: PASS.
+- Simple ROI and reversal-family smoke tests: PASS.
+- Live Bybit Demo lifecycle remains required.
+
+See docs/CRYPTO_R9_6_RELEASE_NOTES.md.
+
+---
+
 ## V8.4.2-R9.3 — Stop completion + Fixed-Qty execution hardening — 2026-09-27
 
 ### Fixed
