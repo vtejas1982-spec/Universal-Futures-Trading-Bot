@@ -1,54 +1,42 @@
-# Forex MT5 AI-Agent R6.5 — Full Audit
-
-Date: 2026-09-28
+# Forex MT5 AI-Agent R6.5 — Full Audit — 2026-09-28
 
 ## Scope
-
-This audit ports the Crypto AI-Agent R6.5 decision/risk/protection contract to the MT5 Forex engine while keeping broker execution, symbol handling, lot sizing and MT5 account modes Forex-native.
+The MT5 Forex engine is aligned with Crypto AI-Agent R6.5 for strategy, evidence families, AI council thresholds, bounded risk management, SL/TP management, GUI configuration and lifecycle handling. MT5 execution remains Forex-native.
 
 ## Added
-
-- AI-Agent R6.5 parity in the Forex GUI, configuration and runtime contract.
-- AI-Agent preset: AI_AGENT_RECOMMENDED_R6.5.
-- AI council controls: minimum families, edge, family confidence, maximum conflicts, trend requirement and structure requirement.
-- Bounded AI risk management: 0.20%-0.50% risk per trade.
-- Bounded AI ATR stop: 1.50-2.40 ATR.
-- Bounded AI TP1: 1.00-1.50R.
-- Bounded AI TP2: 2.00-3.00R.
-- AI-aware lot sizing that preserves the dynamically selected stop distance.
-- Liquidity Swing entry mode: FRESH_BREAK/CURRENT_TREND.
-- Divergence minimum-count and FRESH/CURRENT_STATE entry controls.
-- Forex GUI Grid Mode control; MT5 Forex keeps grid execution OFF-only.
-- R6.5 Forex backtester with CSV and optional MT5 history input.
-- Spread, slippage, commission and Forex tick-value/tick-size inputs in the backtester.
-- TP1 partial exit and break-even simulation.
-- Post-SL opposite-signal lock and capital drawdown guardrails.
-- Regression tests covering compile, StrategyEngine parity, GUI contract and runtime bindings.
+- AI-Agent R6.5 recommended preset and confirmation workflow.
+- AI council controls: 3 families, 0.20 edge, 0.55 family confidence, Trend ON, Structure ON, max 1 conflict.
+- Bounded AI risk: 0.20%–0.50%.
+- Bounded AI SL: 1.50–2.40 ATR.
+- Bounded AI TP1: 1.00–1.50R.
+- Bounded AI TP2: 2.00–3.00R.
+- AI-aware Forex lot sizing that preserves the AI-selected stop distance.
+- Liquidity Swing FRESH_BREAK/CURRENT_TREND control.
+- Divergence minimum-count and FRESH/CURRENT_STATE control.
+- Visible Grid Mode parity control; Forex MT5 remains OFF-only for grid execution.
+- Forex R6.5 historical backtester with CSV/MT5 data, risk sizing, TP1/BE and capital guards.
+- Regression tests for StrategyEngine parity and runtime bindings.
 
 ## Fixed
-
-- AI risk/SL sizing mismatch: static Forex ATR sizing can no longer overwrite an AI-selected stop distance.
-- Configuration migration no longer silently applies the entire AI preset to existing profiles. Existing saved values remain authoritative; only missing fields are initialized.
-- GUI shutdown no longer performs blocking MT5 position/runtime operations directly on the Tk main thread.
-- Execution log is bounded to prevent unbounded GUI text growth.
+- Static ATR lot-sizing logic could overwrite an AI-selected ATR stop; AI stop distance is now authoritative.
+- Configuration migration no longer silently applies the full AI preset to existing profiles. Missing fields are added while saved values remain authoritative.
+- MT5 GUI close operations are moved off the Tk main thread so network/runtime cleanup does not freeze the window.
+- GUI log growth is bounded.
 
 ## Modified
-
 - Forex config/runtime schema aligned to 21/22.
-- Forex R6.5 AI-Agent strategy module parameters now mirror the Crypto R6.5 recommended profile.
-- MTF backtest alignment is based on completed 4H candles to avoid look-ahead.
-- Liquidity and divergence semantics are configurable and shared between entry and reversal logic.
+- Forex AI-Agent indicator defaults follow the R6.5 recommended profile: 15m, 5x reference leverage, one open trade, 15m cooldown, no same-candle re-entry, evidence-family strategy and R6.5 protection.
+- Liquidity and divergence entry semantics are now explicitly configurable and persisted.
+- 4H MTF backtesting uses close-availability alignment to avoid future leakage.
 
 ## Intentionally Forex-native
-
-- MetaTrader 5 terminal/account modes remain unchanged.
-- Broker symbol discovery and MT5 position/order APIs remain Forex-specific.
-- Forex lot sizing uses tick-size/tick-value instead of crypto contract sizing.
-- MT5 does not expose the crypto exchange grid execution path; Grid Mode is therefore OFF-only.
-- Forex protection continues using the MT5-native broker SL plus existing TP management rather than copying exchange-specific Bybit trigger parameters.
+- MetaTrader 5 terminal/account modes, broker symbol discovery and order API.
+- Forex lot sizing through tick size/tick value.
+- Existing MT5 broker-side SL and Forex TP management.
+- Grid execution is not copied from crypto futures; the GUI control is OFF-only.
 
 ## Validation
-
-Local static/regression validation passed for the patched engine and the R6.5 StrategyEngine contract. A deterministic synthetic-data backtest pipeline also completed successfully; zero trades in synthetic data is not a performance claim.
-
-No live broker trade was executed as part of this audit.
+- Local Python compilation passed.
+- StrategyEngine parity was checked between Forex R6.5 and Crypto R6.5.
+- A deterministic synthetic Forex backtest pipeline completed with return code 0.
+- No live broker trade was executed during this audit.
