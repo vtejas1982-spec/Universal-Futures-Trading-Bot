@@ -15,7 +15,7 @@
 - SL Mode option: RISK_%.
 - Config schema 10 and runtime schema 7.
 - Worker-safe GUI configuration snapshot and persisted sizing/protection-basis metadata.
-- Runtime diagnostics for fixed-quantity risk SL.
+- Runtime diagnostics for fixed-quantity risk SL, including a conservative leverage-envelope warning when the required stop distance is wide.
 - R8 regression suite: tests/test_crypto_r8_regressions.py.
 - Clear separation between EQUITY_RISK_% quantity sizing and FIXED_QTY + RISK_% stop-risk budgeting.
 
