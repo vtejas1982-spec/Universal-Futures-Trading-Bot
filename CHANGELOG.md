@@ -1,3 +1,28 @@
+## V8.4.2-CRYPTO-AI-AGENT-R4 — Full engine audit + configuration hardening — 2026-09-27
+
+### Fixed
+- R3 config-load sizing variable ordering retained and audited.
+- AI_AGENT added to the GUI Signal Mode selector.
+- AI council settings are now persisted and explicitly propagated through GUI -> worker -> StrategyEngine.
+- Corrected the AI decision-reason parameter mismatch found during audit.
+
+### Added
+- Per-profile AI Min Families, Edge, Family Confidence, Max Conflicts, Require Trend and Require Structure controls.
+- Startup AI council diagnostics.
+
+### Audited
+- Indicator/evidence-family engine, strategy modes, configuration/defaults/callbacks, recovery, sizing, protection, Grid, profiles and kill-switch lifecycle.
+
+### Validation
+- In-memory compile: PASS.
+- AST and GUI callback/self-call audits: PASS.
+- Undefined-global-name audit: no unresolved globals detected.
+- Deterministic AI-Agent decision smoke tests: PASS.
+
+See docs/CRYPTO_AI_AGENT_R4_RELEASE_NOTES.md.
+
+---
+
 ## V8.4.2-R9.6 — Unified ROI protection + configurable reversal hold — 2026-09-27
 
 ### Fixed
