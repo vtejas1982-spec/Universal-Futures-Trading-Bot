@@ -16,6 +16,7 @@ import pandas as pd
 import requests
 import sys
 import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -44,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9.1"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-R9 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9.1"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9.3"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-R9.3 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9.3-STOP-FIX-FIXED-QTY"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -60,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 10  # R8 adds explicit FIXED_QTY + RISK_% SL semantics
-RUNTIME_SCHEMA_VERSION = 9  # R9.1 adds stale-lock identity and explicit recovery decision.
+CONFIG_SCHEMA_VERSION = 10  # R8 adds Fixed-Qty Risk Guard configuration.
+RUNTIME_SCHEMA_VERSION = 9  # R9.3 hardens stop completion + Fixed-Qty independence.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
@@ -123,6 +124,15 @@ DEFAULT_DIV_USE_ALL = True
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10
 MAX_STOP_WAIT_SECONDS = 20.0
+# R9.3 FAIL-CLOSED KILL SWITCH + STOP COMPLETION:
+# Any bot stop, worker crash, fatal execution halt, or stale heartbeat must
+# flatten the bot-owned symbol and cancel its open orders.  This is mandatory
+# for this production build; it is intentionally not a user-disableable flag.
+KILL_SWITCH_REQUIRED = True
+KILL_SWITCH_HEARTBEAT_SECONDS = 3.0
+KILL_SWITCH_STALE_SECONDS = 45.0
+KILL_SWITCH_RETRY_SECONDS = 1.0
+KILL_SWITCH_MAX_ATTEMPTS = 4
 PROFILE_CONTROL_SCHEMA_VERSION = 1
 PROFILE_STATUS_HEARTBEAT_MS = 3000
 REMOTE_STOP_STALE_SECONDS = 300.0
@@ -138,6 +148,256 @@ DIVERGENCE_INDICATORS = (
 )
 
 # V8.2.3: normalize GUI symbols before live checkpoint identity checks.
+
+
+def _kill_switch_profile_paths(profile_id):
+    """Return profile paths without constructing the Tk GUI."""
+    raw = str(profile_id or "BOT-01").strip().upper()
+    raw = re.sub(r"[^A-Z0-9._-]+", "_", raw).strip("._-")[:64] or "BOT-01"
+    folder = PROFILE_DIR / raw
+    return raw, folder, folder / "config.json", folder / "runtime_state.json", folder / "kill_switch_heartbeat.json", folder / "kill_switch.log"
+
+
+def _kill_switch_log(path, message):
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).isoformat()
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"[{stamp}] {message}\\n")
+    except Exception:
+        pass
+
+
+def _kill_switch_read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _kill_switch_exchange(exchange_id, api_key, api_secret, account_mode):
+    supported = {
+        "bybit": "swap", "binance": "future", "gate": "swap",
+        "bitget": "swap", "weex": "swap",
+    }
+    allowed_modes = {
+        "bybit": {"BYBIT_DEMO", "BYBIT_TESTNET", "LIVE"},
+        "binance": {"TESTNET", "LIVE"},
+        "gate": {"TESTNET", "LIVE"},
+        "bitget": {"DEMO", "LIVE"},
+        "weex": {"DEMO", "LIVE"},
+    }
+    exchange_id = str(exchange_id or "").strip().lower()
+    account_mode = str(account_mode or "").strip().upper()
+    if exchange_id not in supported or account_mode not in allowed_modes.get(exchange_id, set()):
+        raise RuntimeError(f"Kill switch: unsupported exchange/account mode: {exchange_id}/{account_mode}")
+    exchange = getattr(ccxt, exchange_id)({
+        "apiKey": api_key,
+        "secret": api_secret,
+        "enableRateLimit": True,
+        "timeout": 20000,
+        "options": {"defaultType": supported[exchange_id]},
+    })
+    if exchange_id == "bybit":
+        if account_mode == "BYBIT_DEMO":
+            if not hasattr(exchange, "enable_demo_trading"):
+                raise RuntimeError("Installed CCXT does not support Bybit Demo Trading.")
+            exchange.enable_demo_trading(True)
+        elif account_mode == "BYBIT_TESTNET":
+            exchange.set_sandbox_mode(True)
+    elif exchange_id == "binance" and account_mode == "TESTNET":
+        exchange.set_sandbox_mode(True)
+    elif exchange_id == "gate" and account_mode == "TESTNET":
+        exchange.set_sandbox_mode(True)
+    elif exchange_id == "bitget" and account_mode == "DEMO":
+        if hasattr(exchange, "enable_demo_trading"):
+            exchange.enable_demo_trading(True)
+        else:
+            exchange.set_sandbox_mode(True)
+    elif exchange_id == "weex" and account_mode == "DEMO":
+        exchange.set_sandbox_mode(True)
+    exchange.load_markets()
+    return exchange
+
+
+def _kill_switch_flatten_profile(profile_id, reason="KILL SWITCH"):
+    """Emergency flatten one bot profile's configured symbol and cancel orders."""
+    profile, folder, config_path, runtime_path, heartbeat_path, log_path = _kill_switch_profile_paths(profile_id)
+    cfg = _kill_switch_read_json(config_path)
+    if not cfg and profile == "BOT-01":
+        cfg = _kill_switch_read_json(CONFIG_FILE)
+    runtime = _kill_switch_read_json(runtime_path)
+    if not cfg:
+        raise RuntimeError(f"Kill switch: no configuration found for {profile}.")
+    exchange_id = str(runtime.get("exchange") or cfg.get("exchange") or "").lower()
+    account_mode = str(runtime.get("account_mode") or cfg.get("account_mode") or "").upper()
+    symbol = str(runtime.get("symbol") or cfg.get("symbol") or "").strip().upper()
+    api_key = str(cfg.get("api_key") or "").strip()
+    api_secret = str(cfg.get("api_secret") or "").strip()
+    if not exchange_id or not symbol or not api_key or not api_secret:
+        raise RuntimeError(f"Kill switch: incomplete exchange identity for {profile}.")
+    exchange = _kill_switch_exchange(exchange_id, api_key, api_secret, account_mode)
+    if symbol not in exchange.markets:
+        compact = symbol.replace("/", "").replace(":", "")
+        candidates = [
+            sym for sym, market in exchange.markets.items()
+            if sym.replace("/", "").replace(":", "").upper() == compact
+            and (market.get("swap") or market.get("future") or market.get("contract"))
+        ]
+        if candidates:
+            symbol = candidates[0]
+        else:
+            raise RuntimeError(f"Kill switch: symbol not found on {exchange_id}: {symbol}")
+
+    _kill_switch_log(log_path, f"ARMED | Profile={profile} | Symbol={symbol} | Reason={reason}")
+    last_error = None
+    for attempt in range(1, KILL_SWITCH_MAX_ATTEMPTS + 1):
+        try:
+            # Cancel every open order on the bot-owned symbol. This deliberately
+            # removes stale entry/TP/SL/grid orders so a stopped bot cannot leave
+            # an order behind that can create a new position later.
+            try:
+                if hasattr(exchange, "cancel_all_orders"):
+                    exchange.cancel_all_orders(symbol)
+            except Exception as e:
+                _kill_switch_log(log_path, f"Cancel-all warning | Attempt={attempt} | {e}")
+            try:
+                orders = exchange.fetch_open_orders(symbol)
+                for order in orders:
+                    oid = order.get("id")
+                    if oid:
+                        try:
+                            exchange.cancel_order(oid, symbol)
+                        except Exception as e:
+                            _kill_switch_log(log_path, f"Cancel warning | ID={oid} | {e}")
+            except Exception as e:
+                raise RuntimeError(f"Open-order verification failed: {e}") from e
+
+            positions = exchange.fetch_positions([symbol])
+            live = []
+            for pos in positions or []:
+                side = str(pos.get("side") or "").upper()
+                try:
+                    qty = abs(float(pos.get("contracts") or 0))
+                except Exception:
+                    qty = 0.0
+                if qty > 0 and side in ("LONG", "SHORT"):
+                    live.append((side, qty, pos))
+
+            for side, qty, pos in live:
+                market = exchange.market(symbol)
+                try:
+                    qty = float(exchange.amount_to_precision(symbol, qty))
+                except Exception:
+                    pass
+                if qty <= 0:
+                    continue
+                close_side = "sell" if side == "LONG" else "buy"
+                params = {"reduceOnly": True}
+                if exchange_id == "bybit":
+                    params["positionIdx"] = 0
+                exchange.create_order(symbol, "market", close_side, qty, None, params)
+                _kill_switch_log(log_path, f"CLOSE SENT | Attempt={attempt} | Side={side} | Qty={qty:g} | Symbol={symbol}")
+
+            time.sleep(0.75)
+            remaining_positions = exchange.fetch_positions([symbol])
+            remaining = []
+            for pos in remaining_positions or []:
+                side = str(pos.get("side") or "").upper()
+                try:
+                    qty = abs(float(pos.get("contracts") or 0))
+                except Exception:
+                    qty = 0.0
+                if qty > 0 and side in ("LONG", "SHORT"):
+                    remaining.append((side, qty))
+            remaining_orders = exchange.fetch_open_orders(symbol)
+            if not remaining and not remaining_orders:
+                _kill_switch_log(log_path, f"SUCCESS | Profile={profile} | Symbol={symbol} | FLAT + NO OPEN ORDERS")
+                return True
+            last_error = RuntimeError(
+                f"Kill switch verification still sees {len(remaining)} position(s) and {len(remaining_orders)} open order(s)."
+            )
+        except Exception as e:
+            last_error = e
+            _kill_switch_log(log_path, f"ATTEMPT FAILED | Attempt={attempt}/{KILL_SWITCH_MAX_ATTEMPTS} | {e}")
+        if attempt < KILL_SWITCH_MAX_ATTEMPTS:
+            time.sleep(KILL_SWITCH_RETRY_SECONDS)
+    raise RuntimeError(str(last_error or "Kill switch failed."))
+
+
+def _run_kill_switch_watchdog(profile_id, parent_pid):
+    """Independent fail-closed watchdog for hard process crashes/forced exits."""
+    profile, folder, config_path, runtime_path, heartbeat_path, log_path = _kill_switch_profile_paths(profile_id)
+    _kill_switch_log(log_path, f"WATCHDOG STARTED | Profile={profile} | ParentPID={parent_pid}")
+    while True:
+        runtime = _kill_switch_read_json(runtime_path)
+        heartbeat = _kill_switch_read_json(heartbeat_path)
+        status = str(runtime.get("status") or "").upper()
+        runtime_pid = int(runtime.get("worker_pid") or 0)
+        hb_pid = int(heartbeat.get("parent_pid") or 0)
+        hb_ts = str(heartbeat.get("heartbeat_utc") or "")
+        try:
+            hb_time = datetime.fromisoformat(hb_ts.replace("Z", "+00:00")).timestamp() if hb_ts else 0.0
+        except Exception:
+            hb_time = 0.0
+        age = time.time() - hb_time if hb_time else 10**9
+
+        # A newer bot process has taken ownership of this profile; the old
+        # watchdog must never flatten the new session.
+        if runtime_pid and runtime_pid != int(parent_pid):
+            _kill_switch_log(log_path, f"WATCHDOG EXIT | Ownership moved to PID={runtime_pid}")
+            return
+        if hb_pid and hb_pid != int(parent_pid):
+            _kill_switch_log(log_path, f"WATCHDOG EXIT | Heartbeat ownership moved to PID={hb_pid}")
+            return
+        if status in ("STOPPED", "CONFIGURED"):
+            _kill_switch_log(log_path, f"WATCHDOG EXIT | Clean status={status}")
+            return
+        if status == "STOPPING":
+            # Give the worker a short grace period to perform its own kill switch.
+            time.sleep(3)
+            runtime2 = _kill_switch_read_json(runtime_path)
+            if str(runtime2.get("status") or "").upper() == "STOPPED":
+                _kill_switch_log(log_path, "WATCHDOG EXIT | Worker completed clean stop")
+                return
+
+        parent_alive = False
+        try:
+            if os.name == "nt":
+                import ctypes
+                handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(parent_pid))
+                if handle:
+                    parent_alive = True
+                    ctypes.windll.kernel32.CloseHandle(handle)
+            else:
+                os.kill(int(parent_pid), 0)
+                parent_alive = True
+        except Exception:
+            parent_alive = False
+
+        if (not parent_alive) or age > KILL_SWITCH_STALE_SECONDS:
+            reason = "parent process exited" if not parent_alive else f"heartbeat stale for {age:.1f}s"
+            _kill_switch_log(log_path, f"WATCHDOG TRIGGERED | {reason}")
+            try:
+                _kill_switch_flatten_profile(profile, f"WATCHDOG: {reason}")
+            except Exception as e:
+                _kill_switch_log(log_path, f"WATCHDOG FLATTEN FAILED | {e}")
+                time.sleep(KILL_SWITCH_RETRY_SECONDS)
+                continue
+            try:
+                state = _kill_switch_read_json(runtime_path)
+                state["status"] = "STOPPED"
+                state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+                state["last_error"] = f"KILL SWITCH: {reason}"
+                with open(runtime_path, "w", encoding="utf-8") as fh:
+                    json.dump(state, fh, indent=4, ensure_ascii=True)
+            except Exception as e:
+                _kill_switch_log(log_path, f"Runtime state update warning | {e}")
+            _kill_switch_log(log_path, "WATCHDOG COMPLETE | Profile flattened and disarmed")
+            return
+        time.sleep(2)
 
 
 def calculate_rma(series, length):
@@ -629,10 +889,6 @@ def calculate_nadaraya_watson_envelope(df, bandwidth=8.0, multiplier=3.0, lookba
 # numerical strategy states suitable for execution/backtesting.
 # ============================================================
 
-DIVERGENCE_INDICATORS = (
-    "MACD", "MACD_HIST", "RSI", "STOCH", "CCI",
-    "MOMENTUM", "OBV", "VWMACD", "CMF", "MFI",
-)
 
 def _safe_div(a, b):
     b = float(b)
@@ -741,8 +997,7 @@ def _divergence_line_clear(values, current_idx, pivot_idx, bullish=True):
         # bullish divergences cannot cut below the interpolated line;
         # bearish divergences cannot cut above it.
         if bullish and v < expected:
-            return False
-        if not bullish and v > expected:
+            return False        if not bullish and v > expected:
             return False
     return True
 
@@ -1002,7 +1257,8 @@ def _volume_sr_series(frame, vol_threshold=6):
     fresh_bull=np.zeros(n,dtype=bool); fresh_bear=np.zeros(n,dtype=bool)
     res_hi=res_zone=sup_lo=sup_zone=np.nan
     vma=x["vol"].rolling(int(vol_threshold)).mean()
-    for i in range(n):        if i>=5:
+    for i in range(n):
+        if i>=5:
             p=i-3
             up=(float(x.high.iloc[p])>float(x.high.iloc[p-1])>float(x.high.iloc[p-2])
                 and float(x.high.iloc[p+1])<float(x.high.iloc[p])>float(x.high.iloc[p+2])
@@ -1740,7 +1996,6 @@ def calculate_stochastic(df, k_length=14, k_smooth=3, d_length=3):
 def calculate_vwap(df, length=50):
     """Calculate a rolling volume-weighted average price."""
     df = df.copy()
-
     length = int(length)
     if length <= 0:
         raise ValueError("VWAP period must be greater than 0.")
@@ -1788,10 +2043,14 @@ class UniversalFuturesBotGUI:
 
         self.is_running = False
         self.bot_thread = None
+        self.worker_pid = None
+        self.worker_started_at = 0.0
         self.stop_requested = False
         self.stop_started_at = 0.0
         self._stop_completion_scheduled = False
-        # Tkinter variables are not thread-safe. R8 snapshots GUI settings on the Tk thread.
+        # Tkinter variables are not thread-safe. R8 snapshots GUI configuration
+        # on the GUI thread; the trading worker reads this immutable/current
+        # snapshot instead of calling Tk widgets from the worker thread.
         self._runtime_gui_lock = threading.RLock()
         self._runtime_gui_values = {}
 
@@ -1814,6 +2073,13 @@ class UniversalFuturesBotGUI:
         self.worker_pid = None
         self.worker_started_at = 0.0
         self._profile_status_refresh_job = None
+        self.kill_switch_watchdog = None
+        self.kill_switch_watchdog_started = False
+        self.last_kill_switch_heartbeat = 0.0
+        self._kill_switch_lock = threading.RLock()
+        self.kill_switch_completed = False
+        self.kill_switch_in_progress = False
+        self.stop_cleanup_thread = None
 
         # Execution log is configured to auto-follow the newest message.
         self.log_autoscroll = True
@@ -1999,9 +2265,188 @@ class UniversalFuturesBotGUI:
         finally:
             self._schedule_profile_status_heartbeat()
 
-    def _request_profile_stop(self, profile_id):
-        """Stop exactly one profile, even when its worker runs in another process."""
+    def _kill_switch_heartbeat_path(self, profile_id=None):
         profile = self._sanitize_profile_id(profile_id)
+        return str(PROFILE_DIR / profile / "kill_switch_heartbeat.json")
+
+    def _write_kill_switch_heartbeat(self, status="RUNNING"):
+        if not KILL_SWITCH_REQUIRED:
+            return
+        now = time.time()
+        if status == "RUNNING" and now - self.last_kill_switch_heartbeat < KILL_SWITCH_HEARTBEAT_SECONDS:
+            return
+        payload = {
+            "schema_version": 1,
+            "profile": self._sanitize_profile_id(),
+            "parent_pid": os.getpid(),
+            "heartbeat_utc": datetime.now(timezone.utc).isoformat(),
+            "status": str(status).upper(),
+            "symbol": self.symbol,
+            "exchange": self.exchange_id,
+            "session_id": self.session_id,
+        }
+        try:
+            self._write_json_atomic(self._kill_switch_heartbeat_path(), payload)
+            self.last_kill_switch_heartbeat = now
+        except Exception as e:
+            self.log(f"KILL SWITCH HEARTBEAT WARNING: {e}")
+
+    def _start_kill_switch_watchdog(self):
+        if not KILL_SWITCH_REQUIRED or self.kill_switch_watchdog_started:
+            return
+        profile = self._sanitize_profile_id()
+        try:
+            args = [sys.executable]
+            if getattr(sys, "frozen", False):
+                args += ["--kill-switch-watchdog", profile, str(os.getpid())]
+            else:
+                args += [str(Path(__file__).resolve()), "--kill-switch-watchdog", profile, str(os.getpid())]
+            kwargs = {
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "close_fds": True,
+            }
+            if os.name == "nt":
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            self.kill_switch_watchdog = subprocess.Popen(args, **kwargs)
+            self.kill_switch_watchdog_started = True
+            self.log(
+                f"KILL SWITCH WATCHDOG: ARMED | PID={self.kill_switch_watchdog.pid} | "
+                f"Heartbeat={KILL_SWITCH_HEARTBEAT_SECONDS:g}s | Stale trigger={KILL_SWITCH_STALE_SECONDS:g}s"
+            )
+        except Exception as e:
+            self.kill_switch_watchdog = None
+            self.kill_switch_watchdog_started = False
+            # This is a mandatory safety mechanism. Do not allow live trading
+            # if the independent crash watchdog could not be armed.
+            raise RuntimeError(f"KILL SWITCH WATCHDOG could not be armed: {e}") from e
+
+    def _disarm_kill_switch_watchdog(self):
+        # The watchdog normally exits itself after seeing STOPPED. Do not kill
+        # a watchdog blindly while a position could still exist.
+        self._write_kill_switch_heartbeat(status="STOPPING")
+
+    def _activate_kill_switch(self, reason="BOT STOP"):
+        """Flatten the configured bot symbol exactly once per session and verify flat."""
+        if not KILL_SWITCH_REQUIRED:
+            return True
+        with self._kill_switch_lock:
+            if self.kill_switch_completed:
+                self.log("KILL SWITCH: already completed for this session; no duplicate flatten required.")
+                return True
+            if self.kill_switch_in_progress:
+                # RLock prevents concurrent execution in this process; this branch is
+                # retained as a defensive guard for future callers.
+                return False
+            self.kill_switch_in_progress = True
+            self.log(f"KILL SWITCH: ARMED ACTION | Reason={reason}")
+            try:
+                ok = _kill_switch_flatten_profile(self._sanitize_profile_id(), reason)
+                if not ok:
+                    raise RuntimeError("Kill switch returned without a verified FLAT + NO OPEN ORDERS state.")
+                self.kill_switch_completed = True
+                self.log(
+                    f"KILL SWITCH COMPLETE | Profile={self._sanitize_profile_id()} | "
+                    f"Symbol={self.symbol or 'UNKNOWN'} | FLAT + NO OPEN ORDERS"
+                )
+                self._write_kill_switch_heartbeat(status="STOPPING")
+                return True
+            except Exception as e:
+                self.log(f"KILL SWITCH CRITICAL FAILURE: {e}")
+                self.runtime_last_error = f"KILL SWITCH FAILURE: {e}"
+                self._write_kill_switch_heartbeat(status="STOPPING")
+                return False
+            finally:
+                self.kill_switch_in_progress = False
+
+    def _start_stop_cleanup_worker(self, reason="MANUAL BOT STOP"):
+        """Run exchange flattening off the Tk thread so STOP never freezes the GUI."""
+        existing = self.stop_cleanup_thread
+        if existing is not None and existing.is_alive():
+            return
+        def _cleanup():
+            ok = self._activate_kill_switch(reason)
+            if ok:
+                self.log("STOP CLEANUP: exchange position/orders flattened and verified.")
+            else:
+                self.log("STOP CLEANUP: kill switch did not verify a flat exchange state; retry/watchdog remains active.")
+        self.stop_cleanup_thread = threading.Thread(target=_cleanup, name="KillSwitchStopCleanup", daemon=True)
+        self.stop_cleanup_thread.start()
+
+    def _log_exchange_resume_snapshot(self, current_position, current_orders):
+        """Log the live exchange snapshot before a resumed session continues."""
+        exchange_time = None
+        try:
+            if hasattr(self.exchange, "fetch_time"):
+                exchange_time = self.exchange.fetch_time()
+        except Exception:
+            exchange_time = None
+        try:
+            balance = self.fetch_balance_total()
+        except Exception:
+            balance = None
+        p = current_position or {}
+        side = str(p.get("side") or "FLAT").upper()
+        try:
+            qty = abs(float(p.get("qty") or 0.0))
+        except Exception:
+            qty = 0.0
+        try:
+            entry = float(p.get("entry") or 0.0)
+        except Exception:
+            entry = 0.0
+        raw = p.get("raw") if isinstance(p.get("raw"), dict) else {}
+        mark = (
+            p.get("mark") or p.get("markPrice")
+            or raw.get("markPrice") or raw.get("mark_price")
+        )
+        try:
+            mark = float(mark) if mark is not None else 0.0
+        except Exception:
+            mark = 0.0
+        upl = p.get("unrealizedPnl")
+        try:
+            upl = float(upl) if upl is not None else float(
+                raw.get("unrealisedPnl") or raw.get("unrealizedPnl") or 0.0
+            )
+        except Exception:
+            upl = 0.0
+        lev = p.get("leverage") or raw.get("leverage")
+        strategy = self.runtime_strategy_mode or self.v_signal_mode.get().strip().upper()
+        profile = self._sanitize_profile_id()
+        exch_dt = "UNKNOWN"
+        if exchange_time:
+            try:
+                exch_dt = datetime.fromtimestamp(float(exchange_time) / 1000.0, timezone.utc).isoformat()
+            except Exception:
+                exch_dt = str(exchange_time)
+        saved_stats = (self.resume_candidate or {}).get("stats") or {}
+        self.log(
+            f"RECOVERY EXCHANGE SNAPSHOT | ExchangeTime={exch_dt} | Profile={profile} | "
+            f"Exchange={self.exchange_id or 'UNKNOWN'} | Account={self.runtime_account_mode or self.v_account_mode.get()} | "
+            f"Symbol={self.symbol} | Timeframe={self.runtime_timeframe or self.v_tf.get()} | Strategy={strategy} | "
+            f"Position={side} Qty={qty:g} Entry={entry:g} Mark={mark:g} UPNL={upl:.8f} | "
+            f"Leverage={lev or self.e_lev.get().strip()} | OpenOrders={len(current_orders)} | "
+            f"Balance={balance if balance is not None else 'UNKNOWN'} | "
+            f"SavedNetPnL={float(saved_stats.get('net_pnl') or 0.0):.8f} | "
+            f"SavedTrades={int(saved_stats.get('total_trades') or 0)} | "
+            f"SavedWins={int(saved_stats.get('winning_trades') or 0)} | "
+            f"SavedLosses={int(saved_stats.get('losing_trades') or 0)}"
+        )
+        if current_position:
+            self.log(
+                f"RECOVERY LIVE POSITION | {side} {self.symbol} | Qty={qty:g} | Entry={entry:g} | "
+                f"Mark={mark:g} | Unrealized PnL={upl:.8f} | Leverage={lev or 'exchange/default'}"
+            )
+        else:
+            self.log(f"RECOVERY LIVE POSITION | FLAT | {self.symbol} | No exchange position is running.")
+
+    def _request_selected_profile_stop(self):
+        """Stop the selected profile, including a bot running in another GUI process."""
+        profile = self._selected_profile_id()
+        if not profile:
+            return
         current = self._sanitize_profile_id(getattr(self, "bot_profile_id", ""))
         same_process_worker = (
             profile == current
@@ -2011,33 +2456,8 @@ class UniversalFuturesBotGUI:
         if same_process_worker:
             self.stop_bot()
             return
+
         if not self._profile_lock_is_active(profile):
-            state_path = PROFILE_DIR / profile / "runtime_state.json"
-            state = self._read_json_file(state_path) or {}
-            if str(state.get("status") or "").upper() in {"RUNNING", "STOPPING", "CRASHED"}:
-                ps = state.get("position_state") or {}
-                gs = state.get("grid_state") or {}
-                has_inventory = bool(
-                    ps.get("last_protected_position")
-                    or ps.get("active_trade")
-                    or gs.get("active")
-                    or gs.get("filled_levels")
-                    or gs.get("entry_orders")
-                    or gs.get("tp_order_id")
-                    or gs.get("sl_order_id")
-                )
-                state["status"] = "RECOVERY_REQUIRED" if has_inventory else "STOPPED"
-                state["recovery_decision"] = "STOP_REQUESTED_WHILE_NOT_RUNNING"
-                state["recovery_decision_at_utc"] = datetime.now(timezone.utc).isoformat()
-                state["last_error"] = (
-                    "Stop requested but no live worker was found; recovery is required."
-                    if has_inventory else "Stop requested; stale runtime marker normalized to STOPPED."
-                )
-                try:
-                    self._write_json_atomic(state_path, state)
-                except Exception as e:
-                    self.log(f"PROFILE STOP STATE SAVE WARNING | {profile} | {e}")
-                self._refresh_profile_list(select_profile=profile)
             messagebox.showinfo("Profile not running", f"Profile {profile} is not currently running.")
             return
         if not messagebox.askyesno(
@@ -2050,14 +2470,12 @@ class UniversalFuturesBotGUI:
             return
         try:
             request = self._write_profile_control(profile, "STOP", "Remote stop requested from Profile Manager")
-            self.log(f"REMOTE STOP REQUESTED | Profile={profile} | Request={request['request_id']}")
+            self.log(
+                f"REMOTE STOP REQUESTED | Profile={profile} | Request={request['request_id']}"
+            )
             self._refresh_profile_list(select_profile=profile)
         except Exception as e:
             messagebox.showerror("Remote stop failed", str(e))
-
-    def _request_selected_profile_stop(self):
-        """Backward-compatible selected-profile STOP action."""
-        self._request_profile_stop(self._selected_profile_id())
 
     def _consume_remote_stop_request(self):
         """Consume a STOP control request for this worker without touching Tk widgets."""
@@ -2077,6 +2495,9 @@ class UniversalFuturesBotGUI:
             if self.grid_state.get("active"):
                 self._grid_stop(self.symbol, "Remote bot stop", cooldown_seconds=0)
         except Exception as grid_stop_error:
+            # Do not pretend a Grid stop was clean. Keep the worker in its
+            # normal finalization path so protection remains until exchange
+            # state can be verified.
             self.log(f"REMOTE GRID STOP WARNING: {grid_stop_error}")
         return True
 
@@ -2148,7 +2569,8 @@ class UniversalFuturesBotGUI:
             "bot_id": self._sanitize_profile_id(),
             "session_id": self.session_id,
             "exchange": self.exchange_id,
-            "account_mode": self.runtime_account_mode,            "symbol": self.symbol,
+            "account_mode": self.runtime_account_mode,
+            "symbol": self.symbol,
             "timeframe": self.runtime_timeframe,
             "strategy_mode": self.runtime_strategy_mode,
             "strategy_modules": self.runtime_strategy_modules,
@@ -2257,6 +2679,10 @@ class UniversalFuturesBotGUI:
                 and not has_grid_state
                 and not self._profile_lock_is_active(bot_id)
             ):
+                # A stale lifecycle marker with no saved trading state and no
+                # live process is safe to normalize to STOPPED.  The next
+                # start still performs its normal exchange inventory/order
+                # preflight; this only prevents a phantom recovery prompt.
                 state["status"] = "STOPPED"
                 state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
                 state["last_error"] = ""
@@ -2294,21 +2720,10 @@ class UniversalFuturesBotGUI:
             else:
                 self.resume_candidate = state
                 self.resume_requested = False
-                state["status"] = "STOPPED"
-                state["recovery_decision"] = "START_NEW"
-                state["recovery_decision_at_utc"] = datetime.now(timezone.utc).isoformat()
-                state["stop_requested"] = False
-                state["stop_started_at"] = None
-                state["last_error"] = "Recovery declined: Start New Bot selected; previous runtime state was not resumed."
-                try:
-                    self._write_json_atomic(self._get_runtime_state_path(), state)
-                except Exception as persist_error:
-                    self.log(f"RECOVERY DECISION SAVE WARNING: {persist_error}")
                 self.log(
-                    "RECOVERY SELECTED: Start New Bot. Previous saved runtime marked STOPPED; "
-                    "the exchange will be checked for existing inventory/orders."
+                    "RECOVERY SELECTED: Start New Bot. "
+                    "The exchange will be checked for existing inventory/orders."
                 )
-                self._refresh_profile_list(select_profile=bot_id)
         except Exception as e:
             self.log(f"Recovery prompt error: {e}")
 
@@ -2344,7 +2759,7 @@ class UniversalFuturesBotGUI:
             state.get("strategy_mode") or self.v_signal_mode.get()
         )
         self.runtime_strategy_modules = str(state.get("strategy_modules") or "")
-        self.runtime_sizing_mode = str(state.get("sizing_mode") or self.v_size_mode.get())
+        self.runtime_sizing_mode = str(state.get("sizing_mode") or self._runtime_gui_value("v_size_mode", DEFAULT_RISK_MODE))
         self.runtime_protection_basis = str(state.get("protection_basis") or "CONFIGURED_SL_OR_ATR")
         self.runtime_config_hash = str(state.get("config_hash") or "")
         self.runtime_resumed = True
@@ -2447,6 +2862,7 @@ class UniversalFuturesBotGUI:
         # Strict read is intentional: an exchange read failure must never look
         # like a clean/flat account during recovery.
         current_orders = self.fetch_open_orders_safe(self.symbol, strict=True)
+        self._log_exchange_resume_snapshot(current_position, current_orders)
         current_ids = {
             str(o.get("id"))
             for o in current_orders
@@ -2579,8 +2995,7 @@ class UniversalFuturesBotGUI:
                 self.last_protected_position["entry"] = current_position["entry"]
                 expected_protection_ids = {
                     str(self.last_protected_position.get(key))
-                    for key in ("sl_id", "tp1_id", "tp2_id")
-                    if self.last_protected_position
+                    for key in ("sl_id", "tp1_id", "tp2_id")                    if self.last_protected_position
                     and self.last_protected_position.get(key)
                 }
                 unknown_protection_orders = current_ids - expected_protection_ids
@@ -2768,13 +3183,7 @@ class UniversalFuturesBotGUI:
         return PROFILE_DIR / profile / "config.json"
 
     def _profile_lock_is_active(self, profile_id):
-        """Return True only when the profile lock belongs to a live bot worker.
-
-        R9.1 hardening: os.kill(pid, 0) alone can report a zombie/reused PID as
-        alive on Linux. Validate the process identity where /proc is available
-        and clean stale locks immediately so the Profile Manager cannot show a
-        phantom RUNNING profile.
-        """
+        """Return True when another live process owns the profile lock."""
         profile = self._sanitize_profile_id(profile_id)
         lock_path = PROFILE_DIR / profile / "bot.lock"
         if not lock_path.exists():
@@ -2786,59 +3195,26 @@ class UniversalFuturesBotGUI:
             pid = 0
         if pid and pid == os.getpid():
             current_profile = self._sanitize_profile_id(getattr(self, "bot_profile_id", "BOT-01"))
-            worker_alive = bool(getattr(self, "bot_thread", None) and self.bot_thread.is_alive())
+            worker_alive = bool(
+                getattr(self, "bot_thread", None)
+                and self.bot_thread.is_alive()
+            )
             if profile == current_profile and (
                 bool(getattr(self, "is_running", False))
                 or worker_alive
                 or bool(getattr(self, "stop_requested", False))
             ):
                 return True
-            self._remove_stale_profile_lock(profile, expected_pid=pid)
             return False
-        if pid and self._profile_process_identity_alive(pid, payload):
-            return True
-        self._remove_stale_profile_lock(profile, expected_pid=pid or None)
+        if pid:
+            try:
+                os.kill(pid, 0)
+                return True
+            except Exception:
+                pass
+        # A stale lock is not considered active; _acquire_profile_lock will
+        # remove it safely when the profile is actually started.
         return False
-
-    def _profile_process_identity_alive(self, pid, payload=None):
-        """Check whether PID is still the bot process that created the lock."""
-        if not pid or pid <= 0:
-            return False
-        try:
-            os.kill(pid, 0)
-        except Exception:
-            return False
-        proc = Path(f"/proc/{pid}")
-        if proc.exists():
-            try:
-                stat_text = (proc / "stat").read_text(encoding="utf-8", errors="ignore")
-                fields = stat_text.split()
-                if len(fields) > 2 and fields[2] == "Z":
-                    return False
-            except Exception:
-                pass
-            try:
-                cmdline = (proc / "cmdline").read_bytes().replace(b"\\x00", b" ").decode("utf-8", errors="ignore").lower()
-                if cmdline and ("python" not in cmdline and ".py" not in cmdline and "universal" not in cmdline):
-                    return False
-            except Exception:
-                pass
-        return True
-
-    def _remove_stale_profile_lock(self, profile_id, expected_pid=None):
-        """Remove a lock only when it is stale or still owned by expected_pid."""
-        profile = self._sanitize_profile_id(profile_id)
-        path = PROFILE_DIR / profile / "bot.lock"
-        if not path.exists():
-            return
-        try:
-            payload = self._read_json_file(path) or {}
-            actual_pid = int(payload.get("pid") or 0)
-            if expected_pid is not None and actual_pid not in (0, int(expected_pid)):
-                return
-            path.unlink()
-        except Exception:
-            pass
 
     def _profile_strategy_summary(self, cfg):
         labels = [
@@ -2902,7 +3278,9 @@ class UniversalFuturesBotGUI:
             status = "STOPPING" if (control_pending or bool(getattr(self, "stop_requested", False))) else "RUNNING"
         elif status in {"RUNNING", "CRASHED", "STOPPING", "PAUSED_WITH_POSITION"}:
             # A runtime checkpoint is historical state, not proof that a worker
-            # is alive. Never display RUNNING after the process/lock is gone.
+            # is alive.  Never display RUNNING after the process/lock is gone.
+            # If saved inventory exists, make the required manual recovery action
+            # explicit; otherwise the profile is simply stopped.
             status = "RECOVERY_REQUIRED" if (has_saved_position or has_grid_state) else "STOPPED"
             if control_pending:
                 try:
@@ -2918,7 +3296,10 @@ class UniversalFuturesBotGUI:
         qty_display = (
             f"Risk {cfg.get('risk_pct', '1.0')}%"
             if size_mode == "EQUITY_RISK_%"
-            else f"Fixed {cfg.get('fixed_qty', '0.001')}"
+            else (
+                f"Fixed {cfg.get('fixed_qty', '0.001')}"
+
+            )
         )
         updated = runtime.get("updated_at_utc")
         if not updated:
@@ -2956,33 +3337,15 @@ class UniversalFuturesBotGUI:
             ids.add("BOT-01")
         return sorted(ids)
 
-    def _refresh_profile_stop_buttons(self, profiles=None):
-        frame = getattr(self, "profile_stop_buttons_frame", None)
-        if frame is None:
-            return
-        for child in frame.winfo_children():
-            if child is not getattr(self, "profile_stop_buttons_label", None):
-                child.destroy()
-        ids = profiles if profiles is not None else self._list_saved_profiles()
-        for profile in ids:
-            p = self._sanitize_profile_id(profile)
-            ttk.Button(
-                frame,
-                text=f"STOP {p}",
-                command=lambda profile_id=p: self._request_profile_stop(profile_id),
-            ).pack(side="left", padx=2)
-
     def _refresh_profile_list(self, select_profile=None):
         tree = getattr(self, "profile_tree", None)
         if tree is None:
             return
         selected = select_profile or self._sanitize_profile_id(self.v_bot_id.get())
-        profiles = self._list_saved_profiles()
-        self._refresh_profile_stop_buttons(profiles)
         for item in tree.get_children():
             tree.delete(item)
         selected_item = None
-        for profile in profiles:
+        for profile in self._list_saved_profiles():
             rec = self._profile_summary_record(profile)
             if not rec:
                 continue
@@ -3281,8 +3644,9 @@ class UniversalFuturesBotGUI:
         )
 
         # A stale RUNNING/CRASHED marker by itself is not proof of an active
-        # bot. The profile lock, saved position, active trade, or Grid state
-        # are the actual safety blockers.
+        # bot.  The profile lock, saved position, active trade, or Grid state
+        # are the actual safety blockers.  This allows a flat orphaned profile
+        # to be deleted after a crash/restart without manually editing JSON.
         if has_saved_position or has_grid_state:
             messagebox.showerror(
                 "Delete Profile BLOCKED",
@@ -3304,6 +3668,7 @@ class UniversalFuturesBotGUI:
         )
         legacy_path = Path(CONFIG_FILE) if profile == "BOT-01" else None
         has_legacy = bool(legacy_path and legacy_path.exists())
+
         if not has_profile_files and not has_legacy:
             messagebox.showinfo(
                 "Delete Profile",
@@ -3629,8 +3994,7 @@ class UniversalFuturesBotGUI:
                     "ActualEntry",
                     "Qty",
                     "SL",
-                    "TP1",
-                    "TP2",
+                    "TP1",                    "TP2",
                     "Notes",
                 ]
             )
@@ -3706,11 +4070,11 @@ class UniversalFuturesBotGUI:
 
 
     def send_telegram(self, msg):
-        if not self.v_tele_enable.get():
+        if not self._runtime_gui_value("v_tele_enable", False):
             return
 
-        token = self.e_tele_token.get().strip()
-        chat_id = self.e_tele_chat.get().strip()
+        token = str(self._runtime_gui_value("e_tele_token", "") or "").strip()
+        chat_id = str(self._runtime_gui_value("e_tele_chat", "") or "").strip()
 
         if not token or not chat_id:
             return
@@ -3994,16 +4358,6 @@ class UniversalFuturesBotGUI:
             text="Copy keeps strategy/risk/Grid/exchange settings and credentials; edit Pair, Qty/Risk and Leverage afterward.",
             fg="#555555",
         ).pack(side="left", padx=8)
-
-        self.profile_stop_buttons_frame = tk.Frame(f_profiles)
-        self.profile_stop_buttons_frame.pack(fill="x", padx=5, pady=(0, 2))
-        self.profile_stop_buttons_label = tk.Label(
-            self.profile_stop_buttons_frame,
-            text="Individual profile STOP controls:",
-            anchor="w",
-            fg="#555555",
-        )
-        self.profile_stop_buttons_label.pack(side="left", padx=(2, 6))
 
         profile_tree_frame = tk.Frame(f_profiles)
         profile_tree_frame.pack(fill="x", padx=5, pady=2)
@@ -4318,7 +4672,8 @@ class UniversalFuturesBotGUI:
 
         # The crypto implementation exposes these source toggles as individual
         # BooleanVars. Keep them inside MOMENTUM, matching the Forex V8.4 GUI.
-        div_names = [            ("div_use_macd", "MACD"),
+        div_names = [
+            ("div_use_macd", "MACD"),
             ("div_use_macd_hist", "Hist"),
             ("div_use_rsi", "RSI"),
             ("div_use_stoch", "Stoch"),
@@ -4638,8 +4993,7 @@ class UniversalFuturesBotGUI:
         f_grid.pack(fill="x", padx=10, pady=5)
 
         tk.Label(f_grid, text="Execution / Grid Mode:").grid(row=0, column=0, sticky="w")
-        self.v_grid_mode = tk.StringVar(value=DEFAULT_GRID_MODE)
-        ttk.OptionMenu(f_grid, self.v_grid_mode, DEFAULT_GRID_MODE, "OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID").grid(row=0, column=1, padx=5, sticky="w")
+        self.v_grid_mode = tk.StringVar(value=DEFAULT_GRID_MODE)        ttk.OptionMenu(f_grid, self.v_grid_mode, DEFAULT_GRID_MODE, "OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID").grid(row=0, column=1, padx=5, sticky="w")
         tk.Label(f_grid, text="Grid Levels:").grid(row=0, column=2, sticky="e")
         self.e_grid_levels = tk.Entry(f_grid, width=6); self.e_grid_levels.insert(0, "5"); self.e_grid_levels.grid(row=0, column=3, padx=3)
         tk.Label(f_grid, text="Spacing %:").grid(row=0, column=4, sticky="e")
@@ -4712,7 +5066,7 @@ class UniversalFuturesBotGUI:
 
         tk.Label(
             f_risk,
-            text="GLOBAL SAFETY: Max Daily Drawdown + Emergency Capital Loss Stop apply to BOTH Normal Strategy and Grid.",
+            text="GLOBAL SAFETY: Max Daily Drawdown + Emergency Capital Loss Stop apply to BOTH Normal Strategy and Grid. Fixed Qty Risk Guard caps gross SL exposure to the Risk Per Trade % budget.",
             fg="#444444",
             wraplength=1100,
             justify="left",
@@ -4728,7 +5082,6 @@ class UniversalFuturesBotGUI:
             "EQUITY_RISK_%",
             "EQUITY_RISK_%",
             "FIXED_QTY",
-            command=self._on_size_mode_changed,
         ).grid(row=0, column=1, padx=5)
 
         tk.Label(
@@ -4792,6 +5145,11 @@ class UniversalFuturesBotGUI:
         tk.Label(f_sltp, text="SL Mode:").grid(row=0, column=2, sticky="w")
         self.v_sl_mode = tk.StringVar(value="PRICE_%")
         ttk.OptionMenu(f_sltp, self.v_sl_mode, "PRICE_%", "PRICE_%", "ROI_%", "RISK_%").grid(row=0, column=3, padx=5, sticky="w")
+        tk.Label(
+            f_sltp,
+            text="RISK_% = Fixed Qty + Risk Per Trade (%) defines the hard-SL equity-risk budget.",
+            fg="#444444",
+        ).grid(row=0, column=6, columnspan=3, padx=(8, 0), sticky="w")
 
         tk.Label(f_sltp, text="TP Mode:").grid(row=0, column=4, sticky="w")
         self.v_tp_mode = tk.StringVar(value="ROI_%")
@@ -5138,6 +5496,10 @@ class UniversalFuturesBotGUI:
         self._stop_completion_scheduled = False
         self._release_profile_lock()
         self._set_bot_button_states(running=False, stopping=False)
+        if self.kill_switch_completed:
+            self.log("BOT STOPPED: worker terminated and exchange state is FLAT + NO OPEN ORDERS.")
+        else:
+            self.log("BOT STOPPED: worker terminated, but kill-switch verification was not completed; profile remains recovery-protected.")
         try:
             self._refresh_profile_list(select_profile=self.bot_profile_id)
         except Exception as e:
@@ -5149,12 +5511,18 @@ class UniversalFuturesBotGUI:
         if thread is not None and thread.is_alive():
             elapsed = time.time() - float(self.stop_started_at or time.time())
             if elapsed >= MAX_STOP_WAIT_SECONDS:
-                self.log(
-                    f"STOP WAIT: worker still active after {MAX_STOP_WAIT_SECONDS:g}s; "
-                    "profile remains locked until the worker exits."
-                )
-                self._stop_completion_scheduled = False
-                return
+                if self.kill_switch_completed:
+                    self.log(
+                        f"STOP WAIT: exchange is FLAT + NO OPEN ORDERS, but worker thread is still active after "
+                        f"{MAX_STOP_WAIT_SECONDS:g}s. Waiting for worker exit; profile lock remains active."
+                    )
+                else:
+                    self.log(
+                        f"STOP WAIT: worker still active after {MAX_STOP_WAIT_SECONDS:g}s and kill switch is not yet verified; "
+                        "continuing fail-closed shutdown."
+                    )
+                # Keep polling. Releasing the profile lock while a worker is alive
+                # could allow a second bot to trade the same profile concurrently.
             try:
                 self.root.after(250, self._poll_stop_completion)
             except Exception:
@@ -5165,26 +5533,8 @@ class UniversalFuturesBotGUI:
 
     # -------------------- SETTINGS ---------------------------
 
-    def _on_size_mode_changed(self, selected=None):
-        """Keep sizing and hard-SL semantics explicit when the user switches modes."""
-        try:
-            mode = str(selected or self.v_size_mode.get()).strip().upper()
-            if mode == "FIXED_QTY":
-                self.log(
-                    "FIXED QTY SELECTED: requested Fixed Qty remains literal exchange/base quantity; "
-                    "SL mode is preserved and is not auto-changed."
-                )
-            elif mode == "EQUITY_RISK_%":
-                if self.v_sl_mode.get().strip().upper() == "RISK_%":
-                    self.v_sl_mode.set("PRICE_%")
-                    self.log(
-                        "EQUITY RISK SIZING SELECTED: SL Mode returned to PRICE_%; "
-                        "Risk Per Trade (%) controls position size."
-                    )
-        except Exception:
-            pass
-
     def _refresh_runtime_gui_snapshot(self):
+        """Copy GUI settings on the Tk thread for safe worker-thread reads."""
         values = {}
         for attr in dir(self):
             if not (attr.startswith("e_") or attr.startswith("v_")):
@@ -5200,8 +5550,26 @@ class UniversalFuturesBotGUI:
             self._runtime_gui_values = values
 
     def _runtime_gui_value(self, attr, default=None):
+        """Thread-safe snapshot lookup used by the trading worker."""
         with self._runtime_gui_lock:
             return self._runtime_gui_values.get(attr, default)
+
+    def _on_size_mode_changed(self, selected=None):
+        """Keep sizing mode independent from SL mode. Fixed Qty is literal quantity."""
+        try:
+            mode = str(selected or self.v_size_mode.get()).strip().upper()
+            if mode == "FIXED_QTY":
+                self.log(
+                    "FIXED QTY SELECTED: Entry quantity is literal exchange quantity. "
+                    "SL/TP mode remains user-selected and is not auto-converted to RISK_%."
+                )
+            elif mode == "EQUITY_RISK_%":
+                self.log(
+                    "EQUITY RISK SIZING SELECTED: Entry quantity is calculated from "
+                    "Risk Per Trade (%) and the effective SL distance."
+                )
+        except Exception:
+            pass
 
     def save_settings(self):
         requested_profile = self._sanitize_profile_id(self.v_bot_id.get())
@@ -5393,7 +5761,8 @@ class UniversalFuturesBotGUI:
             "grid_score_min": self.e_grid_score_min.get().strip(),
             "grid_trend_filter": self.v_grid_trend_filter.get(),
             "grid_recenter": self.v_grid_recenter.get(),
-            "grid_recenter_distance": self.e_grid_recenter.get().strip(),            "grid_cooldown": self.e_grid_cooldown.get().strip(),
+            "grid_recenter_distance": self.e_grid_recenter.get().strip(),
+            "grid_cooldown": self.e_grid_cooldown.get().strip(),
 
             "use_atr": self.v_use_atr.get(),
             "atr_min_pct": self.e_atr_min_pct.get().strip(),
@@ -5482,7 +5851,7 @@ class UniversalFuturesBotGUI:
             if loaded_schema < CONFIG_SCHEMA_VERSION:
                 self.log(
                     f"CONFIG MIGRATION: schema {loaded_schema or 'legacy'} -> {CONFIG_SCHEMA_VERSION}; "
-                    "missing newer fields use V8.4.1 defaults; existing saved values remain authoritative."
+                    "missing newer fields use current R8 defaults; existing saved values remain authoritative."
                 )
 
 
@@ -5623,8 +5992,7 @@ class UniversalFuturesBotGUI:
             self.v_st_entry_mode.set(
                 cfg.get(
                     "st_entry_mode",
-                    "FRESH_FLIP",
-                )
+                    "FRESH_FLIP",                )
             )
 
             self.v_use_ema.set(
@@ -6041,6 +6409,8 @@ class UniversalFuturesBotGUI:
                     DEFAULT_RISK_MODE,
                 )
             )
+            loaded_size_mode = str(self.v_size_mode.get()).strip().upper()
+            migrate_fixed_qty_sl = False  # R9.1+: Fixed Qty no longer changes SL mode.
 
             self.e_risk_pct.delete(
                 0,
@@ -6050,7 +6420,7 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "risk_pct",
-                    "1.0",
+                    DEFAULT_RISK_PER_TRADE,
                 ),
             )
 
@@ -6385,9 +6755,13 @@ class UniversalFuturesBotGUI:
         market = self.exchange.market(symbol)
         limits = market.get("limits") or {}
         amount_limits = limits.get("amount") or {}
+
         min_amount = amount_limits.get("min")
         max_amount = amount_limits.get("max")
 
+        # Some exchange adapters expose the maximum only inside raw
+        # instrument metadata. Prefer the unified CCXT limit, then fall back
+        # to common Bybit lot-size fields.
         if max_amount is None:
             info = market.get("info") or {}
             lot = info.get("lotSizeFilter") or info.get("lotSize") or {}
@@ -6617,8 +6991,7 @@ class UniversalFuturesBotGUI:
         self.is_running = False
         self.log("CAPITAL STOP COMPLETE: Emergency equity limit reached. Bot stopped; no new trades will be opened.")
         try:
-            self.root.after(0, lambda: self._set_bot_button_states(running=False))
-        except Exception:
+            self.root.after(0, lambda: self._set_bot_button_states(running=False))        except Exception:
             pass
 
     def fetch_position(self, symbol):
@@ -7088,13 +7461,18 @@ class UniversalFuturesBotGUI:
         size_mode,
         fixed_qty,
     ):
-        if size_mode == "FIXED_QTY":
+        mode = str(size_mode).strip().upper()
+        if mode == "FIXED_QTY":
+            # FIXED_QTY is literal exchange/base quantity. Risk Per Trade does
+            # not alter the requested quantity; when SL Mode=RISK_%, the same
+            # Risk Per Trade value defines the post-fill hard-SL risk budget.
             qty = fixed_qty
         else:
             if risk_pct <= 0:
                 raise ValueError(
                     "Risk Per Trade must be greater than 0."
                 )
+
             if sl_price_fraction <= 0:
                 raise ValueError(
                     "SL price distance must be greater than 0."
@@ -7105,6 +7483,7 @@ class UniversalFuturesBotGUI:
             # by 100x before the exchange rejected them.
             risk_fraction = float(risk_pct) / 100.0
             risk_amount = balance * risk_fraction
+
             stop_distance = reference_price * sl_price_fraction
             qty = risk_amount / stop_distance
 
@@ -7117,7 +7496,7 @@ class UniversalFuturesBotGUI:
                 "the exchange minimum/precision."
             )
 
-        if size_mode == "EQUITY_RISK_%" and balance > 0 and sl_price_fraction > 0:
+        if balance > 0 and sl_price_fraction > 0:
             actual_risk_pct = (
                 qty * reference_price * sl_price_fraction
                 / balance
@@ -7129,6 +7508,11 @@ class UniversalFuturesBotGUI:
                     f"Final={qty:g} | ConfigRisk={risk_pct:g}% | "
                     f"ActualRiskAtSL={actual_risk_pct:.4f}%"
                 )
+        if mode == "FIXED_QTY":
+            self.log(
+                f"FIXED QTY SIZING | Requested={requested_qty:g} | Final={qty:g} | "
+                f"SLMode={str(self._runtime_gui_value('v_sl_mode', 'PRICE_%')).strip().upper()}"
+            )
         return qty
 
     # -------------------- SL / TP CALCULATION ----------------
@@ -7241,6 +7625,11 @@ class UniversalFuturesBotGUI:
             sl_move = risk_amount / (float(position_qty) * float(actual_entry))
             if sl_move <= 0 or not np.isfinite(sl_move):
                 raise RuntimeError("RISK_% SL distance is invalid.")
+            if sl_move >= 0.95:
+                raise RuntimeError(
+                    f"RISK_% SL distance is too wide ({sl_move * 100:.3f}% price move). "
+                    "Reduce Fixed Qty or Risk Per Trade."
+                )
             if leverage > 0 and sl_move >= (0.80 / float(leverage)):
                 self.log(
                     f"RISK_% LEVERAGE WARNING: required SL move={sl_move * 100:.3f}% "
@@ -7451,7 +7840,8 @@ class UniversalFuturesBotGUI:
             symbol,
             order_type,
             side,
-            qty,            None,
+            qty,
+            None,
             params,
         )
 
@@ -7600,8 +7990,7 @@ class UniversalFuturesBotGUI:
             # closed if verification fails.
             self.log(
                 f"TRIGGER CAPABILITY CHECK NOTICE | {self.exchange_id.upper()} "
-                f"{symbol} | {capability_error}"
-            )
+                f"{symbol} | {capability_error}"            )
 
         params = {
             "triggerPrice": trigger_price,
@@ -8178,22 +8567,22 @@ class UniversalFuturesBotGUI:
 
     def _grid_validate_settings(self):
         """Validate Grid settings before startup and before any order is placed."""
-        mode = self.v_grid_mode.get().strip().upper()
+        mode = self._runtime_gui_value("v_grid_mode").strip().upper()
         if mode not in ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID"):
             raise ValueError("Invalid Grid Mode.")
 
-        levels = int(self.e_grid_levels.get())
-        spacing_pct = float(self.e_grid_spacing.get())
-        order_size = float(self.e_grid_order_size.get())
-        size_inc_pct = float(self.e_grid_size_increase.get())
-        tp_pct = float(self.e_grid_tp.get())
-        sl_pct = float(self.e_grid_sl.get())
-        max_exp = float(self.e_grid_max_exposure.get())
-        max_dd_pct = float(self.e_grid_max_dd.get())
-        grid_score_min = int(self.e_grid_score_min.get())
-        rec_pct = float(self.e_grid_recenter.get())
-        cooldown = float(self.e_grid_cooldown.get())
-        filt = self.v_grid_trend_filter.get().strip().upper()
+        levels = int(self._runtime_gui_value("e_grid_levels"))
+        spacing_pct = float(self._runtime_gui_value("e_grid_spacing"))
+        order_size = float(self._runtime_gui_value("e_grid_order_size"))
+        size_inc_pct = float(self._runtime_gui_value("e_grid_size_increase"))
+        tp_pct = float(self._runtime_gui_value("e_grid_tp"))
+        sl_pct = float(self._runtime_gui_value("e_grid_sl"))
+        max_exp = float(self._runtime_gui_value("e_grid_max_exposure"))
+        max_dd_pct = float(self._runtime_gui_value("e_grid_max_dd"))
+        grid_score_min = int(self._runtime_gui_value("e_grid_score_min"))
+        rec_pct = float(self._runtime_gui_value("e_grid_recenter"))
+        cooldown = float(self._runtime_gui_value("e_grid_cooldown"))
+        filt = self._runtime_gui_value("v_grid_trend_filter").strip().upper()
 
         if not 1 <= levels <= 50:
             raise ValueError("Grid Levels must be 1-50.")
@@ -8237,25 +8626,25 @@ class UniversalFuturesBotGUI:
         # This keeps the Grid and normal Strategy calculations synchronized.
         enabled_strategy_count = sum(
             1 for enabled in (
-                self.v_use_st.get(),
-                self.v_use_ema.get(),
-                self.v_use_ema_cross.get(),
-                self.v_use_macd.get(),
-                self.v_use_rsi.get(),
-                self.v_use_bb.get(),
-                self.v_use_stoch.get(),
-                self.v_use_vwap.get(),
-                self.v_use_vwap_delta.get(),
-                self.v_use_vidya.get(),
-                self.v_use_nwe.get(),
-                self.v_use_liq_swings.get(),
-                self.v_use_trendline.get(),
-                self.v_use_mtf.get(),
-                self.v_use_divergence.get(),
-                self.v_use_vol_sr.get(),
-                self.v_use_vol.get(),
-                self.v_use_adx.get(),
-                self.v_use_atr.get(),
+                self._runtime_gui_value("v_use_st"),
+                self._runtime_gui_value("v_use_ema"),
+                self._runtime_gui_value("v_use_ema_cross"),
+                self._runtime_gui_value("v_use_macd"),
+                self._runtime_gui_value("v_use_rsi"),
+                self._runtime_gui_value("v_use_bb"),
+                self._runtime_gui_value("v_use_stoch"),
+                self._runtime_gui_value("v_use_vwap"),
+                self._runtime_gui_value("v_use_vwap_delta"),
+                self._runtime_gui_value("v_use_vidya"),
+                self._runtime_gui_value("v_use_nwe"),
+                self._runtime_gui_value("v_use_liq_swings"),
+                self._runtime_gui_value("v_use_trendline"),
+                self._runtime_gui_value("v_use_mtf"),
+                self._runtime_gui_value("v_use_divergence"),
+                self._runtime_gui_value("v_use_vol_sr"),
+                self._runtime_gui_value("v_use_vol"),
+                self._runtime_gui_value("v_use_adx"),
+                self._runtime_gui_value("v_use_atr"),
             )
             if bool(enabled)
         )
@@ -8288,7 +8677,7 @@ class UniversalFuturesBotGUI:
         #
         # LONG_GRID / SHORT_GRID keep their existing behavior unchanged.
         if mode == "NEUTRAL_GRID":
-            if filt == "SUPERTREND" and not bool(self.v_use_st.get()):
+            if filt == "SUPERTREND" and not bool(self._runtime_gui_value("v_use_st")):
                 raise ValueError(
                     "NEUTRAL_GRID + SUPERTREND requires Supertrend to be enabled in Section 3."
                 )
@@ -8310,7 +8699,7 @@ class UniversalFuturesBotGUI:
             "tp_pct": tp_pct / 100.0, "sl_pct": sl_pct / 100.0,
             "max_exposure": max_exp, "max_dd": max_dd_pct / 100.0,
             "score_min": grid_score_min,
-            "trend_filter": filt, "recenter": bool(self.v_grid_recenter.get()),
+            "trend_filter": filt, "recenter": bool(self._runtime_gui_value("v_grid_recenter")),
             "recenter_distance": rec_pct / 100.0, "cooldown": cooldown * 60.0,
         }
 
@@ -8450,7 +8839,8 @@ class UniversalFuturesBotGUI:
                 order = self._fetch_specific_order(symbol, oid)
                 if not order:
                     self.log(
-                        f"GRID SYNC VERIFY NOTICE: no definitive order record for ID={oid}; "                        "retaining local order state."
+                        f"GRID SYNC VERIFY NOTICE: no definitive order record for ID={oid}; "
+                        "retaining local order state."
                     )
                     continue
                 status = str(order.get("status") or "").lower()
@@ -8599,8 +8989,7 @@ class UniversalFuturesBotGUI:
                 raise RuntimeError("New Grid TP/SL could not be verified as active.")
         except Exception as e:
             # Roll back only newly created orders. The old protection remains.
-            for order in (new_tp, new_sl):
-                oid = str(order.get("id") or "") if order else ""
+            for order in (new_tp, new_sl):                oid = str(order.get("id") or "") if order else ""
                 if oid:
                     try:
                         self.exchange.cancel_order(oid, symbol)
@@ -9213,6 +9602,11 @@ class UniversalFuturesBotGUI:
         sl_mode = self.v_sl_mode.get().strip().upper(); tp_mode = self.v_tp_mode.get().strip().upper()
         if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
             raise ValueError(f"Unknown SL/TP mode: SL={sl_mode} TP={tp_mode}")
+        hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
+        if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
+            raise ValueError("SL Mode RISK_% requires Sizing Mode FIXED_QTY.")
+        if sl_mode == "RISK_%" and hold_all_reverse:
+            raise ValueError("SL Mode RISK_% cannot be combined with Hold-All-Reverse.")
         if float(self.e_sl_pct.get()) <= 0 or float(self.e_hold_sl_roi.get()) <= 0 or float(self.e_tp1_pct.get()) <= 0 or float(self.e_tp2_pct.get()) <= 0:
             raise ValueError("SL/TP targets and Hold-All-Reverse SL ROI must be greater than 0.")
         if bool(self.v_use_atr_sl.get()):
@@ -9308,6 +9702,9 @@ class UniversalFuturesBotGUI:
             self.stop_requested = False
             self.stop_started_at = 0.0
             self._stop_completion_scheduled = False
+            self.kill_switch_completed = False
+            self.kill_switch_in_progress = False
+            self.stop_cleanup_thread = None
             self.save_settings()
             self._validate_v83_preflight()
 
@@ -9352,6 +9749,9 @@ class UniversalFuturesBotGUI:
                 f"{exchange_id.upper()} | "
                 "CCXT unified futures/swap API"
             )
+            self.log(
+                f"KILL SWITCH: MANDATORY/ARMED | Stop/Crash => flatten bot symbol {self.e_symbol.get().strip().upper()} + cancel all open orders."
+            )
 
             self.symbol = (
                 self.normalize_symbol(
@@ -9375,7 +9775,7 @@ class UniversalFuturesBotGUI:
             try:
                 max_trades = int(self.e_max_trades.get().strip())
             except Exception:
-                raise ValueError("Max Completed Trades must be a whole number. Use 0 for unlimited.")
+                raise ValueError("Max Completed Trades must be a whole number. Use 1 for this single-symbol engine.")
             if max_trades < 0:
                 raise ValueError("Max Trades cannot be negative.")
 
@@ -9449,7 +9849,8 @@ class UniversalFuturesBotGUI:
 
                 grid_cfg = self._grid_initialize(
                     self.symbol,
-                    self.start_balance,                    current_equity,
+                    self.start_balance,
+                    current_equity,
                 )
 
                 # A genuinely new session must never silently adopt an existing
@@ -9587,8 +9988,7 @@ class UniversalFuturesBotGUI:
             self.log(
                 f"TRADE SESSION: Max Completed Trades={max_trades if max_trades > 0 else 'UNLIMITED'} | "
                 f"Max Open Trades={max_open_trades} | "
-                f"Estimated Window={self.lbl_est_time.cget('text')} | "
-                f"Actual duration may be longer if signals do not occur every candle."
+                f"Estimated Window={self.lbl_est_time.cget('text')} | "                f"Actual duration may be longer if signals do not occur every candle."
             )
 
             enabled_modules = []
@@ -9859,11 +10259,14 @@ class UniversalFuturesBotGUI:
             self.worker_started_at = time.time()
             self._db_session_start()
             self._persist_runtime_state(status="RUNNING")
+            self._write_kill_switch_heartbeat(status="RUNNING")
+            self._start_kill_switch_watchdog()
 
             self.is_running = True
 
             self._set_bot_button_states(running=True)
 
+            self._write_kill_switch_heartbeat(status="RUNNING")
             self.bot_thread = threading.Thread(
                 target=self._run_bot_logic,
                 daemon=True,
@@ -9875,7 +10278,10 @@ class UniversalFuturesBotGUI:
                 f"START FAILED: {e}"
             )
             self.is_running = False
+            self.stop_requested = False
+            self.stop_started_at = 0.0
             self._release_profile_lock()
+            self._set_bot_button_states(running=False)
 
             messagebox.showerror(
                 "Bot start failed",
@@ -9898,6 +10304,9 @@ class UniversalFuturesBotGUI:
                         self._stop_completion_scheduled = False
                 return
 
+            # Already stopped: make the lifecycle state deterministic and
+            # clean any stale same-process lock that is no longer owned by a
+            # live worker.
             self.stop_requested = False
             self.stop_started_at = 0.0
             self._release_profile_lock()
@@ -9915,46 +10324,21 @@ class UniversalFuturesBotGUI:
 
         self.stop_requested = True
         self.stop_started_at = time.time()
+
+        # Flip the run flag first so the worker cannot begin another execution
+        # cycle while shutdown is cleaning up exchange orders/positions.
         self.is_running = False
         self._set_bot_button_states(running=False, stopping=True)
 
+        # R9.2 mandatory fail-closed action: stopping the bot also stops the
+        # bot-owned exchange inventory. No open position/order is intentionally
+        # left behind for a stopped bot.
         try:
             self._persist_runtime_state(status="STOPPING")
-        except Exception:
-            pass
-
-        try:
-            grid_mode = self.v_grid_mode.get().strip().upper()
-            if self.symbol and grid_mode in ("LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID"):
-                if self.grid_state.get("active"):
-                    self._grid_stop(self.symbol, "Manual bot stop", cooldown_seconds=0)
-                else:
-                    if not self.fetch_position(self.symbol):
-                        self._cancel_known_managed_orders(self.symbol)
-                    else:
-                        self.log(
-                            "GRID STOP: position still open while Grid is inactive; "
-                            "leaving exchange-side protection in place."
-                        )
-                self.log("GRID ENGINE STOPPED safely.")
+            self._write_kill_switch_heartbeat(status="STOPPING")
+            self._start_stop_cleanup_worker("MANUAL BOT STOP")
         except Exception as e:
-            self.log(f"GRID stop cleanup warning: {e}")
-
-        try:
-            live_position = self.fetch_position(self.symbol) if self.exchange and self.symbol else None
-            stop_status = "PAUSED_WITH_POSITION" if live_position else "STOPPED"
-            self._persist_runtime_state(status=stop_status)
-            try:
-                end_balance = self.fetch_balance_total() if self.exchange else None
-            except Exception:
-                end_balance = None
-            self._db_session_end(
-                stop_status,
-                end_balance=end_balance,
-                notes="Manual bot stop requested.",
-            )
-        except Exception as e:
-            self.log(f"Runtime stop checkpoint warning: {e}")
+            self.log(f"KILL SWITCH stop scheduling warning: {e}")
 
         self.log("STOP REQUESTED: waiting for execution worker to terminate...")
 
@@ -9980,46 +10364,26 @@ class UniversalFuturesBotGUI:
 
         # Save the latest GUI configuration before shutting down so a
         # recovery checkpoint contains the exact settings the user was using.
+        self.stop_requested = bool(self.is_running)
+        self.stop_started_at = time.time() if self.is_running else 0.0
         try:
             self.save_settings()
         except Exception:
             pass
 
-        # Stop Grid safely before GUI exit; do not remove protection from a
-        # position unless the position has first been confirmed flat.
+        # R9.2: GUI shutdown is also a hard bot stop. Flatten first, then
+        # destroy Tk so the kill-switch operation cannot be skipped.
         self.is_running = False
         try:
-            grid_mode = self.v_grid_mode.get().strip().upper()
-            if self.symbol and grid_mode in ("LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID"):
-                if self.grid_state.get("active"):
-                    self._grid_stop(self.symbol, "GUI shutdown", cooldown_seconds=0)
-                else:
-                    if not self.fetch_position(self.symbol):
-                        self._cancel_known_managed_orders(self.symbol)
-                    else:
-                        self.log(
-                            "GRID SHUTDOWN: position still open while Grid is inactive; "
-                            "leaving exchange-side protection in place."
-                        )
-                self.log("GRID ENGINE SHUTDOWN completed safely.")
-        except Exception as e:
-            self.log(f"GRID shutdown cleanup warning: {e}")
-
-        try:
-            live_position = self.fetch_position(self.symbol) if self.exchange and self.symbol else None
-            close_status = "PAUSED_WITH_POSITION" if live_position else "STOPPED"
-            self._persist_runtime_state(status=close_status)
-            try:
-                end_balance = self.fetch_balance_total() if self.exchange else None
-            except Exception:
-                end_balance = None
-            self._db_session_end(
-                close_status,
-                end_balance=end_balance,
-                notes="GUI shutdown.",
+            self._persist_runtime_state(status="STOPPING")
+            self._write_kill_switch_heartbeat(status="STOPPING")
+            self._activate_kill_switch("GUI SHUTDOWN")
+            self._persist_runtime_state(
+                status="STOPPED" if self.kill_switch_completed else "CRASHED",
+                last_error=self.runtime_last_error or None,
             )
         except Exception as e:
-            self.log(f"GUI shutdown checkpoint warning: {e}")
+            self.log(f"GUI shutdown KILL SWITCH warning: {e}")
 
         self.root.destroy()
 
@@ -10480,20 +10844,21 @@ class UniversalFuturesBotGUI:
         try:
             timeframe = str(self._runtime_gui_value("v_tf")).strip().lower()
             supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "45m", "1h", "4h"}
-            if timeframe not in supported_timeframes:                raise ValueError(
+            if timeframe not in supported_timeframes:
+                raise ValueError(
                     f"Unsupported timeframe: {timeframe}. Use 1m, 3m, 5m, 15m, 30m, 45m, 1h or 4h."
                 )
 
             try:
                 max_trades = int(self._runtime_gui_value("e_max_trades").strip())
             except Exception:
-                raise ValueError("Max Trades must be a whole number. Use 0 for unlimited.")
+                raise ValueError("Max Trades must be a whole number. Use 1 for this single-symbol engine.")
             if max_trades < 0:
                 raise ValueError("Max Trades cannot be negative.")
             try:
                 max_open_trades = int(self._runtime_gui_value("e_max_open_trades").strip())
             except Exception:
-                raise ValueError("Max Open Trades must be a whole number. Use 0 for unlimited.")
+                raise ValueError("Max Open Trades must be a whole number. Use 1 for this single-symbol engine.")
             if max_open_trades < 0:
                 raise ValueError("Max Open Trades cannot be negative.")
             if max_open_trades != 1:
@@ -10622,7 +10987,6 @@ class UniversalFuturesBotGUI:
                 raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
             if vidya_entry_mode not in ("CURRENT_TREND", "FRESH_FLIP"):
                 raise ValueError("VIDYA Entry must be CURRENT_TREND or FRESH_FLIP.")
-
             use_nwe = self._runtime_gui_value("v_use_nwe")
             nwe_bandwidth = float(self._runtime_gui_value("e_nwe_bandwidth"))
             nwe_mult = float(self._runtime_gui_value("e_nwe_mult"))
@@ -10808,11 +11172,11 @@ class UniversalFuturesBotGUI:
                 self._runtime_gui_value("v_size_mode")
             )
 
+            # Keep Risk Per Trade in GUI units (percentage points) throughout
+            # the worker. calculate_entry_qty() performs the single /100
+            # conversion where it needs a fraction.
             risk_pct = float(self._runtime_gui_value("e_risk_pct"))
-
-            fixed_qty = float(
-                self._runtime_gui_value("e_fixed_qty")
-            )
+            fixed_qty = float(self._runtime_gui_value("e_fixed_qty"))
             if risk_pct <= 0 or risk_pct >= 100.0:
                 raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
             if fixed_qty <= 0:
@@ -10930,13 +11294,11 @@ class UniversalFuturesBotGUI:
             )
             if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
                 raise ValueError(
-                    "SL Mode RISK_% is only valid with Sizing Mode FIXED_QTY, "
-                    "because the stop risk is calculated from the actual fixed position quantity."
+                    "SL Mode RISK_% is only valid with Sizing Mode FIXED_QTY."
                 )
             if sl_mode == "RISK_%" and hold_all_reverse:
                 raise ValueError(
-                    "SL Mode RISK_% cannot be combined with Hold-All-Reverse. "
-                    "Disable Hold-All-Reverse when Risk Per Trade (%) is intended to define the hard SL."
+                    "SL Mode RISK_% cannot be combined with Hold-All-Reverse."
                 )
             effective_sl_mode = (
                 "ROI_%" if hold_all_reverse else ("RISK_%" if sl_mode == "RISK_%" else ("ATR_DYNAMIC" if use_atr_sl else sl_mode))
@@ -10944,7 +11306,12 @@ class UniversalFuturesBotGUI:
 
             # The sizing engine needs the actual market-price distance
             # of the effective stop.
-            if use_atr_sl and not hold_all_reverse and sl_mode != "RISK_%":
+            if sl_mode == "RISK_%":
+                # Fixed-Qty + RISK_% sizing does not need a pre-entry SL
+                # distance. The exact stop is calculated only after the actual
+                # exchange position quantity and entry are confirmed.
+                sl_price_fraction = 1e-9
+            elif use_atr_sl and not hold_all_reverse:
                 # Pre-entry fallback only; actual risk sizing is recalculated
                 # from the latest completed-candle ATR inside each cycle.
                 # Do not pass ATR_DYNAMIC into target_to_price_fraction because
@@ -10964,13 +11331,7 @@ class UniversalFuturesBotGUI:
                 f"Leverage={leverage}x"
             )
 
-            if sl_mode == "RISK_%":
-                self.log(
-                    f"FIXED QTY RISK SL: Risk Budget={risk_pct:g}% of account equity | "
-                    "hard SL is calculated from the actual filled quantity and entry. "
-                    f"TP1={atr_tp1_mult:g}x SL distance | TP2={atr_tp2_mult:g}x SL distance"
-                )
-            elif use_atr_sl:
+            if use_atr_sl:
                 self.log(
                     f"ATR DYNAMIC SL/TP: ON | SL={atr_sl_mult:g} ATR | "
                     f"TP1={atr_tp1_mult:g}x SL distance | TP2={atr_tp2_mult:g}x SL distance"
@@ -11023,6 +11384,8 @@ class UniversalFuturesBotGUI:
 
                 try:
                     if self._consume_remote_stop_request():
+                        # Remote stop uses the same worker-finalization path as a
+                        # local stop. Grid cleanup is performed by the consumer.
                         self.is_running = False
                         break
 
@@ -11491,7 +11854,8 @@ class UniversalFuturesBotGUI:
                             float(df["rsi"].iloc[-3])
                             >= float(df["rsi_ma"].iloc[-3])
                             and
-                            float(df["rsi"].iloc[-2])                            < float(df["rsi_ma"].iloc[-2])
+                            float(df["rsi"].iloc[-2])
+                            < float(df["rsi_ma"].iloc[-2])
                         )
 
                         if rsi_logic == "CROSS_MA":
@@ -11622,8 +11986,7 @@ class UniversalFuturesBotGUI:
                     if use_liq_swings:
                         liq_bull_break = bool(df["liq_swing_high_break"].iloc[-2])
                         liq_bear_break = bool(df["liq_swing_low_break"].iloc[-2])
-                        if liq_entry_mode == "CURRENT_TREND":
-                            liq_state = int(df["liq_swing_trend"].iloc[-2])
+                        if liq_entry_mode == "CURRENT_TREND":                            liq_state = int(df["liq_swing_trend"].iloc[-2])
                             liq_bull = liq_state > 0
                             liq_bear = liq_state < 0
                         else:
@@ -12102,8 +12465,8 @@ class UniversalFuturesBotGUI:
                         self.hold_sl_threshold_hit = False
                         self.hold_sl_threshold_logged = False
                         self.last_protection_reconcile = 0.0
-                        # Only start/restart cooldown when a real live state
-                        # transitioned to flat. A continuously-flat bot must
+                        # R6 FIX: only start/restart cooldown when a real live
+                        # state transitioned to flat. A continuously-flat bot must
                         # not reset the cooldown on every 30-second poll.
                         if had_live_state:
                             self.last_flat_time = time.time()
@@ -12234,9 +12597,9 @@ class UniversalFuturesBotGUI:
                         and self._runtime_gui_value("v_hold_until_all_reverse")
                     ):
                         if self.hold_sl_wait_reversal and not self.hold_sl_threshold_hit:
-                            # R6 FIX: Hold-SL WAIT is a hard prerequisite for
-                            # strategy reversal until the configured ROI threshold
-                            # has actually been reached.
+                            # In Hold-SL WAIT mode the ROI threshold is a
+                            # prerequisite for strategy reversal. Do not let the
+                            # later ALL-REVERSE check overwrite this hard gate.
                             reversal_allowed = False
                             self.log(
                                 f"HOLD-SL WAIT: {pos_type} remains open because the "
@@ -12502,7 +12865,8 @@ class UniversalFuturesBotGUI:
                                     desired_side,
                                     actual_entry,
                                     actual_qty,
-                                    new_position.get("initial_margin", 0.0),                                    effective_sl_target_pct,
+                                    new_position.get("initial_margin", 0.0),
+                                    effective_sl_target_pct,
                                     tp1_target_pct,
                                     tp2_target_pct,
                                     effective_sl_mode,
@@ -12520,8 +12884,21 @@ class UniversalFuturesBotGUI:
                             self.log(
                                 f"SL MODE: {effective_sl_mode} | TP MODE: {tp_mode}"
                             )
+                            if sl_mode == "RISK_%":
+                                self.log(
+                                    f"FIXED QTY RISK SL: Budget={risk_pct:g}% of current balance | "
+                                    f"Actual Qty={actual_qty:g} | SL derived from actual fill"
+                                )
+                            if curr_balance > 0 and sl_move > 0:
+                                stop_risk_pct = (
+                                    float(actual_qty) * float(actual_entry) * float(sl_move)
+                                    / float(curr_balance) * 100.0
+                                )
+                                self.log(
+                                    f"ESTIMATED GROSS STOP RISK: {stop_risk_pct:.4f}% of current balance"
+                                )
 
-                            if use_atr_sl and not self._runtime_gui_value("v_hold_until_all_reverse"):
+                            if use_atr_sl and sl_mode != "RISK_%" and not self._runtime_gui_value("v_hold_until_all_reverse"):
                                 atr_for_log = float(atr_entry_value or 0.0)
                                 margin_for_roi = float(actual_position_margin or 0.0)
                                 def _roi_from_move(move):
@@ -12608,8 +12985,7 @@ class UniversalFuturesBotGUI:
                                 verified = True
                                 self.log(
                                     f"HOLD-SL WAIT MODE ACTIVE: threshold={sl:.12g} "
-                                    f"({hold_sl_roi_pct:g}% ROI). NO exchange SL placed. "
-                                    "The position will remain open until ALL active signals reverse."
+                                    f"({hold_sl_roi_pct:g}% ROI). NO exchange SL placed. "                                    "The position will remain open until ALL active signals reverse."
                                 )
                             else:
                                 created = (
@@ -12939,6 +13315,7 @@ class UniversalFuturesBotGUI:
                     self.is_running
                     and time.time() < end_time
                 ):
+                    self._write_kill_switch_heartbeat(status="RUNNING")
                     if self._consume_remote_stop_request():
                         self.is_running = False
                         break
@@ -12952,6 +13329,19 @@ class UniversalFuturesBotGUI:
 
         finally:
             self.is_running = False
+            try:
+                self._write_kill_switch_heartbeat(status="STOPPING")
+                # This runs for normal stop, trade-limit stop, safety halt, and
+                # unexpected worker exceptions. The independent watchdog covers
+                # the harder case where the whole Python process disappears.
+                if not self.kill_switch_completed:
+                    self._activate_kill_switch(
+                        "WORKER HALT" if not self.runtime_last_error else f"WORKER CRASH/SAFETY HALT: {self.runtime_last_error}"
+                    )
+                else:
+                    self.log("FINAL KILL SWITCH: already verified FLAT + NO OPEN ORDERS; skipping duplicate flatten.")
+            except Exception as kill_error:
+                self.log(f"FINAL KILL SWITCH WARNING: {kill_error}")
             try:
                 self._clear_profile_control(self.bot_profile_id)
             except Exception:
@@ -12967,10 +13357,15 @@ class UniversalFuturesBotGUI:
                             f"FINAL POSITION CHECK WARNING: {final_position_error}"
                         )
                 final_status = (
-                    "CRASHED"
-                    if self.runtime_last_error
-                    else ("PAUSED_WITH_POSITION" if live_position else "STOPPED")
+                    "STOPPED"
+                    if self.kill_switch_completed and self.stop_requested
+                    else ("CRASHED" if self.runtime_last_error else "STOPPED")
                 )
+                if live_position:
+                    self.log(
+                        "CRITICAL: kill switch completed but exchange still reports a live position; "
+                        "watchdog/retry protection remains armed."
+                    )
                 self._persist_runtime_state(
                     status=final_status,
                     last_error=self.runtime_last_error or None,
@@ -12993,6 +13388,8 @@ class UniversalFuturesBotGUI:
                     self._on_worker_finished,
                 )
             except Exception:
+                # The GUI may already be closing. Release the lock directly
+                # because no second bot can safely start once this worker exits.
                 self._release_profile_lock()
 
             self.log(
@@ -13004,6 +13401,22 @@ class UniversalFuturesBotGUI:
 # -------------------- MAIN ----------------------------------
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = UniversalFuturesBotGUI(root)
-    root.mainloop()
+    # Independent crash watchdog mode. It intentionally runs without Tk so it
+    # can survive a GUI/process crash and flatten the bot-owned symbol.
+    if "--kill-switch-watchdog" in sys.argv:
+        try:
+            idx = sys.argv.index("--kill-switch-watchdog")
+            profile = sys.argv[idx + 1]
+            parent_pid = int(sys.argv[idx + 2])
+            _run_kill_switch_watchdog(profile, parent_pid)
+        except Exception as e:
+            try:
+                profile = sys.argv[sys.argv.index("--kill-switch-watchdog") + 1]
+            except Exception:
+                profile = "BOT-01"
+            _, _, _, _, _, log_path = _kill_switch_profile_paths(profile)
+            _kill_switch_log(log_path, f"WATCHDOG FATAL ERROR | {e}")
+    else:
+        root = tk.Tk()
+        app = UniversalFuturesBotGUI(root)
+        root.mainloop()
