@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R2"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R2 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R2-CONSELLIUM"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R3"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R3 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R3-CONFIG-INIT-FIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 13  # AI Agent R2 mode contract.
-RUNTIME_SCHEMA_VERSION = 13  # AI Agent R2 runtime contract.
+CONFIG_SCHEMA_VERSION = 14  # R3 fixes configuration-load initialization and sizing-mode migration.
+RUNTIME_SCHEMA_VERSION = 14  # R3 runtime schema parity with configuration migration.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -2178,6 +2178,10 @@ class UniversalFuturesBotGUI:
         # snapshot instead of calling Tk widgets from the worker thread.
         self._runtime_gui_lock = threading.RLock()
         self._runtime_gui_values = {}
+
+        # R3 FIX: initialize sizing mode before configuration load.
+        # load_settings() reads v_size_mode for backward-compatible migration.
+        self.v_size_mode = tk.StringVar(value=DEFAULT_RISK_MODE)
 
         # Persistent bot profile / crash-recovery state.
         self.bot_profile_id = "BOT-01"
@@ -5574,9 +5578,11 @@ class UniversalFuturesBotGUI:
             pass
 
     def _on_simple_risk_changed(self):
-        """R9.6: Risk-Based Sizing toggle is authoritative for normal strategy sizing."""
+        """R9.6/R3: Risk-Based Sizing toggle is authoritative for normal strategy sizing."""
         try:
             enabled = bool(self.v_risk_sizing_enabled.get())
+            if not hasattr(self, "v_size_mode"):
+                self.v_size_mode = tk.StringVar(value=DEFAULT_RISK_MODE)
             self.v_size_mode.set("EQUITY_RISK_%" if enabled else "FIXED_QTY")
             self.log(
                 "RISK SIZING: " + (
@@ -5894,6 +5900,12 @@ class UniversalFuturesBotGUI:
                     "missing newer fields use current release defaults; existing saved values remain authoritative."
                 )
 
+
+            if loaded_schema < CONFIG_SCHEMA_VERSION:
+                self.log(
+                    "CONFIG MIGRATION R3: sizing controls initialized before load; "
+                    "saved size_mode/risk_sizing_enabled values are reconciled safely."
+                )
 
             # Clear every Entry-backed setting before inserting the profile.
             # Without this, repeatedly loading profiles would concatenate API
@@ -6446,12 +6458,15 @@ class UniversalFuturesBotGUI:
             self.v_evidence_require_trend.set(bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)))
             self.v_evidence_require_independent.set(bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
 
-            self.v_size_mode.set(
-                cfg.get(
-                    "size_mode",
-                    DEFAULT_RISK_MODE,
+            saved_size_mode = str(
+                cfg.get("size_mode", DEFAULT_RISK_MODE)
+            ).strip().upper()
+            if saved_size_mode not in ("EQUITY_RISK_%", "FIXED_QTY"):
+                self.log(
+                    f"Unknown saved sizing mode {saved_size_mode}; falling back to {DEFAULT_RISK_MODE}."
                 )
-            )
+                saved_size_mode = DEFAULT_RISK_MODE
+            self.v_size_mode.set(saved_size_mode)
             self.e_risk_pct.delete(
                 0,
                 tk.END,
@@ -6490,8 +6505,14 @@ class UniversalFuturesBotGUI:
             self.e_emergency_capital_pct.delete(0, tk.END)
             self.e_emergency_capital_pct.insert(0, cfg.get("emergency_capital_pct", "10.0"))
             self.v_emergency_scope.set(cfg.get("emergency_scope", "BOT_SYMBOL"))
-            self.v_risk_sizing_enabled.set(bool(cfg.get("risk_sizing_enabled", str(cfg.get("size_mode", DEFAULT_RISK_MODE)).strip().upper() == "EQUITY_RISK_%")))
-            self.v_size_mode.set("EQUITY_RISK_%" if self.v_risk_sizing_enabled.get() else "FIXED_QTY")
+            saved_risk_toggle = cfg.get(
+                "risk_sizing_enabled",
+                saved_size_mode == "EQUITY_RISK_%",
+            )
+            self.v_risk_sizing_enabled.set(bool(saved_risk_toggle))
+            self.v_size_mode.set(
+                "EQUITY_RISK_%" if self.v_risk_sizing_enabled.get() else "FIXED_QTY"
+            )
             self.v_max_dd_enabled.set(bool(cfg.get("max_dd_enabled", True)))
             self.v_emergency_enabled.set(bool(cfg.get("emergency_stop_enabled", True)))
 
