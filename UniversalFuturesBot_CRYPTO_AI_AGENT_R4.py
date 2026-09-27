@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R5"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R5 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R5-PRESET-CONTROL-AUDIT"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.1"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.1 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.1-CONFIG-PROTECTION-HOTFIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 16  # R5 adds confirmed AI-Agent recommended preset + profile metadata.
-RUNTIME_SCHEMA_VERSION = 16  # R5 runtime schema parity with AI-Agent preset metadata.
+CONFIG_SCHEMA_VERSION = 18  # R6.1 repairs protection-variable migration and config compatibility.
+RUNTIME_SCHEMA_VERSION = 18  # R6.1 runtime schema parity with repaired protection configuration.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -118,36 +118,104 @@ AI_AGENT_HOLD_ENABLED = True
 AI_AGENT_HOLD_RULE = "MIN_FAMILIES"
 AI_AGENT_HOLD_MIN_FAMILIES = 2
 
-# R5 AI-Agent recommended trading preset. This is a deterministic configuration
-# preset for a disciplined crypto trend/momentum profile; it is NOT a
-# profitability guarantee and it never changes API credentials, account mode,
+# R6 bounded AI trade-management contract.
+# The deterministic AI council may adapt risk/protection for an accepted trade,
+# but it can never exceed these hard safety envelopes. GUI risk remains the
+# configured baseline; the effective per-trade risk is calculated locally.
+AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED = True
+AI_AGENT_MIN_RISK_PCT = 0.20
+AI_AGENT_MAX_RISK_PCT = 0.50
+AI_AGENT_MIN_ATR_SL_MULT = 1.50
+AI_AGENT_MAX_ATR_SL_MULT = 2.40
+AI_AGENT_MIN_TP1_R_MULT = 1.00
+AI_AGENT_MAX_TP1_R_MULT = 1.50
+AI_AGENT_MIN_TP2_R_MULT = 2.00
+AI_AGENT_MAX_TP2_R_MULT = 3.00
+AI_AGENT_HIGH_VOL_ATR_PCT = 1.50
+AI_AGENT_LOW_VOL_ATR_PCT = 0.50
+
+# R6.1 AI-Agent recommended trading preset + bounded trade manager + configuration hardening. This is a deterministic configuration
+# preset for a conservative/aggressive crypto trend-momentum profile; it is NOT
+# a profitability guarantee and it never changes API credentials, account mode,
 # symbol, or profile identity. The user must explicitly confirm before it applies.
-AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R5"
+AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.1"
 AI_AGENT_PRESET = {
-    "ai_min_families": 3, "ai_min_edge": 0.20, "ai_family_confidence": 0.55,
-    "ai_max_conflicts": 1, "ai_require_trend": True, "ai_require_structure": True,
-    "timeframe": "15m", "leverage": "5", "max_trades": "10", "max_open_trades": "1",
-    "no_same_candle": True, "cooldown_min": "15", "require_opposite_after_sl": True,
-    "use_st": True, "use_ema": True, "use_ema_cross": True, "use_macd": True,
-    "use_rsi": True, "use_stoch": True, "use_vwap": True, "use_vwap_delta": True,
-    "use_vidya": True, "use_nwe": True, "use_liq_swings": True, "use_trendline": True,
-    "use_divergence": True, "div_use_all": True, "use_vol_sr": True,
-    "use_vol": True, "use_adx": True, "use_atr": True, "use_mtf": True,
-    "use_bb": False, "grid_mode": "OFF",
-    "sr_tf1": "Chart", "sr_tf2": "4h", "sr_tf3": "D", "sr_tf4": "W", "nwe_repaint": False,
-    "evidence_min_families": 3, "evidence_family_min_score": 0.35,
-    "evidence_require_trend": True, "evidence_require_independent": True,
-    "size_mode": "EQUITY_RISK_%", "risk_pct": "0.35", "fixed_qty": "0.001",
-    "max_dd": "5.0", "emergency_capital_pct": "10.0", "emergency_scope": "BOT_SYMBOL",
-    "legacy_protection_enabled": False, "simple_sl_enabled": True,
-    "simple_roi_sl_enabled": True, "simple_roi_sl": "30.0",
-    "simple_atr_sl_enabled": True, "simple_fallback_sl_enabled": True, "simple_fallback_sl_roi": "30.0",
-    "simple_tp_enabled": True, "simple_tp1_enabled": True, "simple_tp2_enabled": True,
-    "simple_roi_tp1": "60.0", "simple_roi_tp2": "120.0",
-    "simple_atr_tp_enabled": False, "simple_tp1_be_enabled": True,
-    "atr_sl_mult": "1.8", "atr_tp1_mult": "1.2", "atr_tp2_mult": "2.2",
-    "hold_until_all_reverse": False, "reverse_exit_mode": "MIN_FAMILIES",
-    "min_reverse_families": "2", "hold_sl_wait_reversal": False,
+    # Council / decision engine — the six AI-Agent controls.
+    "ai_min_families": 3,
+    "ai_min_edge": 0.20,
+    "ai_family_confidence": 0.55,
+    "ai_max_conflicts": 1,
+    "ai_require_trend": True,
+    "ai_require_structure": True,
+    # Execution / market regime.
+    "timeframe": "15m",
+    "leverage": "5",
+    "max_trades": "10",
+    "max_open_trades": "1",
+    "no_same_candle": True,
+    "cooldown_min": "15",
+    "require_opposite_after_sl": True,
+    # Core evidence modules.
+    "use_st": True,
+    "use_ema": True,
+    "use_ema_cross": True,
+    "use_macd": True,
+    "use_rsi": True,
+    "use_stoch": True,
+    "use_vwap": True,
+    "use_vwap_delta": True,
+    "use_vidya": True,
+    "use_nwe": True,
+    "use_liq_swings": True,
+    "use_trendline": True,
+    "use_divergence": True,
+    "div_use_all": True,
+    "use_vol_sr": True,
+    "use_vol": True,
+    "use_adx": True,
+    "use_atr": True,
+    "use_mtf": True,
+    # Avoid legacy BB/grid paths in the recommended AI-Agent profile.
+    "use_bb": False,
+    "grid_mode": "OFF",
+    "sr_tf1": "Chart", "sr_tf2": "4h", "sr_tf3": "D", "sr_tf4": "W",
+    "nwe_repaint": False,
+    # Evidence gates retained for diagnostics/backward compatibility.
+    "evidence_min_families": 3,
+    "evidence_family_min_score": 0.35,
+    "evidence_require_trend": True,
+    "evidence_require_independent": True,
+    # Risk / sizing.
+    "size_mode": "EQUITY_RISK_%",
+    "risk_pct": "0.35",
+    "fixed_qty": "0.001",
+    "max_dd": "5.0",
+    "emergency_capital_pct": "10.0",
+    "emergency_scope": "BOT_SYMBOL",
+    # Protection: actual-fill based, simple ROI + ATR SL fallback chain.
+    "legacy_protection_enabled": False,
+    "simple_sl_enabled": True,
+    "simple_roi_sl_enabled": True,
+    "simple_roi_sl": "30.0",
+    "simple_atr_sl_enabled": True,
+    "simple_fallback_sl_enabled": True,
+    "simple_fallback_sl_roi": "30.0",
+    "simple_tp_enabled": True,
+    "simple_tp1_enabled": True,
+    "simple_tp2_enabled": True,
+    "simple_roi_tp1": "60.0",
+    "simple_roi_tp2": "120.0",
+    "simple_atr_tp_enabled": False,
+    "simple_tp1_be_enabled": True,
+    "atr_sl_mult": "1.8",
+    # AI reversal behavior. Keep hard protection active; do not disable the
+    # exchange-side SL merely because the reversal-hold feature is available.
+    "hold_until_all_reverse": False,
+    "reverse_exit_mode": "MIN_FAMILIES",
+    "min_reverse_families": "2",
+    "hold_sl_wait_reversal": False,
+    # Indicator parameters / entry semantics. These are the audited R4 GUI
+    # defaults, made explicit so selecting the preset is fully reproducible.
     "st_len": "10", "st_mult": "2.0", "st_source": "CLOSE", "st_entry_mode": "FRESH_FLIP", "st_change_atr": True,
     "ema_len": "200", "ema_fast": "9", "ema_slow": "20", "ema_cross_entry_mode": "FRESH_CROSS",
     "macd_fast": "12", "macd_slow": "26", "macd_signal": "9",
@@ -158,11 +226,13 @@ AI_AGENT_PRESET = {
     "nwe_bandwidth": "8", "nwe_mult": "3", "nwe_entry_mode": "FRESH_CROSS",
     "liq_length": "14", "liq_area": "Wick Extremity", "liq_filter": "Count", "liq_filter_value": "0", "liq_entry_mode": "FRESH_BREAK",
     "trendline_length": "14", "trendline_min_distance": "5", "trendline_entry_mode": "FRESH_BREAK", "trendline_buffer": "0", "trendline_retest_candles": "3",
-    "atr_min_pct": "0.30", "vol_len": "20", "adx_len": "14", "adx_thresh": "20", "bb_len": "20", "bb_std": "2",
+    "atr_min_pct": "0.30", "vol_len": "20", "adx_len": "14", "adx_thresh": "20",
+    "bb_len": "20", "bb_std": "2",
     "div_pivot": "5", "div_min_count": "1", "div_max_pivots": "10", "div_max_bars": "100", "div_cci_len": "10", "div_mom_len": "10",
     "div_type": "Regular", "div_source": "Close", "div_entry_mode": "FRESH",
     "sr_volume_ma": "6", "sr_vote_mode": "MAJORITY", "sr_entry_mode": "CURRENT_ZONE",
     "tp_qty_mode": "PERCENT_%", "tp1_close": "50", "tp2_close": "50",
+    "atr_tp1_mult": "1.2", "atr_tp2_mult": "2.2",
 }
 
 # R9.5/R9.6 reversal-hold contract. Directional modules are grouped so
@@ -927,8 +997,7 @@ def calculate_nadaraya_watson_envelope(df, bandwidth=8.0, multiplier=3.0, lookba
     Source supplied by the user: Nadaraya-Watson Envelope [LuxAlgo],
     CC BY-NC-SA 4.0. Visual drawing/repainting objects are omitted.
     Trading calculations use completed candles and past data only.
-    """
-    df = df.copy()
+    """    df = df.copy()
     bandwidth = float(bandwidth)
     multiplier = float(multiplier)
     lookback = int(lookback)
@@ -1044,7 +1113,8 @@ def _prepare_divergence_sources(df, cfg):
     x["div_vwmacd"] = vwm_fast - vwm_slow
     hl_range = (x["high"] - x["low"]).replace(0, np.nan)
     cmfm = ((x["close"] - x["low"]) - (x["high"] - x["close"])) / hl_range
-    cmfv = cmfm * x["vol"]    x["div_cmf"] = (
+    cmfv = cmfm * x["vol"]
+    x["div_cmf"] = (
         cmfv.rolling(int(cfg.get("div_cmf_len", 21))).sum()
         / x["vol"].rolling(int(cfg.get("div_cmf_len", 21))).sum().replace(0, np.nan)
     )
@@ -1926,8 +1996,7 @@ def calculate_liquidity_swings(
                     active_low_count += 1.0
                     active_low_volume += vols[j] if np.isfinite(vols[j]) else 0.0
 
-        # A liquidity break is a close crossing the latest confirmed swing
-        # level. Filter value must also be passed, matching the indicator's
+        # A liquidity break is a close crossing the latest confirmed swing        # level. Filter value must also be passed, matching the indicator's
         # Count/Volume filtering purpose.
         high_target = prev_high_count if filter_options == "Count" else prev_high_volume
         low_target = prev_low_count if filter_options == "Count" else prev_low_volume
@@ -2048,7 +2117,8 @@ def calculate_trendline_breakout(
         if len(points) < 2:
             return np.nan
         p1, p2 = points[-2], points[-1]
-        if p2[0] == p1[0]:            return np.nan
+        if p2[0] == p1[0]:
+            return np.nan
         slope = (p2[1] - p1[1]) / float(p2[0] - p1[0])
         # Resistance must be descending; support must be ascending.
         if required_slope == "DOWN" and slope >= 0:
@@ -2382,83 +2452,138 @@ class UniversalFuturesBotGUI:
             var.set(value)
 
     def _apply_ai_agent_recommended_defaults(self):
+        """Apply the explicit R6.1 AI-Agent preset to the current profile UI.
+
+        Credentials, exchange/account mode, symbol and profile identity are
+        deliberately untouched. This method is called only after confirmation.
+        """
         p = AI_AGENT_PRESET
         entry_map = {
-            "leverage":"e_lev","max_trades":"e_max_trades","max_open_trades":"e_max_open_trades",
-            "st_len":"e_st_len","st_mult":"e_st_mult","ema_len":"e_ema_len","ema_fast":"e_ema_fast","ema_slow":"e_ema_slow",
-            "macd_fast":"e_macd_fast","macd_slow":"e_macd_slow","macd_signal":"e_macd_signal",
-            "rsi_len":"e_rsi_len","rsi_ob":"e_rsi_ob","rsi_os":"e_rsi_os","rsi_ma_len":"e_rsi_ma_len",
-            "stoch_k":"e_stoch_k","stoch_smooth":"e_stoch_smooth","stoch_d":"e_stoch_d",
-            "vwap_len":"e_vwap_len","vwap_delta_smooth_len":"e_vwap_delta_smooth_len","vwap_delta_baseline":"e_vwap_delta_baseline",
-            "vidya_len":"e_vidya_len","vidya_momentum":"e_vidya_momentum","vidya_band":"e_vidya_band",
-            "nwe_bandwidth":"e_nwe_bandwidth","nwe_mult":"e_nwe_mult","liq_length":"e_liq_length","liq_filter_value":"e_liq_filter_value",
-            "trendline_length":"e_trendline_length","trendline_min_distance":"e_trendline_min_distance","trendline_buffer":"e_trendline_buffer","trendline_retest_candles":"e_trendline_retest",
-            "atr_min_pct":"e_atr_min_pct","vol_len":"e_vol_len","adx_len":"e_adx_len","adx_thresh":"e_adx_thresh","bb_len":"e_bb_len","bb_std":"e_bb_std",
-            "div_pivot":"e_div_pivot","div_min_count":"e_div_min_count","div_max_pivots":"e_div_max_pivots","div_max_bars":"e_div_max_bars","div_cci_len":"e_div_cci_len","div_mom_len":"e_div_mom_len",
-            "sr_volume_ma":"e_sr_volume_ma","ai_min_families":"e_ai_min_families","ai_min_edge":"e_ai_min_edge","ai_family_confidence":"e_ai_family_confidence","ai_max_conflicts":"e_ai_max_conflicts",
-            "evidence_min_families":"e_evidence_min_families","evidence_family_min_score":"e_evidence_family_min_score","cooldown_min":"e_cooldown_min",
-            "risk_pct":"e_risk_pct","fixed_qty":"e_fixed_qty","max_dd":"e_max_dd","emergency_capital_pct":"e_emergency_capital_pct",
-            "simple_roi_sl":"e_roi_sl","simple_fallback_sl_roi":"e_fallback_sl_roi","simple_roi_tp1":"e_roi_tp1","simple_roi_tp2":"e_roi_tp2",
-            "atr_sl_mult":"e_atr_sl_mult","atr_tp1_mult":"e_atr_tp1_mult","atr_tp2_mult":"e_atr_tp2_mult","min_reverse_families":"e_min_reverse_families",
-            "tp1_close":"e_tp1_close","tp2_close":"e_tp2_close",
+            "leverage": "e_lev", "max_trades": "e_max_trades", "fixed_qty": "e_fixed_qty", "max_dd": "e_max_dd", "emergency_capital_pct": "e_emergency_capital_pct",
+            "st_len": "e_st_len", "st_mult": "e_st_mult", "ema_len": "e_ema_len", "ema_fast": "e_ema_fast", "ema_slow": "e_ema_slow",
+            "macd_fast": "e_macd_fast", "macd_slow": "e_macd_slow", "macd_signal": "e_macd_signal",
+            "rsi_len": "e_rsi_len", "rsi_ob": "e_rsi_ob", "rsi_os": "e_rsi_os", "rsi_ma_len": "e_rsi_ma_len",
+            "stoch_k": "e_stoch_k", "stoch_smooth": "e_stoch_smooth", "stoch_d": "e_stoch_d",
+            "vwap_len": "e_vwap_len", "vwap_delta_smooth_len": "e_vwap_delta_smooth_len", "vwap_delta_baseline": "e_vwap_delta_baseline",
+            "vidya_len": "e_vidya_len", "vidya_momentum": "e_vidya_momentum", "vidya_band": "e_vidya_band",
+            "nwe_bandwidth": "e_nwe_bandwidth", "nwe_mult": "e_nwe_mult",
+            "liq_length": "e_liq_length", "liq_filter_value": "e_liq_filter_value",
+            "trendline_length": "e_trendline_length", "trendline_min_distance": "e_trendline_min_distance", "trendline_buffer": "e_trendline_buffer", "trendline_retest_candles": "e_trendline_retest",
+            "atr_min_pct": "e_atr_min_pct", "vol_len": "e_vol_len", "adx_len": "e_adx_len", "adx_thresh": "e_adx_thresh",
+            "bb_len": "e_bb_len", "bb_std": "e_bb_std",
+            "div_pivot": "e_div_pivot", "div_min_count": "e_div_min_count", "div_max_pivots": "e_div_max_pivots", "div_max_bars": "e_div_max_bars", "div_cci_len": "e_div_cci_len", "div_mom_len": "e_div_mom_len",
+            "sr_volume_ma": "e_sr_volume_ma",
+            "tp1_close": "e_tp1_close", "tp2_close": "e_tp2_close", "atr_tp1_mult": "e_atr_tp1_mult", "atr_tp2_mult": "e_atr_tp2_mult",
+
+            "max_open_trades": "e_max_open_trades",
+            "cooldown_min": "e_cooldown_min",
+            "risk_pct": "e_risk_pct",
+            "simple_roi_sl": "e_roi_sl",
+            "simple_fallback_sl_roi": "e_fallback_sl_roi",
+            "simple_roi_tp1": "e_roi_tp1",
+            "simple_roi_tp2": "e_roi_tp2",
+            "atr_sl_mult": "e_atr_sl_mult",
+            "min_reverse_families": "e_min_reverse_families",
+            "ai_min_families": "e_ai_min_families",
+            "ai_min_edge": "e_ai_min_edge",
+            "ai_family_confidence": "e_ai_family_confidence",
+            "ai_max_conflicts": "e_ai_max_conflicts",
+            "evidence_min_families": "e_evidence_min_families",
+            "evidence_family_min_score": "e_evidence_family_min_score",
         }
         for key, attr in entry_map.items():
-            if key in p: self._set_entry_value(attr, p[key])
+            if key in p:
+                self._set_entry_value(attr, p[key])
+
         var_map = {
-            "timeframe":"v_tf","no_same_candle":"v_no_same_candle","require_opposite_after_sl":"v_require_opposite_after_exit",
-            "st_source":"v_st_source","st_entry_mode":"v_st_entry_mode","st_change_atr":"v_st_change_atr","ema_cross_entry_mode":"v_ema_cross_entry_mode",
-            "vidya_entry_mode":"v_vidya_entry_mode","nwe_entry_mode":"v_nwe_entry_mode","nwe_repaint":"v_nwe_repaint",
-            "rsi_logic":"v_rsi_logic","rsi_ma_type":"v_rsi_ma_type","vwap_delta_smooth":"v_vwap_delta_smooth","vwap_delta_logic":"v_vwap_delta_logic",
-            "liq_area":"v_liq_area","liq_filter":"v_liq_filter","liq_entry_mode":"v_liq_entry_mode","trendline_entry_mode":"v_trendline_entry_mode",
-            "div_type":"v_div_type","div_source":"v_div_source","div_entry_mode":"v_div_entry_mode","sr_vote_mode":"v_sr_vote_mode","sr_entry_mode":"v_sr_entry_mode",
-            "sr_tf1":"v_sr_tf1","sr_tf2":"v_sr_tf2","sr_tf3":"v_sr_tf3","sr_tf4":"v_sr_tf4","tp_qty_mode":"v_tp_qty_mode",
-            "use_st":"v_use_st","use_ema":"v_use_ema","use_ema_cross":"v_use_ema_cross","use_macd":"v_use_macd","use_rsi":"v_use_rsi","use_stoch":"v_use_stoch",
-            "use_vwap":"v_use_vwap","use_vwap_delta":"v_use_vwap_delta","use_vidya":"v_use_vidya","use_nwe":"v_use_nwe","use_liq_swings":"v_use_liq_swings",
-            "use_trendline":"v_use_trendline","use_divergence":"v_use_divergence","div_use_all":"v_div_use_all","use_vol_sr":"v_use_vol_sr","use_vol":"v_use_vol",
-            "use_adx":"v_use_adx","use_atr":"v_use_atr","use_mtf":"v_use_mtf","use_bb":"v_use_bb","grid_mode":"v_grid_mode",
-            "evidence_require_trend":"v_evidence_require_trend","evidence_require_independent":"v_evidence_require_independent","emergency_scope":"v_emergency_scope",
-            "size_mode":"v_size_mode","legacy_protection_enabled":"v_legacy_protection_enabled","simple_sl_enabled":"v_sl_enabled","simple_roi_sl_enabled":"v_roi_sl_enabled",
-            "simple_atr_sl_enabled":"v_simple_atr_sl_enabled","simple_fallback_sl_enabled":"v_fallback_sl_enabled","simple_tp_enabled":"v_tp_enabled",
-            "simple_tp1_enabled":"v_tp1_enabled","simple_tp2_enabled":"v_tp2_enabled","simple_atr_tp_enabled":"v_simple_atr_tp_enabled","simple_tp1_be_enabled":"v_tp1_be",
-            "hold_until_all_reverse":"v_hold_until_all_reverse","reverse_exit_mode":"v_reverse_exit_mode","hold_sl_wait_reversal":"v_hold_sl_wait_reversal",
-            "ai_require_trend":"v_ai_require_trend","ai_require_structure":"v_ai_require_structure",
+            "timeframe": "v_tf",
+            "st_source": "v_st_source", "st_entry_mode": "v_st_entry_mode", "st_change_atr": "v_st_change_atr",
+            "ema_cross_entry_mode": "v_ema_cross_entry_mode", "vidya_entry_mode": "v_vidya_entry_mode", "nwe_entry_mode": "v_nwe_entry_mode",
+            "rsi_logic": "v_rsi_logic", "rsi_ma_type": "v_rsi_ma_type", "vwap_delta_smooth": "v_vwap_delta_smooth", "vwap_delta_logic": "v_vwap_delta_logic",
+            "liq_area": "v_liq_area", "liq_filter": "v_liq_filter", "liq_entry_mode": "v_liq_entry_mode", "trendline_entry_mode": "v_trendline_entry_mode",
+            "div_type": "v_div_type", "div_source": "v_div_source", "div_entry_mode": "v_div_entry_mode",
+            "sr_vote_mode": "v_sr_vote_mode", "sr_entry_mode": "v_sr_entry_mode", "tp_qty_mode": "v_tp_qty_mode",
+
+            "no_same_candle": "v_no_same_candle",
+            "require_opposite_after_sl": "v_require_opposite_after_exit",
+            "use_st": "v_use_st", "use_ema": "v_use_ema", "use_ema_cross": "v_use_ema_cross",
+            "use_macd": "v_use_macd", "use_rsi": "v_use_rsi", "use_stoch": "v_use_stoch",
+            "use_vwap": "v_use_vwap", "use_vwap_delta": "v_use_vwap_delta",
+            "use_vidya": "v_use_vidya", "use_nwe": "v_use_nwe", "use_liq_swings": "v_use_liq_swings",
+            "use_trendline": "v_use_trendline", "use_divergence": "v_use_divergence",
+            "div_use_all": "v_div_use_all", "use_vol_sr": "v_use_vol_sr",
+            "use_vol": "v_use_vol", "use_adx": "v_use_adx", "use_atr": "v_use_atr", "use_mtf": "v_use_mtf",
+            "use_bb": "v_use_bb", "grid_mode": "v_grid_mode", "nwe_repaint": "v_nwe_repaint",
+            "evidence_require_trend": "v_evidence_require_trend",
+            "evidence_require_independent": "v_evidence_require_independent",
+            "emergency_scope": "v_emergency_scope",
+            "sr_tf1": "v_sr_tf1", "sr_tf2": "v_sr_tf2", "sr_tf3": "v_sr_tf3", "sr_tf4": "v_sr_tf4",
+            "size_mode": "v_size_mode",
+            "legacy_protection_enabled": "v_legacy_protection_enabled",
+            "simple_sl_enabled": "v_sl_enabled", "simple_roi_sl_enabled": "v_roi_sl_enabled",
+            "simple_atr_sl_enabled": "v_simple_atr_sl_enabled", "simple_fallback_sl_enabled": "v_fallback_sl_enabled",
+            "simple_tp_enabled": "v_tp_enabled", "simple_tp1_enabled": "v_tp1_enabled", "simple_tp2_enabled": "v_tp2_enabled",
+            "simple_atr_tp_enabled": "v_simple_atr_tp_enabled", "simple_tp1_be_enabled": "v_tp1_be",
+            "hold_until_all_reverse": "v_hold_until_all_reverse", "reverse_exit_mode": "v_reverse_exit_mode",
+            "hold_sl_wait_reversal": "v_hold_sl_wait_reversal",
+            "ai_require_trend": "v_ai_require_trend", "ai_require_structure": "v_ai_require_structure",
         }
         for key, attr in var_map.items():
-            if key in p: self._set_var_value(attr, p[key])
+            if key in p:
+                self._set_var_value(attr, p[key])
+
+        # AI Agent is the actual decision engine. Keep it last so the final
+        # snapshot always contains the intended decision mode.
         self._set_var_value("v_risk_sizing_enabled", True)
         self._set_var_value("v_max_dd_enabled", True)
         self._set_var_value("v_emergency_enabled", True)
-        self._set_var_value("v_signal_mode","AI_AGENT")
-        self._set_var_value("v_sl_mode","ROI_%")
-        self._set_var_value("v_tp_mode","ROI_%")
-        self.ai_agent_preset_applied=True
-        self.ai_agent_preset_name=AI_AGENT_PRESET_NAME
+        self._set_var_value("v_emergency_scope", "BOT_SYMBOL")
+        self._set_entry_value("e_max_dd", "5.0")
+        self._set_entry_value("e_emergency_capital_pct", "10.0")
+        self._set_var_value("v_signal_mode", "AI_AGENT")
+        self._set_var_value("v_sl_mode", "ROI_%")
+        self._set_var_value("v_tp_mode", "ROI_%")
+        self.ai_agent_preset_applied = True
+        self.ai_agent_preset_name = AI_AGENT_PRESET_NAME
         self._refresh_runtime_gui_snapshot()
         self.update_estimated_window()
-        self.log(f"AI AGENT PRESET APPLIED | {AI_AGENT_PRESET_NAME} | Families={p['ai_min_families']} | Edge={p['ai_min_edge']:.2f} | Confidence={p['ai_family_confidence']:.2f} | MaxConflicts={p['ai_max_conflicts']} | Risk={p['risk_pct']}% | TF={p['timeframe']} | Leverage={p['leverage']}x")
+        self.log(
+            f"AI AGENT PRESET APPLIED | {AI_AGENT_PRESET_NAME} | "
+            f"Families={p['ai_min_families']} | Edge={p['ai_min_edge']:.2f} | "
+            f"Confidence={p['ai_family_confidence']:.2f} | MaxConflicts={p['ai_max_conflicts']} | "
+            f"Risk={p['risk_pct']}% | TF={p['timeframe']} | Leverage={p['leverage']}x"
+        )
 
     def _on_signal_mode_selected(self, selected_mode):
-        mode=str(selected_mode or self.v_signal_mode.get()).strip().upper()
-        if mode!="AI_AGENT" or self._ai_agent_mode_prompt_active: return
-        self._ai_agent_mode_prompt_active=True
+        """Ask before applying the recommended AI-Agent preset.
+
+        Selecting AI_AGENT never silently overwrites an existing profile. NO
+        keeps every current setting intact while AI_AGENT remains selected.
+        """
+        mode = str(selected_mode or self.v_signal_mode.get()).strip().upper()
+        if mode != "AI_AGENT" or self._ai_agent_mode_prompt_active:
+            return
+        self._ai_agent_mode_prompt_active = True
         try:
-            use_defaults=messagebox.askyesno(
+            use_defaults = messagebox.askyesno(
                 "AI Agent Settings Confirmation",
-                "AI Agent mode selected.\n\nDo you want to apply the recommended AI Agent trading settings?\n\n"
+                "AI Agent mode selected.\n\n"
+                "Do you want to apply the recommended AI Agent trading settings?\n\n"
                 "YES = apply the recommended AI Agent preset.\n"
                 "NO = keep all your current settings; AI Agent mode stays ON.\n\n"
                 "The preset is designed for a disciplined 15m crypto trend/momentum setup. "
                 "It does NOT guarantee maximum profit or profitability.",
                 parent=self.root,
             )
-            if use_defaults: self._apply_ai_agent_recommended_defaults()
+            if use_defaults:
+                self._apply_ai_agent_recommended_defaults()
             else:
-                self.ai_agent_preset_applied=False
-                self.ai_agent_preset_name="CURRENT_SETTINGS"
+                self.ai_agent_preset_applied = False
+                self.ai_agent_preset_name = "CURRENT_SETTINGS"
                 self._refresh_runtime_gui_snapshot()
                 self.log("AI AGENT MODE SELECTED | Current user settings retained; recommended preset NOT applied.")
         finally:
-            self._ai_agent_mode_prompt_active=False
+            self._ai_agent_mode_prompt_active = False
 
     # -------------------- LOGGING ----------------------------
 
@@ -2870,8 +2995,7 @@ class UniversalFuturesBotGUI:
             "strategy_mode": self.runtime_strategy_mode,
             "strategy_modules": self.runtime_strategy_modules,
             "sizing_mode": self.runtime_sizing_mode,
-            "protection_basis": self.runtime_protection_basis,
-            "config_hash": self.runtime_config_hash,
+            "protection_basis": self.runtime_protection_basis,            "config_hash": self.runtime_config_hash,
             "resumed": bool(self.runtime_resumed),
             "stop_requested": bool(self.stop_requested),
             "stop_started_at": self.stop_started_at or None,
@@ -3142,7 +3266,8 @@ class UniversalFuturesBotGUI:
             raise RuntimeError("Resume requested but no recovery checkpoint is available.")
 
         state = self.resume_candidate
-        saved_exchange = str(state.get("exchange") or "").lower()        saved_symbol = str(state.get("symbol") or "").upper()
+        saved_exchange = str(state.get("exchange") or "").lower()
+        saved_symbol = str(state.get("symbol") or "").upper()
         if saved_exchange and saved_exchange != self.exchange_id:
             raise RuntimeError(
                 f"RESUME BLOCKED: saved exchange={saved_exchange} but current exchange={self.exchange_id}."
@@ -3742,7 +3867,7 @@ class UniversalFuturesBotGUI:
             f"TP Quantity    : {cfg.get('tp_qty_mode', '')}",
             f"TP1 / TP2 Close: {cfg.get('tp1_close', '')} / {cfg.get('tp2_close', '')}",
             f"TP1 Break-Even : {cfg.get('tp1_be', '')}",
-            f"ATR Dynamic SL : {cfg.get('use_atr_sl', DEFAULT_ATR_SL_ENABLED)} | SL={cfg.get('atr_sl_mult', DEFAULT_ATR_SL_MULTIPLIER)}x | TP1={cfg.get('atr_tp1_mult', DEFAULT_ATR_TP1_MULTIPLIER)}x | TP2={cfg.get('atr_tp2_mult', DEFAULT_ATR_TP2_MULTIPLIER)}x",
+            f"ATR Dynamic SL : {cfg.get('simple_atr_sl_enabled', cfg.get('use_atr_sl', DEFAULT_ATR_SL_ENABLED))} | SL={cfg.get('atr_sl_mult', DEFAULT_ATR_SL_MULTIPLIER)}x | TP1={cfg.get('atr_tp1_mult', DEFAULT_ATR_TP1_MULTIPLIER)}x | TP2={cfg.get('atr_tp2_mult', DEFAULT_ATR_TP2_MULTIPLIER)}x",
             f"Hold-SL ROI    : {cfg.get('hold_sl_roi', '')}%",
             f"Hold-SL Wait   : {cfg.get('hold_sl_wait_reversal', '')}",
             "",
@@ -3869,8 +3994,7 @@ class UniversalFuturesBotGUI:
                 parent=self.root,
             )
             return
-        profile = self._sanitize_profile_id(self.v_bot_id.get())
-        self._delete_profile_by_id(profile)
+        profile = self._sanitize_profile_id(self.v_bot_id.get())        self._delete_profile_by_id(profile)
 
     def _delete_selected_profile(self):
         """Delete the profile selected in the Profile Manager tree."""
@@ -4141,7 +4265,8 @@ class UniversalFuturesBotGUI:
                        WHERE session_id=?""",
                     (
                         time.time(),
-                        status,                        end_balance,
+                        status,
+                        end_balance,
                         (
                             (float(end_balance) - float(self.start_balance))
                             if end_balance is not None else None
@@ -4868,8 +4993,7 @@ class UniversalFuturesBotGUI:
         fr = _family("TREND — direction / trend continuation")
 
         _check(fr, "Supertrend", "v_use_st", True, 0, 0)
-        _entry(fr, "ATR Period", "e_st_len", "10", 0, 2)
-        _entry(fr, "ATR Mult", "e_st_mult", "2.0", 0, 4)
+        _entry(fr, "ATR Period", "e_st_len", "10", 0, 2)        _entry(fr, "ATR Mult", "e_st_mult", "2.0", 0, 4)
         _option(fr, "Source", "v_st_source", "CLOSE", ("CLOSE", "HL2"), 0, 6)
 
         _option(
@@ -5145,6 +5269,7 @@ class UniversalFuturesBotGUI:
         _check(fr, "ADX", "v_use_adx", DEFAULT_USE_ADX, 0, 4)
         _entry(fr, "ADX Threshold", "e_adx_thresh", "20", 0, 6)
         _entry(fr, "ADX Period", "e_adx_len", str(DEFAULT_ADX_LEN), 1, 4)
+
         tk.Label(
             fr,
             text=(
@@ -5851,6 +5976,26 @@ class UniversalFuturesBotGUI:
 
         self.bot_profile_id = requested_profile
         self.v_bot_id.set(self.bot_profile_id)
+
+        # R6.1 GUI/config contract audit: catch stale variable references as a
+        # clear configuration error instead of an opaque AttributeError.
+        required_protection_attrs = (
+            "v_sl_enabled", "v_roi_sl_enabled", "v_simple_atr_sl_enabled",
+            "v_fallback_sl_enabled", "v_tp_enabled", "v_tp1_enabled",
+            "v_tp2_enabled", "v_simple_atr_tp_enabled", "v_tp1_be",
+            "e_roi_sl", "e_fallback_sl_roi", "e_roi_tp1", "e_roi_tp2",
+            "e_atr_sl_mult", "e_atr_tp1_mult", "e_atr_tp2_mult",
+            "v_legacy_protection_enabled", "v_sl_mode", "v_tp_mode",
+        )
+        missing_protection_attrs = [
+            attr for attr in required_protection_attrs if not hasattr(self, attr)
+        ]
+        if missing_protection_attrs:
+            raise RuntimeError(
+                "GUI/Protection configuration contract is incomplete. "
+                f"Missing: {', '.join(missing_protection_attrs)}"
+            )
+
         cfg = {
             "config_schema_version": CONFIG_SCHEMA_VERSION,
             "bot_id": self.bot_profile_id,
@@ -5868,7 +6013,6 @@ class UniversalFuturesBotGUI:
             "require_opposite_after_sl": self.v_require_opposite_after_exit.get(),
             # Keep the old key for backward compatibility with existing configs.
             "require_opposite_after_exit": self.v_require_opposite_after_exit.get(),
-
             "use_st": self.v_use_st.get(),
             "st_len": self.e_st_len.get().strip(),
             "st_mult": self.e_st_mult.get().strip(),
@@ -6028,7 +6172,7 @@ class UniversalFuturesBotGUI:
             "simple_sl_enabled": self.v_sl_enabled.get(),
             "simple_roi_sl_enabled": self.v_roi_sl_enabled.get(),
             "simple_roi_sl": self.e_roi_sl.get().strip(),
-            "simple_atr_sl_enabled": self.v_simple_atr_sl_enabled.get(),
+            "simple_atr_sl_enabled": self.v_simple_atr_sl_enabled.get(),  # canonical key
             "simple_fallback_sl_enabled": self.v_fallback_sl_enabled.get(),
             "simple_fallback_sl_roi": self.e_fallback_sl_roi.get().strip(),
             "simple_tp_enabled": self.v_tp_enabled.get(),
@@ -6059,7 +6203,7 @@ class UniversalFuturesBotGUI:
             "tp1_close": self.e_tp1_close.get().strip(),
             "tp2_close": self.e_tp2_close.get().strip(),
 
-            "use_atr_sl": self.v_use_atr_sl.get(),
+            "use_atr_sl": self.v_simple_atr_sl_enabled.get(),  # legacy config alias; canonical key is simple_atr_sl_enabled
             "atr_sl_mult": self.e_atr_sl_mult.get().strip(),
             "atr_tp1_mult": self.e_atr_tp1_mult.get().strip(),
             "atr_tp2_mult": self.e_atr_tp2_mult.get().strip(),
@@ -6145,7 +6289,8 @@ class UniversalFuturesBotGUI:
             )
 
             self.e_api_key.insert(
-                0,                cfg.get("api_key", ""),
+                0,
+                cfg.get("api_key", ""),
             )
             self.e_api_secret.insert(
                 0,
@@ -6740,7 +6885,7 @@ class UniversalFuturesBotGUI:
             self.v_sl_enabled.set(bool(cfg.get("simple_sl_enabled", True)))
             self.v_roi_sl_enabled.set(bool(cfg.get("simple_roi_sl_enabled", DEFAULT_SIMPLE_ROI_SL_ENABLED)))
             self.e_roi_sl.delete(0, tk.END); self.e_roi_sl.insert(0, cfg.get("simple_roi_sl", DEFAULT_SIMPLE_SL_ROI))
-            self.v_simple_atr_sl_enabled.set(bool(cfg.get("simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED)))
+            self.v_simple_atr_sl_enabled.set(bool(cfg.get("simple_atr_sl_enabled", cfg.get("use_atr_sl", DEFAULT_SIMPLE_ATR_SL_ENABLED))))
             self.v_fallback_sl_enabled.set(bool(cfg.get("simple_fallback_sl_enabled", DEFAULT_SIMPLE_FALLBACK_SL_ENABLED)))
             self.e_fallback_sl_roi.delete(0, tk.END); self.e_fallback_sl_roi.insert(0, cfg.get("simple_fallback_sl_roi", DEFAULT_SIMPLE_FALLBACK_SL_ROI))
             self.v_tp_enabled.set(bool(cfg.get("simple_tp_enabled", DEFAULT_SIMPLE_TP_ENABLED)))
@@ -6844,11 +6989,10 @@ class UniversalFuturesBotGUI:
                 ),
             )
 
-            self.v_use_atr_sl.set(bool(cfg.get("use_atr_sl", DEFAULT_ATR_SL_ENABLED)))
-            if "simple_atr_sl_enabled" not in cfg:
-                self.v_simple_atr_sl_enabled.set(bool(cfg.get("use_atr_sl", DEFAULT_SIMPLE_ATR_SL_ENABLED)))
-            if "simple_atr_tp_enabled" not in cfg:
-                self.v_simple_atr_tp_enabled.set(bool(cfg.get("use_atr_sl", DEFAULT_SIMPLE_ATR_TP_ENABLED)))
+            # R6.1 compatibility: older profiles stored the ATR-SL toggle
+            # under use_atr_sl. The canonical GUI variable is
+            # v_simple_atr_sl_enabled; no obsolete v_use_atr_sl attribute exists.
+            # ATR-TP has its own independent persisted setting.
             self.e_atr_sl_mult.delete(0, tk.END)
             self.e_atr_sl_mult.insert(0, cfg.get("atr_sl_mult", DEFAULT_ATR_SL_MULTIPLIER))
             self.e_atr_tp1_mult.delete(0, tk.END)
@@ -6866,8 +7010,7 @@ class UniversalFuturesBotGUI:
             self.e_tele_token.delete(
                 0,
                 tk.END,
-            )
-            self.e_tele_token.insert(
+            )            self.e_tele_token.insert(
                 0,
                 cfg.get(
                     "tele_token",
@@ -7146,7 +7289,8 @@ class UniversalFuturesBotGUI:
             return True
         text_error = str(error).lower()
         return any(token in text_error for token in (
-            "timed out",            "timeout",
+            "timed out",
+            "timeout",
             "temporarily unavailable",
             "connection reset",
             "connection aborted",
@@ -7865,8 +8009,7 @@ class UniversalFuturesBotGUI:
             )
 
         if leverage <= 0:
-            raise RuntimeError(
-                "Leverage must be greater than zero."
+            raise RuntimeError(                "Leverage must be greater than zero."
             )
 
         mode = str(protection_mode).upper()
@@ -8009,6 +8152,186 @@ class UniversalFuturesBotGUI:
 
         return sl, tp1, tp2, sl_move, tp1_move, tp2_move, source
 
+    def _ai_agent_trade_management(
+        self,
+        directional_modules,
+        side,
+        atr_value,
+        entry_price,
+        base_risk_pct,
+        base_atr_sl_mult,
+        base_tp1_r_mult,
+        base_tp2_r_mult,
+        min_families,
+        min_edge,
+        min_family_confidence,
+        require_trend,
+        require_structure,
+        max_conflicting_families,
+    ):
+        """Resolve bounded, deterministic AI risk/SL/TP values for one accepted trade.
+
+        The AI council decides whether the trade is acceptable. This manager then
+        converts the council evidence + completed-candle volatility into:
+          - effective risk % of current equity
+          - ATR stop multiplier
+          - TP1/TP2 multiples of the resolved stop distance
+
+        Hard min/max envelopes are mandatory so AI management can never remove
+        protection or silently escalate account risk.
+        """
+        if str(side).upper() not in ("LONG", "SHORT"):
+            raise ValueError("AI trade manager requires LONG or SHORT.")
+        entry_price = float(entry_price)
+        atr_value = float(atr_value)
+        if entry_price <= 0 or not np.isfinite(entry_price):
+            raise ValueError("AI trade manager requires a valid entry reference price.")
+        if atr_value <= 0 or not np.isfinite(atr_value):
+            raise ValueError("AI trade manager requires a valid completed-candle ATR.")
+
+        result = StrategyEngine.ai_agent_decision(
+            directional_modules,
+            atr_pass=True,
+            vol_pass=True,
+            adx_pass=True,
+            mtf_pass_bull=True,
+            mtf_pass_bear=True,
+            min_families=int(min_families),
+            min_edge=float(min_edge),
+            min_family_confidence=float(min_family_confidence),
+            require_trend=bool(require_trend),
+            require_structure=bool(require_structure),
+            max_conflicting_families=int(max_conflicting_families),
+        )
+
+        chosen_families = (
+            list(result.get("bull_families", []))
+            if str(side).upper() == "LONG"
+            else list(result.get("bear_families", []))
+        )
+        family_count = len(chosen_families)
+        edge = float(result.get("edge", 0.0) or 0.0)
+        conflicts = len(result.get("conflicting_families", []) or [])
+        family_confidences = [
+            float(result["families"][name]["confidence"])
+            for name in chosen_families
+            if name in result.get("families", {})
+        ]
+        confidence = (
+            float(np.mean(family_confidences))
+            if family_confidences else 0.0
+        )
+
+        # Strength is normalized from the actual AI acceptance thresholds.
+        edge_span = max(0.01, 1.0 - float(min_edge))
+        edge_strength = np.clip((edge - float(min_edge)) / edge_span, 0.0, 1.0)
+        family_strength = np.clip(
+            (family_count - int(min_families))
+            / max(1.0, len(EVIDENCE_FAMILY_ORDER) - int(min_families)),
+            0.0, 1.0,
+        )
+        confidence_strength = np.clip(
+            (confidence - float(min_family_confidence))
+            / max(0.01, 1.0 - float(min_family_confidence)),
+            0.0, 1.0,
+        )
+        conflict_penalty = np.clip(
+            conflicts / max(1.0, float(max_conflicting_families) + 1.0),
+            0.0, 1.0,
+        )
+
+        conviction = (
+            0.45 * float(edge_strength)
+            + 0.30 * float(family_strength)
+            + 0.25 * float(confidence_strength)
+        )
+        conviction *= (1.0 - 0.25 * float(conflict_penalty))
+        conviction = float(np.clip(conviction, 0.0, 1.0))
+
+        atr_pct = abs(atr_value / entry_price) * 100.0
+
+        # Higher volatility reduces risk. Low volatility allows the baseline to
+        # breathe slightly, but never beyond the hard 0.50% cap.
+        if atr_pct >= AI_AGENT_HIGH_VOL_ATR_PCT:
+            volatility_factor = 0.75
+        elif atr_pct <= AI_AGENT_LOW_VOL_ATR_PCT:
+            volatility_factor = 1.05
+        else:
+            span = AI_AGENT_HIGH_VOL_ATR_PCT - AI_AGENT_LOW_VOL_ATR_PCT
+            volatility_factor = 1.05 - 0.30 * (
+                (atr_pct - AI_AGENT_LOW_VOL_ATR_PCT) / max(span, 0.01)
+            )
+
+        # Stronger accepted setups may use more of the configured risk budget,
+        # while weaker accepted setups stay near the lower end.
+        conviction_factor = 0.75 + 0.50 * conviction
+        effective_risk = float(base_risk_pct) * conviction_factor * volatility_factor
+        effective_risk = float(np.clip(
+            effective_risk,
+            AI_AGENT_MIN_RISK_PCT,
+            AI_AGENT_MAX_RISK_PCT,
+        ))
+
+        # Volatility controls the stop width. Because position sizing uses this
+        # exact stop distance, a wider AI stop automatically reduces quantity.
+        if atr_pct >= AI_AGENT_HIGH_VOL_ATR_PCT:
+            vol_sl_floor = 2.10
+        elif atr_pct <= AI_AGENT_LOW_VOL_ATR_PCT:
+            vol_sl_floor = 1.55
+        else:
+            t = (atr_pct - AI_AGENT_LOW_VOL_ATR_PCT) / (
+                AI_AGENT_HIGH_VOL_ATR_PCT - AI_AGENT_LOW_VOL_ATR_PCT
+            )
+            vol_sl_floor = 1.55 + 0.55 * float(np.clip(t, 0.0, 1.0))
+
+        # Stronger evidence can justify a somewhat tighter stop; weak/volatile
+        # setups get more room. Never leave the configured hard envelope.
+        ai_sl_mult = vol_sl_floor + (2.05 - vol_sl_floor) * conviction
+        ai_sl_mult = float(np.clip(
+            ai_sl_mult,
+            AI_AGENT_MIN_ATR_SL_MULT,
+            AI_AGENT_MAX_ATR_SL_MULT,
+        ))
+
+        # TP targets are expressed as R-multiples of the final SL distance.
+        # This keeps reward targets coherent when the AI widens/narrows the SL.
+        ai_tp1_r = AI_AGENT_MIN_TP1_R_MULT + (
+            AI_AGENT_MAX_TP1_R_MULT - AI_AGENT_MIN_TP1_R_MULT
+        ) * conviction
+        ai_tp2_r = AI_AGENT_MIN_TP2_R_MULT + (
+            AI_AGENT_MAX_TP2_R_MULT - AI_AGENT_MIN_TP2_R_MULT
+        ) * conviction
+        ai_tp1_r = float(np.clip(ai_tp1_r, AI_AGENT_MIN_TP1_R_MULT, AI_AGENT_MAX_TP1_R_MULT))
+        ai_tp2_r = float(np.clip(ai_tp2_r, AI_AGENT_MIN_TP2_R_MULT, AI_AGENT_MAX_TP2_R_MULT))
+
+        # Respect the user's configured baseline if it is stricter than the AI
+        # envelope, rather than unexpectedly becoming more aggressive.
+        ai_sl_mult = float(np.clip(
+            ai_sl_mult,
+            AI_AGENT_MIN_ATR_SL_MULT,
+            AI_AGENT_MAX_ATR_SL_MULT,
+        ))
+        ai_tp1_r = max(float(base_tp1_r_mult), ai_tp1_r) if float(base_tp1_r_mult) > 0 else ai_tp1_r
+        ai_tp2_r = max(float(base_tp2_r_mult), ai_tp2_r) if float(base_tp2_r_mult) > 0 else ai_tp2_r
+        ai_tp1_r = float(np.clip(ai_tp1_r, AI_AGENT_MIN_TP1_R_MULT, AI_AGENT_MAX_TP1_R_MULT))
+        ai_tp2_r = float(np.clip(ai_tp2_r, AI_AGENT_MIN_TP2_R_MULT, AI_AGENT_MAX_TP2_R_MULT))
+        if ai_tp2_r <= ai_tp1_r:
+            ai_tp2_r = min(AI_AGENT_MAX_TP2_R_MULT, ai_tp1_r + 0.50)
+
+        return {
+            "risk_pct": effective_risk,
+            "atr_sl_mult": ai_sl_mult,
+            "tp1_r": ai_tp1_r,
+            "tp2_r": ai_tp2_r,
+            "atr_pct": atr_pct,
+            "edge": edge,
+            "family_count": family_count,
+            "confidence": confidence,
+            "conflicts": conflicts,
+            "conviction": conviction,
+            "families": chosen_families,
+        }
+
     def calculate_protection_prices(
         self,
         symbol,
@@ -8145,7 +8468,8 @@ class UniversalFuturesBotGUI:
             raise RuntimeError("Exchange returned no current market price.")
         return float(last)
 
-    def _manage_hold_sl_wait_reversal(self, position):        """Monitor the Hold-All-Reverse ROI threshold without an exchange SL.
+    def _manage_hold_sl_wait_reversal(self, position):
+        """Monitor the Hold-All-Reverse ROI threshold without an exchange SL.
 
         When the threshold is reached, the position remains open.  The normal
         all-active-direction reversal logic is then responsible for closing
@@ -8684,7 +9008,6 @@ class UniversalFuturesBotGUI:
         if now - self.last_protection_reconcile < self.protection_reconcile_interval:
             return
         self.last_protection_reconcile = now
-
         sl_id = str(protected.get("sl_id") or "")
         tp1_id = str(protected.get("tp1_id") or "")
         tp2_id = str(protected.get("tp2_id") or "")
@@ -9144,7 +9467,8 @@ class UniversalFuturesBotGUI:
         if cfg["mode"] in ("OFF", "DIRECT_SHOT"): return cfg
         if self.fetch_position(symbol): raise RuntimeError("GRID START BLOCKED: an existing position is open on this symbol.")
         if self.fetch_open_orders_safe(symbol): raise RuntimeError("GRID START BLOCKED: existing open orders found on this symbol.")
-        center = self._current_market_price(symbol)        self.grid_state.update({"active":True,"mode":cfg["mode"],"center":center,"session_start_balance":float(balance),"peak_equity":float(equity),"last_grid_reset":time.time()})
+        center = self._current_market_price(symbol)
+        self.grid_state.update({"active":True,"mode":cfg["mode"],"center":center,"session_start_balance":float(balance),"peak_equity":float(equity),"last_grid_reset":time.time()})
         self.log(f"GRID ENGINE STARTED | Mode={cfg['mode']} | Center={center:.12g} | Levels={cfg['levels']} | Spacing={cfg['spacing']*100:g}% | OrderSize={cfg['order_size']:g} USDT | TP={cfg['tp_pct']*100:g}% | GlobalSL={cfg['sl_pct']*100:g}% | MaxExposure={cfg['max_exposure']:g} USDT | TrendFilter={cfg['trend_filter']} | GridScoreMin={cfg['score_min']}")
         return cfg
 
@@ -9683,8 +10007,7 @@ class UniversalFuturesBotGUI:
             )
 
             if not self._grid_switch_neutral_direction(
-                symbol, cfg, neutral_direction
-            ):
+                symbol, cfg, neutral_direction            ):
                 return True
 
             # Re-read the position after any safe direction transition.
@@ -10143,7 +10466,8 @@ class UniversalFuturesBotGUI:
             raise ValueError("Max Trades cannot be negative.")
         min_score = int(str(self.e_min_score.get()).strip())
         if min_score < 1:
-            raise ValueError("Minimum Signal Score must be at least 1.")        adaptive_edge = float(str(self.e_adaptive_edge.get()).strip())
+            raise ValueError("Minimum Signal Score must be at least 1.")
+        adaptive_edge = float(str(self.e_adaptive_edge.get()).strip())
         adaptive_min_weight = float(str(self.e_adaptive_min_weight.get()).strip())
         if not 0.0 < adaptive_edge < 1.0:
             raise ValueError("Adaptive Edge must be between 0 and 1.")
@@ -10682,8 +11006,7 @@ class UniversalFuturesBotGUI:
             if signal_mode == "SINGLE_SIGNAL":
                 self.log(
                     "SINGLE SIGNAL MODE: ONE enabled signal is enough; "
-                    "Volume/ADX/ATR/MTF are NOT required."
-                )
+                    "Volume/ADX/ATR/MTF are NOT required."                )
             elif signal_mode == "ADAPTIVE_SCORE":
                 self.log(
                     f"ADAPTIVE SCORE: correlation-aware weights | Edge>={adaptive_edge:.2f} | "
@@ -11142,6 +11465,7 @@ class UniversalFuturesBotGUI:
             be_id = be_order.get("id")
             if not be_id:
                 raise RuntimeError("Break-even SL returned no order ID.")
+
             verified = self.verify_protection_orders(
                 self.symbol,
                 [("BREAK-EVEN SL", be_order)],
@@ -11681,8 +12005,7 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Divergence Type is invalid.")
             if div_min_count < 1 or div_min_count > 10:
                 raise ValueError("Minimum Divergence must be 1-10.")
-            if div_max_pivots < 1 or div_max_pivots > 20:
-                raise ValueError("Maximum Divergence Pivots must be 1-20.")
+            if div_max_pivots < 1 or div_max_pivots > 20:                raise ValueError("Maximum Divergence Pivots must be 1-20.")
             if div_max_bars < 30 or div_max_bars > 200:
                 raise ValueError("Maximum Divergence Bars must be 30-200.")
             if div_entry_mode not in ("FRESH", "CURRENT_STATE"):
@@ -11904,6 +12227,14 @@ class UniversalFuturesBotGUI:
             atr_sl_mult = float(self._runtime_gui_value("e_atr_sl_mult", 1.8))
             atr_tp1_mult = float(self._runtime_gui_value("e_atr_tp1_mult", 1.2))
             atr_tp2_mult = float(self._runtime_gui_value("e_atr_tp2_mult", 2.2))
+            # R6.1 AI manager values are per-cycle locals. GUI values remain the
+            # user-visible baseline; AI_AGENT may adapt the effective values for
+            # an accepted trade inside hard safety envelopes.
+            ai_effective_risk_pct = risk_pct
+            ai_effective_atr_sl_mult = atr_sl_mult
+            ai_effective_atr_tp1_mult = atr_tp1_mult
+            ai_effective_atr_tp2_mult = atr_tp2_mult
+            ai_management_active = False
 
             # Legacy values for explicit advanced mode.
             sl_mode = self._runtime_gui_value("v_sl_mode").strip().upper()
@@ -11912,7 +12243,7 @@ class UniversalFuturesBotGUI:
             tp1_target_pct = float(self._runtime_gui_value("e_tp1_pct"))
             tp2_target_pct = float(self._runtime_gui_value("e_tp2_pct"))
             hold_sl_roi_pct = float(self._runtime_gui_value("e_hold_sl_roi"))
-            legacy_atr_enabled = bool(self._runtime_gui_value("v_use_atr_sl"))
+            legacy_atr_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED))
             if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
                 raise ValueError(f"Unknown legacy SL/TP mode: SL={sl_mode} TP={tp_mode}")
             if min(roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct, sl_target_pct, tp1_target_pct, tp2_target_pct) <= 0:
@@ -12141,7 +12472,8 @@ class UniversalFuturesBotGUI:
 
                     df["ema_slow"] = (
                         df["close"].ewm(
-                            span=ema_slow_len,                            adjust=False,
+                            span=ema_slow_len,
+                            adjust=False,
                         ).mean()
                     )
 
@@ -12673,7 +13005,6 @@ class UniversalFuturesBotGUI:
                             >= adx_thresh
                         )
                     )
-
                     # ------------------------------------------------
                     # 5. Signal decision
                     # ------------------------------------------------
@@ -13140,7 +13471,8 @@ class UniversalFuturesBotGUI:
                         f"VWAP={'ON' if use_vwap else 'OFF'} "
                         f"VWAP_DELTA={'ON' if use_vwap_delta else 'OFF'}"
                         f"({vwap_delta_state}) "
-                        f"VIDYA={'ON' if use_vidya else 'OFF'}"                        f"({vidya_state}) "
+                        f"VIDYA={'ON' if use_vidya else 'OFF'}"
+                        f"({vidya_state}) "
                         f"LIQ_SWING={'ON' if use_liq_swings else 'OFF'}"
                         f"({liq_entry_mode if use_liq_swings else 'OFF'}) "
                         f"TRENDLINE={'ON' if use_trendline else 'OFF'}"
@@ -13392,9 +13724,68 @@ class UniversalFuturesBotGUI:
                         # latest COMPLETED candle ATR, not a stale fixed %
                         # configured at startup.
                         # ------------------------------------------------
+                        # R6: AI risk/SL/TP management runs only after the
+                        # deterministic AI Agent has produced an actual entry
+                        # signal. Other signal modes are unchanged.
+                        ai_management_active = False
+                        ai_effective_risk_pct = risk_pct
+                        ai_effective_atr_sl_mult = atr_sl_mult
+                        ai_effective_atr_tp1_mult = atr_tp1_mult
+                        ai_effective_atr_tp2_mult = atr_tp2_mult
+                        if (
+                            signal_mode == "AI_AGENT"
+                            and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED
+                            and not use_legacy_protection
+                            and not hold_all_reverse
+                            and desired_side in ("LONG", "SHORT")
+                        ):
+                            ai_mgr = self._ai_agent_trade_management(
+                                directional_modules,
+                                desired_side,
+                                float(df["atr"].iloc[-2]),
+                                close,
+                                risk_pct,
+                                atr_sl_mult,
+                                atr_tp1_mult,
+                                atr_tp2_mult,
+                                ai_min_families,
+                                ai_min_edge,
+                                ai_family_confidence,
+                                ai_require_trend,
+                                ai_require_structure,
+                                ai_max_conflicts,
+                            )
+                            ai_effective_risk_pct = ai_mgr["risk_pct"]
+                            ai_effective_atr_sl_mult = ai_mgr["atr_sl_mult"]
+                            ai_effective_atr_tp1_mult = ai_mgr["tp1_r"]
+                            ai_effective_atr_tp2_mult = ai_mgr["tp2_r"]
+                            ai_management_active = True
+                            self.log(
+                                "AI TRADE MANAGER: "
+                                f"Side={desired_side} | Families={ai_mgr['family_count']} "
+                                f"({','.join(ai_mgr['families']) or 'NONE'}) | "
+                                f"Edge={ai_mgr['edge']:.3f} | Confidence={ai_mgr['confidence']:.3f} | "
+                                f"Conflicts={ai_mgr['conflicts']} | Conviction={ai_mgr['conviction']:.3f} | "
+                                f"ATR={ai_mgr['atr_pct']:.3f}% | "
+                                f"Risk={ai_effective_risk_pct:.3f}% | "
+                                f"SL={ai_effective_atr_sl_mult:.2f} ATR | "
+                                f"TP1={ai_effective_atr_tp1_mult:.2f}R | "
+                                f"TP2={ai_effective_atr_tp2_mult:.2f}R"
+                            )
+
+                        # AI TP management uses R-multiples of the resolved ATR
+                        # stop. Therefore the protection resolver must use the
+                        # ATR TP branch for this trade.
+                        effective_simple_atr_sl_enabled = (
+                            simple_atr_sl_enabled or ai_management_active
+                        )
+                        effective_atr_tp_enabled = (
+                            atr_tp_enabled or ai_management_active
+                        )
+
                         entry_sl_price_fraction = sl_price_fraction
                         atr_entry_value = None
-                        if (use_legacy_protection and legacy_atr_enabled and not hold_all_reverse and sl_mode != "RISK_%") or (not use_legacy_protection and simple_atr_sl_enabled and not hold_all_reverse):
+                        if (use_legacy_protection and legacy_atr_enabled and not hold_all_reverse and sl_mode != "RISK_%") or (not use_legacy_protection and effective_simple_atr_sl_enabled and not hold_all_reverse):
                             atr_entry_value = float(df["atr"].iloc[-2])
                             if not np.isfinite(atr_entry_value) or atr_entry_value <= 0:
                                 if not use_legacy_protection and fallback_sl_enabled:
@@ -13406,7 +13797,7 @@ class UniversalFuturesBotGUI:
                                 else:
                                     raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
                             else:
-                                entry_sl_price_fraction = (atr_entry_value * atr_sl_mult / close)
+                                entry_sl_price_fraction = (atr_entry_value * (ai_effective_atr_sl_mult if ai_management_active else atr_sl_mult) / close)
                                 if entry_sl_price_fraction <= 0:
                                     raise RuntimeError("ATR_DYNAMIC_SL_DISTANCE_INVALID")
 
@@ -13415,7 +13806,7 @@ class UniversalFuturesBotGUI:
                                 self.symbol,
                                 curr_balance,
                                 close,
-                                risk_pct,
+                                ai_effective_risk_pct,
                                 entry_sl_price_fraction,
                                 size_mode,
                                 fixed_qty,
@@ -13521,20 +13912,29 @@ class UniversalFuturesBotGUI:
                                 atr_value=atr_entry_value, use_legacy=use_legacy_protection,
                                 hold_all_reverse=hold_all_reverse, hold_wait_reversal=hold_wait_reversal,
                                 simple_sl_enabled=simple_sl_enabled, simple_roi_sl_enabled=simple_roi_sl_enabled,
-                                roi_sl_target=roi_sl_target, simple_atr_sl_enabled=simple_atr_sl_enabled,
+                                roi_sl_target=roi_sl_target, simple_atr_sl_enabled=effective_simple_atr_sl_enabled,
                                 fallback_sl_enabled=fallback_sl_enabled, fallback_sl_roi=fallback_sl_roi,
                                 simple_tp_enabled=tp_engine_enabled, tp1_enabled=tp1_enabled, tp2_enabled=tp2_enabled,
-                                tp1_roi=tp1_roi, tp2_roi=tp2_roi, simple_atr_tp_enabled=atr_tp_enabled,
-                                atr_sl_mult=atr_sl_mult, atr_tp1_mult=atr_tp1_mult, atr_tp2_mult=atr_tp2_mult,
+                                tp1_roi=tp1_roi, tp2_roi=tp2_roi, simple_atr_tp_enabled=effective_atr_tp_enabled,
+                                atr_sl_mult=(ai_effective_atr_sl_mult if ai_management_active else atr_sl_mult),
+                                atr_tp1_mult=(ai_effective_atr_tp1_mult if ai_management_active else atr_tp1_mult),
+                                atr_tp2_mult=(ai_effective_atr_tp2_mult if ai_management_active else atr_tp2_mult),
                                 legacy_sl_target=effective_sl_target_pct, legacy_tp1_target=tp1_target_pct,
                                 legacy_tp2_target=tp2_target_pct, legacy_sl_mode=effective_sl_mode,
-                                legacy_tp_mode=tp_mode, account_balance=curr_balance, risk_pct=risk_pct,
+                                legacy_tp_mode=tp_mode, account_balance=curr_balance, risk_pct=(ai_effective_risk_pct if ai_management_active else risk_pct),
                             )
 
                             self.log(
                                 f"SL MODE: {effective_sl_mode} | TP MODE: {tp_mode}"
                             )
-                            if sl_mode == "RISK_%":
+                            if ai_management_active:
+                                self.log(
+                                    f"AI EFFECTIVE RISK: {ai_effective_risk_pct:.3f}% | "
+                                    f"AI SL={ai_effective_atr_sl_mult:.2f} ATR | "
+                                    f"AI TP1={ai_effective_atr_tp1_mult:.2f}R | "
+                                    f"AI TP2={ai_effective_atr_tp2_mult:.2f}R"
+                                )
+                            elif sl_mode == "RISK_%":
                                 self.log(
                                     f"FIXED QTY RISK SL: Budget={risk_pct:g}% of current balance | "
                                     f"Actual Qty={actual_qty:g} | SL derived from actual fill"
@@ -13603,8 +14003,7 @@ class UniversalFuturesBotGUI:
                             # ------------------------------------------------
                             # Create protection.
                             # ------------------------------------------------
-                            hold_wait_reversal = (
-                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
+                            hold_wait_reversal = (                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
                                 and bool(self._runtime_gui_value("v_hold_sl_wait_reversal"))
                             )
                             self.hold_sl_wait_reversal = hold_wait_reversal
