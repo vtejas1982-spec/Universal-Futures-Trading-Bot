@@ -5,8 +5,6 @@
 - UniversalFuturesBot_CRYPTO_R9_PRODUCTION.py
 - UniversalFuturesBot_CRYPTO_R9_6_UNIFIED_PROTECTION.py
 - UniversalFuturesBot_CRYPTO_AI_AGENT_R4.py
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R3.py
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R2.py
 - UniversalForexBot_MT5.py
 
 ## Backtest
@@ -49,3 +47,10 @@
 
 ## Rule
 Use Crypto R9.6 / Forex R5 as the current production line. AI Agent R2 is a separate controlled strategy build for Demo/backtest evaluation. Do not run superseded local R9.1/R9.2/R9.3/R9.5 copies.
+
+
+## Historical / Superseded AI Builds
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R3.py
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R2.py
+- docs/CRYPTO_AI_AGENT_R3_RELEASE_NOTES.md
+- docs/CRYPTO_AI_AGENT_R2_RELEASE_NOTES.md
