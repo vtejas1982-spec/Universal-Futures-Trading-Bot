@@ -183,3 +183,10 @@ def test_r8_risk_mode_disables_atr_sizing_path():
     source = LIVE.read_text(encoding="utf-8")
     assert 'if use_atr_sl and not hold_all_reverse and sl_mode != "RISK_%":' in source
     assert 'if use_atr_sl and not hold_all_reverse and sl_mode != "RISK_%":' in source
+
+
+def test_r8_sizing_mode_callback_links_fixed_qty_to_risk_sl():
+    source = LIVE.read_text(encoding="utf-8")
+    assert "def _on_size_mode_changed(self, selected=None):" in source
+    assert "self.v_sl_mode.set(\"RISK_%\")" in source
+    assert "self.v_sl_mode.set(\"PRICE_%\")" in source
