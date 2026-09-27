@@ -35,36 +35,29 @@
 
 See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
 
-## Forex/MT5 AI-Agent R6.5 current release — 2026-09-28
-- Version: V8.4.2-FOREX-AI-AGENT-R6.5
-- Strategy contract: Crypto AI-Agent R6.5 parity.
-- Execution contract: MT5-native Forex execution.
-- Backtester: UniversalForexBot_MT5_BACKTESTER.py.
-- Regression suite: tests/test_forex_ai_agent_r6_5_contract.py.
+## Forex/MT5 AI-Agent R6.5 — full parity + backtester + lifecycle hardening — 2026-09-28
 
 ### Added
-- AI_AGENT mode, six AI council controls, recommended-preset confirmation, bounded AI risk/SL/TP management and detailed AI preflight diagnostics.
-- Dedicated Forex R6.5 backtester with completed-candle signal evaluation, next-bar-open entry, TP1 partial close, TP1 break-even, drawdown and risk controls.
+- Crypto AI-Agent R6.5 strategy/evidence-family parity in the MT5 Forex engine.
+- AI-Agent recommended preset with explicit YES/NO confirmation.
+- AI council controls: 3 minimum families, 0.20 edge, 0.55 family confidence, Trend ON, Structure ON, max 1 conflict.
+- Bounded AI management: 0.20%-0.50% risk, 1.50-2.40 ATR SL, 1.00-1.50R TP1 and 2.00-3.00R TP2.
+- AI-aware Forex lot sizing using the dynamically selected stop distance.
+- Liquidity Swing entry mode and Divergence minimum-count/entry-mode controls.
+- Forex Grid Mode parity control; non-OFF grid execution is rejected because the MT5 engine remains single-position Forex-native.
+- New Forex AI-Agent R6.5 backtester with CSV/MT5 data input and trade/equity/summary outputs.
+- Regression test covering compile, StrategyEngine parity, GUI contract and runtime binding integrity.
 
-### Fixed / Modified
-- StrategyEngine synchronized with Crypto R6.5.
-- Shared core indicator and Volume/SR calculations synchronized with Crypto R6.5.
-- AI runtime thresholds propagated explicitly through Forex signal and decision-reason paths.
-- Hold-All-Reverse supports ALL_ACTIVE and MIN_FAMILIES.
-- Config schema advanced to 16; Max Open Trades is constrained to 1 for the MT5 single-position contract.
+### Fixed
+- Static Forex ATR lot sizing could overwrite an AI-selected stop distance; AI stop distance is now authoritative.
+- Configuration migration no longer silently replaces existing saved profiles with the recommended preset.
+- MT5 window-close network/runtime operations are moved away from the Tk UI thread.
+- GUI log retention is bounded.
 
-### Preserved
-- MT5 paper/terminal/live modes and all existing broker-native Forex execution/recovery/guardrails.
-- No Crypto exchange execution path was added to the Forex runtime.
+### Modified
+- Forex config schema 21 and runtime schema 22.
+- AI strategy parameters and protection concepts are aligned to Crypto AI-Agent R6.5 while MT5 execution, broker symbol/lot rules and account modes remain unchanged.
 
-### Verification
-- Python compile/import: PASS.
-- StrategyEngine AST parity: PASS.
-- Shared strategy function parity: PASS.
-- AI preset parity: PASS (134/134).
-- Forex R6.5 regression suite: 10/10 PASS.
-- GUI initialization and AI preset save/load smoke test: PASS.
-- Backtester smoke test: PASS.
 ## Repository cleanup
 - Removed superseded duplicate Crypto root engines (generic, R9 production, and R9.6 unified-protection copies).
 - Removed superseded Crypto AI Agent R2/R3/R4 root copies.
