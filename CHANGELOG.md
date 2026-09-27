@@ -362,8 +362,8 @@ A fixed quantity plus a percentage-of-equity risk target can mathematically requ
 
 ### Changed
 - Established four production source files with stable names:
-  - `UniversalFuturesBot_CRYPTO.py`
-  - `UniversalFuturesBot_CRYPTO_BACKTESTER.py`
+  - `the superseded generic Crypto engine`
+  - `the superseded generic Crypto backtester`
   - `UniversalForexBot_MT5.py`
   - `UniversalForexBot_MT5_BACKTESTER.py`
 - Removed superseded versioned production copies from the main working tree where present.
@@ -1016,7 +1016,7 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 ## 2026-09-22 — Crypto R5-HOTFIX2
 
 ### Fixed
-- Corrected accidental line-merge corruption in UniversalFuturesBot_CRYPTO.py that caused Python SyntaxError around the Volume/SR series builder (_volume_sr_series).
+- Corrected accidental line-merge corruption in the superseded generic Crypto engine that caused Python SyntaxError around the Volume/SR series builder (_volume_sr_series).
 - Repaired the divergence GUI callback definition where the function header and first statement had been merged onto one line.
 - Repaired the VWAP Delta settings validation where two statements had been merged onto one line.
 - Repaired the liquidity-entry else branch where statements had been merged onto one line.
