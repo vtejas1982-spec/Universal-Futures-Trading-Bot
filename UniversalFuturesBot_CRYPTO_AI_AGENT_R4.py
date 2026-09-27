@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R4"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R4 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R4-FULL-ENGINE-AUDIT"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R5"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R5 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R5-PRESET-CONTROL-AUDIT"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 15  # R4 adds explicit AI-Agent council settings and GUI persistence.
-RUNTIME_SCHEMA_VERSION = 15  # R4 runtime schema parity with AI-Agent settings.
+CONFIG_SCHEMA_VERSION = 16  # R5 adds confirmed AI-Agent recommended preset + profile metadata.
+RUNTIME_SCHEMA_VERSION = 16  # R5 runtime schema parity with AI-Agent preset metadata.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -117,6 +117,53 @@ AI_AGENT_TP2_ROI = 120.0
 AI_AGENT_HOLD_ENABLED = True
 AI_AGENT_HOLD_RULE = "MIN_FAMILIES"
 AI_AGENT_HOLD_MIN_FAMILIES = 2
+
+# R5 AI-Agent recommended trading preset. This is a deterministic configuration
+# preset for a disciplined crypto trend/momentum profile; it is NOT a
+# profitability guarantee and it never changes API credentials, account mode,
+# symbol, or profile identity. The user must explicitly confirm before it applies.
+AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R5"
+AI_AGENT_PRESET = {
+    "ai_min_families": 3, "ai_min_edge": 0.20, "ai_family_confidence": 0.55,
+    "ai_max_conflicts": 1, "ai_require_trend": True, "ai_require_structure": True,
+    "timeframe": "15m", "leverage": "5", "max_trades": "10", "max_open_trades": "1",
+    "no_same_candle": True, "cooldown_min": "15", "require_opposite_after_sl": True,
+    "use_st": True, "use_ema": True, "use_ema_cross": True, "use_macd": True,
+    "use_rsi": True, "use_stoch": True, "use_vwap": True, "use_vwap_delta": True,
+    "use_vidya": True, "use_nwe": True, "use_liq_swings": True, "use_trendline": True,
+    "use_divergence": True, "div_use_all": True, "use_vol_sr": True,
+    "use_vol": True, "use_adx": True, "use_atr": True, "use_mtf": True,
+    "use_bb": False, "grid_mode": "OFF",
+    "sr_tf1": "Chart", "sr_tf2": "4h", "sr_tf3": "D", "sr_tf4": "W", "nwe_repaint": False,
+    "evidence_min_families": 3, "evidence_family_min_score": 0.35,
+    "evidence_require_trend": True, "evidence_require_independent": True,
+    "size_mode": "EQUITY_RISK_%", "risk_pct": "0.35", "fixed_qty": "0.001",
+    "max_dd": "5.0", "emergency_capital_pct": "10.0", "emergency_scope": "BOT_SYMBOL",
+    "legacy_protection_enabled": False, "simple_sl_enabled": True,
+    "simple_roi_sl_enabled": True, "simple_roi_sl": "30.0",
+    "simple_atr_sl_enabled": True, "simple_fallback_sl_enabled": True, "simple_fallback_sl_roi": "30.0",
+    "simple_tp_enabled": True, "simple_tp1_enabled": True, "simple_tp2_enabled": True,
+    "simple_roi_tp1": "60.0", "simple_roi_tp2": "120.0",
+    "simple_atr_tp_enabled": False, "simple_tp1_be_enabled": True,
+    "atr_sl_mult": "1.8", "atr_tp1_mult": "1.2", "atr_tp2_mult": "2.2",
+    "hold_until_all_reverse": False, "reverse_exit_mode": "MIN_FAMILIES",
+    "min_reverse_families": "2", "hold_sl_wait_reversal": False,
+    "st_len": "10", "st_mult": "2.0", "st_source": "CLOSE", "st_entry_mode": "FRESH_FLIP", "st_change_atr": True,
+    "ema_len": "200", "ema_fast": "9", "ema_slow": "20", "ema_cross_entry_mode": "FRESH_CROSS",
+    "macd_fast": "12", "macd_slow": "26", "macd_signal": "9",
+    "rsi_len": "14", "rsi_ob": "80", "rsi_os": "20", "rsi_logic": "REVERSAL_ZONE", "rsi_ma_type": "EMA", "rsi_ma_len": "9",
+    "stoch_k": "14", "stoch_smooth": "3", "stoch_d": "3",
+    "vwap_len": "50", "vwap_delta_smooth": False, "vwap_delta_smooth_len": "21", "vwap_delta_baseline": "50", "vwap_delta_logic": "CURRENT_TREND",
+    "vidya_len": "10", "vidya_momentum": "20", "vidya_band": "2", "vidya_entry_mode": "CURRENT_TREND",
+    "nwe_bandwidth": "8", "nwe_mult": "3", "nwe_entry_mode": "FRESH_CROSS",
+    "liq_length": "14", "liq_area": "Wick Extremity", "liq_filter": "Count", "liq_filter_value": "0", "liq_entry_mode": "FRESH_BREAK",
+    "trendline_length": "14", "trendline_min_distance": "5", "trendline_entry_mode": "FRESH_BREAK", "trendline_buffer": "0", "trendline_retest_candles": "3",
+    "atr_min_pct": "0.30", "vol_len": "20", "adx_len": "14", "adx_thresh": "20", "bb_len": "20", "bb_std": "2",
+    "div_pivot": "5", "div_min_count": "1", "div_max_pivots": "10", "div_max_bars": "100", "div_cci_len": "10", "div_mom_len": "10",
+    "div_type": "Regular", "div_source": "Close", "div_entry_mode": "FRESH",
+    "sr_volume_ma": "6", "sr_vote_mode": "MAJORITY", "sr_entry_mode": "CURRENT_ZONE",
+    "tp_qty_mode": "PERCENT_%", "tp1_close": "50", "tp2_close": "50",
+}
 
 # R9.5/R9.6 reversal-hold contract. Directional modules are grouped so
 # correlated indicators do not masquerade as independent reversal votes.
@@ -1677,11 +1724,16 @@ class StrategyEngine:
                         f"Regime={'PASS' if (result['regime_buy'] or result['regime_sell']) else 'FAIL'}")
             blocks=[]
             fams=result["bull_families"] if result["bull_total"]>=result["bear_total"] else result["bear_families"]
-            if len(fams)<AI_AGENT_MIN_FAMILIES: blocks.append(f"FAMILIES_{len(fams)}/{AI_AGENT_MIN_FAMILIES}")
-            if result["edge"]<AI_AGENT_MIN_EDGE: blocks.append(f"EDGE_{result['edge']:.2f}<{AI_AGENT_MIN_EDGE:.2f}")
-            if len(result["conflicting_families"])>AI_AGENT_MAX_CONFLICTING_FAMILIES: blocks.append("CONFLICT_REVIEW")
-            if AI_AGENT_REQUIRE_TREND and "TREND" not in fams: blocks.append("TREND_REQUIRED")
-            if AI_AGENT_REQUIRE_STRUCTURE and "STRUCTURE" not in fams: blocks.append("STRUCTURE_REQUIRED")
+            effective_min_families = AI_AGENT_MIN_FAMILIES if ai_min_families is None else int(ai_min_families)
+            effective_min_edge = AI_AGENT_MIN_EDGE if ai_min_edge is None else float(ai_min_edge)
+            effective_max_conflicts = AI_AGENT_MAX_CONFLICTING_FAMILIES if ai_max_conflicting_families is None else int(ai_max_conflicting_families)
+            effective_require_trend = AI_AGENT_REQUIRE_TREND if ai_require_trend is None else bool(ai_require_trend)
+            effective_require_structure = AI_AGENT_REQUIRE_STRUCTURE if ai_require_structure is None else bool(ai_require_structure)
+            if len(fams)<effective_min_families: blocks.append(f"FAMILIES_{len(fams)}/{effective_min_families}")
+            if result["edge"]<effective_min_edge: blocks.append(f"EDGE_{result['edge']:.2f}<{effective_min_edge:.2f}")
+            if len(result["conflicting_families"])>effective_max_conflicts: blocks.append("CONFLICT_REVIEW")
+            if effective_require_trend and "TREND" not in fams: blocks.append("TREND_REQUIRED")
+            if effective_require_structure and "STRUCTURE" not in fams: blocks.append("STRUCTURE_REQUIRED")
             if not atr_pass: blocks.append("ATR_GATE")
             if not vol_pass: blocks.append("VOLUME_GATE")
             if not adx_pass: blocks.append("ADX_GATE")
@@ -2194,6 +2246,9 @@ class UniversalFuturesBotGUI:
         # snapshot instead of calling Tk widgets from the worker thread.
         self._runtime_gui_lock = threading.RLock()
         self._runtime_gui_values = {}
+        self.ai_agent_preset_applied = False
+        self.ai_agent_preset_name = ""
+        self._ai_agent_mode_prompt_active = False
 
         # R3 FIX: load_settings() runs immediately after _build_ui(), and the
         # configuration loader uses v_size_mode for backward-compatible sizing
@@ -2312,6 +2367,98 @@ class UniversalFuturesBotGUI:
         self.root.after(500, self._check_resume_candidate)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # -------------------- AI-AGENT PRESET ---------------------
+
+    def _set_entry_value(self, attr, value):
+        widget = getattr(self, attr, None)
+        if isinstance(widget, tk.Entry):
+            widget.delete(0, tk.END)
+            widget.insert(0, str(value))
+
+    def _set_var_value(self, attr, value):
+        var = getattr(self, attr, None)
+        if var is not None and hasattr(var, "set"):
+            var.set(value)
+
+    def _apply_ai_agent_recommended_defaults(self):
+        p = AI_AGENT_PRESET
+        entry_map = {
+            "leverage":"e_lev","max_trades":"e_max_trades","max_open_trades":"e_max_open_trades",
+            "st_len":"e_st_len","st_mult":"e_st_mult","ema_len":"e_ema_len","ema_fast":"e_ema_fast","ema_slow":"e_ema_slow",
+            "macd_fast":"e_macd_fast","macd_slow":"e_macd_slow","macd_signal":"e_macd_signal",
+            "rsi_len":"e_rsi_len","rsi_ob":"e_rsi_ob","rsi_os":"e_rsi_os","rsi_ma_len":"e_rsi_ma_len",
+            "stoch_k":"e_stoch_k","stoch_smooth":"e_stoch_smooth","stoch_d":"e_stoch_d",
+            "vwap_len":"e_vwap_len","vwap_delta_smooth_len":"e_vwap_delta_smooth_len","vwap_delta_baseline":"e_vwap_delta_baseline",
+            "vidya_len":"e_vidya_len","vidya_momentum":"e_vidya_momentum","vidya_band":"e_vidya_band",
+            "nwe_bandwidth":"e_nwe_bandwidth","nwe_mult":"e_nwe_mult","liq_length":"e_liq_length","liq_filter_value":"e_liq_filter_value",
+            "trendline_length":"e_trendline_length","trendline_min_distance":"e_trendline_min_distance","trendline_buffer":"e_trendline_buffer","trendline_retest_candles":"e_trendline_retest",
+            "atr_min_pct":"e_atr_min_pct","vol_len":"e_vol_len","adx_len":"e_adx_len","adx_thresh":"e_adx_thresh","bb_len":"e_bb_len","bb_std":"e_bb_std",
+            "div_pivot":"e_div_pivot","div_min_count":"e_div_min_count","div_max_pivots":"e_div_max_pivots","div_max_bars":"e_div_max_bars","div_cci_len":"e_div_cci_len","div_mom_len":"e_div_mom_len",
+            "sr_volume_ma":"e_sr_volume_ma","ai_min_families":"e_ai_min_families","ai_min_edge":"e_ai_min_edge","ai_family_confidence":"e_ai_family_confidence","ai_max_conflicts":"e_ai_max_conflicts",
+            "evidence_min_families":"e_evidence_min_families","evidence_family_min_score":"e_evidence_family_min_score","cooldown_min":"e_cooldown_min",
+            "risk_pct":"e_risk_pct","fixed_qty":"e_fixed_qty","max_dd":"e_max_dd","emergency_capital_pct":"e_emergency_capital_pct",
+            "simple_roi_sl":"e_roi_sl","simple_fallback_sl_roi":"e_fallback_sl_roi","simple_roi_tp1":"e_roi_tp1","simple_roi_tp2":"e_roi_tp2",
+            "atr_sl_mult":"e_atr_sl_mult","atr_tp1_mult":"e_atr_tp1_mult","atr_tp2_mult":"e_atr_tp2_mult","min_reverse_families":"e_min_reverse_families",
+            "tp1_close":"e_tp1_close","tp2_close":"e_tp2_close",
+        }
+        for key, attr in entry_map.items():
+            if key in p: self._set_entry_value(attr, p[key])
+        var_map = {
+            "timeframe":"v_tf","no_same_candle":"v_no_same_candle","require_opposite_after_sl":"v_require_opposite_after_exit",
+            "st_source":"v_st_source","st_entry_mode":"v_st_entry_mode","st_change_atr":"v_st_change_atr","ema_cross_entry_mode":"v_ema_cross_entry_mode",
+            "vidya_entry_mode":"v_vidya_entry_mode","nwe_entry_mode":"v_nwe_entry_mode","nwe_repaint":"v_nwe_repaint",
+            "rsi_logic":"v_rsi_logic","rsi_ma_type":"v_rsi_ma_type","vwap_delta_smooth":"v_vwap_delta_smooth","vwap_delta_logic":"v_vwap_delta_logic",
+            "liq_area":"v_liq_area","liq_filter":"v_liq_filter","liq_entry_mode":"v_liq_entry_mode","trendline_entry_mode":"v_trendline_entry_mode",
+            "div_type":"v_div_type","div_source":"v_div_source","div_entry_mode":"v_div_entry_mode","sr_vote_mode":"v_sr_vote_mode","sr_entry_mode":"v_sr_entry_mode",
+            "sr_tf1":"v_sr_tf1","sr_tf2":"v_sr_tf2","sr_tf3":"v_sr_tf3","sr_tf4":"v_sr_tf4","tp_qty_mode":"v_tp_qty_mode",
+            "use_st":"v_use_st","use_ema":"v_use_ema","use_ema_cross":"v_use_ema_cross","use_macd":"v_use_macd","use_rsi":"v_use_rsi","use_stoch":"v_use_stoch",
+            "use_vwap":"v_use_vwap","use_vwap_delta":"v_use_vwap_delta","use_vidya":"v_use_vidya","use_nwe":"v_use_nwe","use_liq_swings":"v_use_liq_swings",
+            "use_trendline":"v_use_trendline","use_divergence":"v_use_divergence","div_use_all":"v_div_use_all","use_vol_sr":"v_use_vol_sr","use_vol":"v_use_vol",
+            "use_adx":"v_use_adx","use_atr":"v_use_atr","use_mtf":"v_use_mtf","use_bb":"v_use_bb","grid_mode":"v_grid_mode",
+            "evidence_require_trend":"v_evidence_require_trend","evidence_require_independent":"v_evidence_require_independent","emergency_scope":"v_emergency_scope",
+            "size_mode":"v_size_mode","legacy_protection_enabled":"v_legacy_protection_enabled","simple_sl_enabled":"v_sl_enabled","simple_roi_sl_enabled":"v_roi_sl_enabled",
+            "simple_atr_sl_enabled":"v_simple_atr_sl_enabled","simple_fallback_sl_enabled":"v_fallback_sl_enabled","simple_tp_enabled":"v_tp_enabled",
+            "simple_tp1_enabled":"v_tp1_enabled","simple_tp2_enabled":"v_tp2_enabled","simple_atr_tp_enabled":"v_simple_atr_tp_enabled","simple_tp1_be_enabled":"v_tp1_be",
+            "hold_until_all_reverse":"v_hold_until_all_reverse","reverse_exit_mode":"v_reverse_exit_mode","hold_sl_wait_reversal":"v_hold_sl_wait_reversal",
+            "ai_require_trend":"v_ai_require_trend","ai_require_structure":"v_ai_require_structure",
+        }
+        for key, attr in var_map.items():
+            if key in p: self._set_var_value(attr, p[key])
+        self._set_var_value("v_risk_sizing_enabled", True)
+        self._set_var_value("v_max_dd_enabled", True)
+        self._set_var_value("v_emergency_enabled", True)
+        self._set_var_value("v_signal_mode","AI_AGENT")
+        self._set_var_value("v_sl_mode","ROI_%")
+        self._set_var_value("v_tp_mode","ROI_%")
+        self.ai_agent_preset_applied=True
+        self.ai_agent_preset_name=AI_AGENT_PRESET_NAME
+        self._refresh_runtime_gui_snapshot()
+        self.update_estimated_window()
+        self.log(f"AI AGENT PRESET APPLIED | {AI_AGENT_PRESET_NAME} | Families={p['ai_min_families']} | Edge={p['ai_min_edge']:.2f} | Confidence={p['ai_family_confidence']:.2f} | MaxConflicts={p['ai_max_conflicts']} | Risk={p['risk_pct']}% | TF={p['timeframe']} | Leverage={p['leverage']}x")
+
+    def _on_signal_mode_selected(self, selected_mode):
+        mode=str(selected_mode or self.v_signal_mode.get()).strip().upper()
+        if mode!="AI_AGENT" or self._ai_agent_mode_prompt_active: return
+        self._ai_agent_mode_prompt_active=True
+        try:
+            use_defaults=messagebox.askyesno(
+                "AI Agent Settings Confirmation",
+                "AI Agent mode selected.\n\nDo you want to apply the recommended AI Agent trading settings?\n\n"
+                "YES = apply the recommended AI Agent preset.\n"
+                "NO = keep all your current settings; AI Agent mode stays ON.\n\n"
+                "The preset is designed for a disciplined 15m crypto trend/momentum setup. "
+                "It does NOT guarantee maximum profit or profitability.",
+                parent=self.root,
+            )
+            if use_defaults: self._apply_ai_agent_recommended_defaults()
+            else:
+                self.ai_agent_preset_applied=False
+                self.ai_agent_preset_name="CURRENT_SETTINGS"
+                self._refresh_runtime_gui_snapshot()
+                self.log("AI AGENT MODE SELECTED | Current user settings retained; recommended preset NOT applied.")
+        finally:
+            self._ai_agent_mode_prompt_active=False
 
     # -------------------- LOGGING ----------------------------
 
@@ -4698,11 +4845,15 @@ class UniversalFuturesBotGUI:
             )
             var = tk.StringVar(value=default)
             setattr(self, var_name, var)
+            option_kwargs = {}
+            if var_name == "v_signal_mode":
+                option_kwargs["command"] = self._on_signal_mode_selected
             ttk.OptionMenu(
                 parent,
                 var,
                 default,
                 *values,
+                **option_kwargs,
             ).grid(
                 row=row,
                 column=col + 1,
@@ -5865,6 +6016,8 @@ class UniversalFuturesBotGUI:
             "ai_max_conflicts": self.e_ai_max_conflicts.get().strip(),
             "ai_require_trend": self.v_ai_require_trend.get(),
             "ai_require_structure": self.v_ai_require_structure.get(),
+            "ai_agent_preset_name": self.ai_agent_preset_name,
+            "ai_agent_preset_applied": self.ai_agent_preset_applied,
 
             "size_mode": self.v_size_mode.get(),
             "risk_sizing_enabled": self.v_risk_sizing_enabled.get(),
@@ -6502,6 +6655,8 @@ class UniversalFuturesBotGUI:
             self.e_ai_max_conflicts.insert(0, cfg.get("ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES))
             self.v_ai_require_trend.set(bool(cfg.get("ai_require_trend", AI_AGENT_REQUIRE_TREND)))
             self.v_ai_require_structure.set(bool(cfg.get("ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE)))
+            self.ai_agent_preset_name = str(cfg.get("ai_agent_preset_name", "")).strip()
+            self.ai_agent_preset_applied = bool(cfg.get("ai_agent_preset_applied", False))
 
             self.e_min_score.delete(0, tk.END)
             self.e_min_score.insert(
