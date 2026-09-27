@@ -23,6 +23,28 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_FOREX_EXE.bat`
 
 
+## V8.4.2-CRYPTO-AI-AGENT-R4 — Full engine audit + AI Agent configuration hardening — 2026-09-27
+
+### Fixed
+- Fixed the R3 configuration-load defect by retaining `v_size_mode` initialization before `load_settings()`.
+- Added `AI_AGENT` to the actual GUI Signal Mode menu; the engine contract and loader already accepted it.
+- AI-Agent council thresholds are now per-profile, persisted, validated, snapshotted on the GUI thread, propagated to the worker, and passed explicitly into decision and reason paths.
+- Corrected an AI decision-reason parameter mismatch found during audit.
+- Unknown AI council settings fail validation before exchange execution.
+
+### Added
+- AI Min Families, AI Min Edge, AI Family Confidence, AI Max Conflicts, AI Require Trend, and AI Require Structure.
+- Startup logging of the exact AI council configuration used.
+
+### Audit
+- StrategyEngine, 19-module indicator/evidence chain, settings/defaults, callbacks, configuration save/load/migration, recovery, risk/sizing, SL/TP, Grid isolation, profile lifecycle and kill-switch paths rechecked.
+- In-memory compile, AST, GUI self-call/callback audit, undefined-global audit and deterministic AI-agent smoke tests passed.
+
+### Important
+AI Agent R4 remains a deterministic rule engine; it does not call an external LLM. Live Bybit Demo execution and profitability are not established by the source audit.
+
+See docs/CRYPTO_AI_AGENT_R4_RELEASE_NOTES.md.
+
 ## V8.4.2-R9.6 — Unified ROI protection + configurable reversal hold — 2026-09-27
 
 R9.6 restores the full R9.3 protection capability behind an explicit compatibility path, adds a simpler ROI-based protection model, and integrates the R9.5 reversal-hold engine.
