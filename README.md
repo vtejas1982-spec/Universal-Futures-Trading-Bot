@@ -1,6 +1,6 @@
 # Universal Futures & Forex Trading Bot
 
-**Current production release: V8.4.2-R9.3**
+**Current production release: V8.4.2-R9.6**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -22,6 +22,34 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+
+## V8.4.2-R9.6 — Unified ROI protection + configurable reversal hold — 2026-09-27
+
+R9.6 restores the full R9.3 protection capability behind an explicit compatibility path, adds a simpler ROI-based protection model, and integrates the R9.5 reversal-hold engine.
+
+### Fixed
+- Fixed Qty and Equity Risk entry sizing remain completely independent.
+- Simple protection resolves one and only one SL basis.
+- Simple protection resolves one TP model; TP1/TP2 toggles cannot leak into legacy mode.
+- Hold-All-Reverse and Hold-SL WAIT are isolated from the normal TP engine.
+- Actual-fill entry/position quantity remains authoritative for protection.
+- Mandatory kill switch/watchdog remains retained.
+
+### Added
+- Independent ON/OFF controls for risk sizing, ROI SL, ATR SL, fallback SL, TP engine, TP1, TP2, ATR TP multipliers and TP1 break-even.
+- Hold Position Until Reverse.
+- Reverse Exit Rule: ALL_ACTIVE or MIN_FAMILIES.
+- Minimum Reverse Families 1–4.
+- Hold-SL threshold and optional WAIT-after-threshold behavior.
+- R9.3 legacy protection compatibility switch.
+
+### Audit
+- R9.3 protection calculator parity retained.
+- Simple ROI conversion uses ROI divided by configured leverage.
+- Strategy/evidence-family, defaults, callbacks, configuration migration, entry sizing, SL/TP, recovery and kill-switch paths rechecked.
+- Python compile and GUI AST/self-call audit passed.
+
+See docs/CRYPTO_R9_6_RELEASE_NOTES.md.
 
 ## V8.4.2-R9.3 — Stop completion + Fixed-Qty execution hardening — 2026-09-27
 
