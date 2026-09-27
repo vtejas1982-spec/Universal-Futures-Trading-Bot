@@ -26,6 +26,38 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_FOREX_EXE.bat`
 
 
+## V8.4.2-CRYPTO-AI-AGENT-R6.5 — Full engine audit + UI/runtime hardening — 2026-09-27
+
+### Fixed
+- Fixed the execution-log newline defect that caused long messages to render as one horizontal line.
+- Prevented unchanged profile configuration from being saved again every 30 seconds.
+- De-duplicated repeated full strategy diagnostics for the same completed candle/state.
+- Added CCXT time-difference correction and a larger private-request receive window to normal and emergency exchange builders.
+- Removed obsolete R2/R3/R4/R5 labels from the active R6.5 source comments.
+
+### Added
+- **Copy Log**, **Clear Log** and **Auto Scroll** controls.
+- 4,000-line GUI log retention.
+- Settings dirty tracking for checkpoint persistence.
+- Exchange/account-mode validation callback.
+- R6.5 contract regression test.
+- Full R6.5 audit report.
+
+### Audited
+- Engine/StrategyEngine structure and callbacks.
+- AI-Agent evidence-family decision path.
+- AI risk/SL/TP manager and hard envelopes.
+- Configuration variables, preset fields and save/load coverage.
+- Profile lifecycle, recovery, protection-order reconciliation and kill-switch paths.
+
+### Verification
+- Python compilation: PASS.
+- R6.5 contract regression suite: PASS (11/11 locally).
+- AI council decision smoke tests: PASS.
+- AI risk/SL/TP hard-envelope tests: PASS.
+
+See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
+
 ## Current repository cleanup — 2026-09-27
 
 The active root is now consolidated to one current Crypto R9.6 engine, one current Crypto AI-Agent R6.5 engine, one Forex/MT5 engine, and their current backtest/build files. Superseded duplicate bot files were removed from the main branch; historical versions remain in Git history.
