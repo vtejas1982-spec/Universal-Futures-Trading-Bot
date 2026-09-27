@@ -1,6 +1,6 @@
 # Universal Futures & Forex Trading Bot
 
-**Current production release: V8.4.2-R5**
+**Current production release: V8.4.2-R6**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -21,6 +21,34 @@ This repository is intentionally kept clean: the main branch contains the **curr
 
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
+
+
+## V8.4.2-R6 — Crypto execution hardening — 2026-09-27
+
+R6 is a focused live-execution reliability release. It does **not** loosen the ADAPTIVE_EVIDENCE strategy thresholds or manufacture additional signals.
+
+### Fixed
+
+- **Critical cooldown bug:** a continuously-flat bot no longer refreshes `last_flat_time` every polling cycle. The configured cooldown now starts only after a verified live-position → flat transition, so a 15-minute cooldown can actually expire.
+- **Hold-SL WAIT gate:** when `Hold-SL WAIT` is enabled, strategy reversal is blocked until the configured ROI threshold is reached. The later ALL-REVERSE check can no longer overwrite that prerequisite.
+- Removed an unreachable duplicate `ADAPTIVE_EVIDENCE` startup logging branch.
+- Added explicit `COOLDOWN STARTED` diagnostics for verified live-to-flat transitions and strategy reversals.
+
+### Preserved
+
+- ADAPTIVE_EVIDENCE: 2 families, family score 0.35, Trend required, Independent Non-Trend required, Edge 0.18.
+- ATR/ADX remain regime gates rather than directional evidence families.
+- Actual-fill SL/TP calculation, protection verification, recovery identity checks, managed-order ownership and fail-closed safety behavior.
+- Single-symbol execution remains one net position per bot/profile.
+
+### Validation
+
+- Crypto live source compiles successfully.
+- R6 StrategyEngine regression coverage passes all supported signal modes.
+- SINGLE_SIGNAL conflict remains fail-closed.
+- New R6 cooldown and Hold-SL WAIT regression tests are included under `tests/test_crypto_r6_regressions.py`.
+
+See `docs/CRYPTO_R6_RELEASE_NOTES.md` for the exact fix/add/modify list.
 
 ## V8.4.2-R5 contract
 
@@ -243,5 +271,5 @@ See `docs/R5_ENGINE_AUDIT_2026-09-22.md` for the complete change history.
 After the overnight SL event, Bybit returned terminal order state 110001 (order not exists or too late to cancel) for retired TP/SL IDs. The engine now treats that state as inactive, removes stale managed IDs, and avoids repeating the same cancellation every 30 seconds. Genuine unresolved managed-order cancellation failures remain fail-closed.
 
 
-## Latest Crypto R5-HOTFIX2
-See the repository changelog and audit notes for the 2026-09-22 syntax-corruption repair, compilation verification, and retained exchange/order resilience fixes.
+## Latest Crypto R6
+See `docs/CRYPTO_R6_RELEASE_NOTES.md` and `CHANGELOG.md` for the 2026-09-27 cooldown and Hold-SL WAIT execution fixes. The stable production filename remains `UniversalFuturesBot_CRYPTO.py`.
