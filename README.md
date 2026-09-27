@@ -1,6 +1,6 @@
 # Universal Futures & Forex Trading Bot
 
-**Current production release: V8.4.2-R6**
+**Current production release: V8.4.2-R7**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -22,6 +22,34 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+
+## V8.4.2-R7 — Crypto lifecycle + risk-boundary hardening — 2026-09-27
+
+R7 is a production safety release following Bybit Demo validation. It fixes profile lifecycle state, corrects percentage risk sizing, and enforces exchange maximum order quantity before submission.
+
+### Fixed
+
+- **Stop/profile lifecycle:** RUNNING → STOPPING → STOPPED/PAUSED_WITH_POSITION is now explicit. The GUI waits for the worker to terminate before releasing the profile lock.
+- **Phantom/stale RUNNING state:** a flat profile with no live process and no saved position/Grid state is normalized to STOPPED.
+- **Profile deletion:** stale lifecycle status alone no longer blocks deletion; live locks, saved positions, active trades and Grid state still block destructive operations.
+- **Risk sizing:** `0.75` now means **0.75% of equity**, not 75%.
+- **Exchange quantity cap:** final order quantity is clamped to CCXT/exchange maximum amount and precision before entry.
+- **ATR default parity:** missing `use_atr` configuration now uses the same ON default as a new profile.
+- **Max Open Trades:** this single-symbol engine now explicitly normalizes any value other than 1 to its hard limit of one net position.
+- Removed a duplicate `DIVERGENCE_INDICATORS` definition.
+
+### Added
+
+- Runtime schema 6 with explicit stop-request state.
+- R7 regression suite: `tests/test_crypto_r7_regressions.py`.
+- Exchange-cap and actual-risk diagnostics.
+- R7 release documentation.
+
+### Preserved
+
+R7 does not loosen the ADAPTIVE_EVIDENCE contract, Evidence-family thresholds, completed-candle signal logic, ATR/ADX regime gates, Hold-All-Reverse, post-SL lock, ATR 1.50 / 1.20 / 2.20 protection, or recovery identity checks.
+
+See `docs/CRYPTO_R7_RELEASE_NOTES.md` for the complete fix/add/modify list.
 
 ## V8.4.2-R6 — Crypto execution hardening — 2026-09-27
 
@@ -99,12 +127,12 @@ TP2 ROI %
 
 ## Max Open Trades
 
-The current execution coordinator is a **single-symbol net-position engine**.
+The current execution coordinator is a **single-symbol net-position engine**. `0` is not treated as unlimited; the effective hard limit is 1.
 
 Therefore:
 
 ```
-Max Open Trades > 1
+Max Open Trades != 1
         ↓
 normalized safely
         ↓
@@ -271,5 +299,5 @@ See `docs/R5_ENGINE_AUDIT_2026-09-22.md` for the complete change history.
 After the overnight SL event, Bybit returned terminal order state 110001 (order not exists or too late to cancel) for retired TP/SL IDs. The engine now treats that state as inactive, removes stale managed IDs, and avoids repeating the same cancellation every 30 seconds. Genuine unresolved managed-order cancellation failures remain fail-closed.
 
 
-## Latest Crypto R6
-See `docs/CRYPTO_R6_RELEASE_NOTES.md` and `CHANGELOG.md` for the 2026-09-27 cooldown and Hold-SL WAIT execution fixes. The stable production filename remains `UniversalFuturesBot_CRYPTO.py`.
+## Latest Crypto R7
+See `docs/CRYPTO_R7_RELEASE_NOTES.md` and `CHANGELOG.md` for the 2026-09-27 lifecycle, risk-sizing and exchange-quantity hardening. The stable production filename remains `UniversalFuturesBot_CRYPTO.py`.
