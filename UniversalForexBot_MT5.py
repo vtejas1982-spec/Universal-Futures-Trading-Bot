@@ -997,7 +997,8 @@ def _volume_sr_single_tf(frame, vol_threshold=6):
     pc = float(x.close.iloc[-3]) if len(x) > 2 else c
     # Fresh break uses the confirmed previous zone, preventing a newly-created
     # level from being mistaken for a breakout on the same confirmation bar.
-    fresh_up = np.isfinite(prev_res_hi) and pc <= prev_res_hi and c > prev_res_hi    fresh_dn = np.isfinite(prev_sup_lo) and pc >= prev_sup_lo and c < prev_sup_lo
+    fresh_up = np.isfinite(prev_res_hi) and pc <= prev_res_hi and c > prev_res_hi
+    fresh_dn = np.isfinite(prev_sup_lo) and pc >= prev_sup_lo and c < prev_sup_lo
     bull = bool(fresh_up or (np.isfinite(sup_zone) and c >= sup_zone) or (np.isfinite(res_hi) and c > res_hi))
     bear = bool(fresh_dn or (np.isfinite(res_zone) and c <= res_zone) or (np.isfinite(sup_lo) and c < sup_lo))
     return {"support_low":sup_lo, "support_zone":sup_zone,
@@ -1996,6 +1997,7 @@ def calculate_stochastic(df, k_length=14, k_smooth=3, d_length=3):
 
     lowest_low = df["low"].rolling(k_length).min()
     highest_high = df["high"].rolling(k_length).max()
+
     denominator = (highest_high - lowest_low).replace(0, float("nan"))
 
     raw_k = (
@@ -2995,7 +2997,8 @@ class UniversalFuturesBotGUI:
         )
         f_dash.pack(
             fill="x",
-            padx=10,            pady=5,
+            padx=10,
+            pady=5,
         )
 
         self.lbl_pnl = tk.Label(
@@ -3994,7 +3997,8 @@ class UniversalFuturesBotGUI:
 
         exchange_class = getattr(ccxt, exchange_id)
 
-        config = {            "apiKey": api_key,
+        config = {
+            "apiKey": api_key,
             "secret": api_secret,
             "enableRateLimit": True,
             "options": {
@@ -4993,7 +4997,8 @@ class UniversalFuturesBotGUI:
                     sl,
                     sl_direction,
                     "SL",
-                )                created.append(
+                )
+                created.append(
                     ("SL", sl_order)
                 )
 
@@ -5992,6 +5997,7 @@ class UniversalFuturesBotGUI:
     def _mark_tp1_hit_for_stats(self):
         if self.active_trade is not None:
             self.active_trade["tp1_hit"] = True
+
     # -------------------- SESSION WINDOW ---------------------
 
     def update_estimated_window(self):
@@ -6992,6 +6998,7 @@ class UniversalFuturesBotGUI:
                     else:
                         st_entry_bull = st_flip_bull
                         st_entry_bear = st_flip_bear
+
                     ema_bull = (
                         not use_ema
                         or close
@@ -7990,7 +7997,8 @@ class UniversalFuturesBotGUI:
                                 )
                                 self.log(
                                     f"TP CLOSE = {tp_qty_mode} | "
-                                    f"TP1={tp1_close_value:g} | "                                    f"TP2={tp2_close_value:g}"
+                                    f"TP1={tp1_close_value:g} | "
+                                    f"TP2={tp2_close_value:g}"
                                 )
                             self.log(
                                 f"Qty = {actual_qty}"
@@ -8989,7 +8997,8 @@ def fx_reconcile_protection_mt5(self, position):
     except Exception as e:
         self.log(f"CRITICAL PROTECTION RECONCILIATION FAILURE: {e}")
         try:
-            p = fx_fetch_position(self, self.symbol)            if p:
+            p = fx_fetch_position(self, self.symbol)
+            if p:
                 fx_close_position_market(self, self.symbol, p["side"], p["qty"])
                 self.log("FAIL-CLOSED: unprotected Forex position was closed.")
         except Exception as close_error:
@@ -9988,7 +9997,8 @@ def fx_v2_start_bot(self):
         return
     try:
         self.mt5_magic = int(self.e_magic.get().strip())
-    except Exception:        self.mt5_magic = 26091802
+    except Exception:
+        self.mt5_magic = 26091802
     fx_acquire_profile_lock(self)
     try:
         _fx_v2_original_start(self)
