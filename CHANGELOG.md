@@ -794,6 +794,42 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 # Changelog
 
 
+# V8.4.2 Crypto AI Agent R6.5 — 2026-09-27
+
+## Fixed
+- Routed worker-to-GUI updates through a thread-safe callback queue.
+- Removed direct worker-thread reads of Tkinter Entry/Variable objects from execution-reachable methods.
+- Routed dashboard/checkpoint/worker-finish UI updates through the GUI bridge.
+- Made emergency-stop UI updates thread-safe.
+- Kept the profile lock held until background kill-switch cleanup is finished and verification is complete.
+- Made idle GUI close avoid exchange cleanup when no active bot runtime exists.
+- Changed runtime protection basis to AI_DYNAMIC for normal AI-Agent sessions.
+- Persisted TP1/TP2 quantities and split metadata in recovery state.
+- Repaired TP2 protection reconstruction to preserve the configured TP split rather than assuming 50/50.
+- Corrected the AI Required diagnostic to use the AI minimum-family setting.
+
+## Added
+- Runtime schema: 21 -> 22.
+- GUI callback queue and non-blocking worker-to-GUI bridge.
+- Automated R6.5 contract tests.
+
+## Retained
+- Deterministic AI evidence-family engine.
+- Bounded AI risk/ATR-SL/ATR-TP manager.
+- Actual-fill protection and fail-closed exchange verification.
+- Mandatory kill switch and watchdog lifecycle.
+
+## Validation
+- AST parse: PASS.
+- Bytecode compilation: PASS.
+- AI decision/decision-reason smoke tests: PASS.
+- TP split smoke tests: PASS.
+- Worker Tk-thread safety audit: PASS.
+- StrategyEngine keyword audit: PASS.
+- Full live exchange lifecycle not claimed in this patch.
+
+
+
 # V8.4.2 Crypto AI Agent R6.4 — 2026-09-27
 
 ## Fixed
