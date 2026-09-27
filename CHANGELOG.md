@@ -793,6 +793,39 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 
 # Changelog
 
+# V8.4.2 Crypto AI Agent R6.1 — 2026-09-27
+
+## Fixed
+- Repaired the R6 startup/configuration failure: 'UniversalFuturesBotGUI' no longer references the nonexistent 'v_use_atr_sl' attribute.
+- Changed the saved canonical ATR-SL value to 'simple_atr_sl_enabled', while retaining 'use_atr_sl' as a backward-compatible JSON alias.
+- Changed the legacy ATR-SL runtime path to use the canonical 'v_simple_atr_sl_enabled' variable.
+- Repaired old-profile migration so 'use_atr_sl' can populate the canonical ATR-SL control when needed.
+- Repaired ATR-TP migration so 'simple_atr_tp_enabled' is independent of ATR-SL.
+- Updated profile-summary diagnostics to use the canonical ATR-SL key.
+- Added a GUI/protection configuration-contract audit before settings are saved.
+
+## Added / Modified
+- Configuration schema: 17 -> 18.
+- Runtime schema: 17 -> 18.
+- Internal release marker: 'V8.4.2-CRYPTO-AI-AGENT-R6.1'.
+- AI preset marker: 'AI_AGENT_RECOMMENDED_R6.1'.
+- Audit marker: 'V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.1-CONFIG-PROTECTION-HOTFIX'.
+
+## Retained R6 AI risk/protection behavior
+- AI risk is dynamically bounded between 0.20% and 0.50% per accepted trade.
+- AI ATR stop width is bounded between 1.50 and 2.40 ATR.
+- AI TP1 is bounded to 1.00–1.50R and TP2 to 2.00–3.00R, with TP2 forced beyond TP1.
+- Position sizing uses the AI-selected stop distance.
+- Final protection uses actual filled entry/quantity and exchange-side protection verification.
+
+## Validation
+- Python compilation: PASS on the uploaded R6 source after applying the R6.1 patch.
+- Static GUI attribute audit: PASS; no executable 'v_use_atr_sl' reference remains.
+- AI trade-manager smoke test: PASS.
+- Actual-fill protection resolver smoke test: PASS.
+- Full live/demo exchange lifecycle: not claimed in this audit.
+
+
 ## V8.1 Engine + Strategy Safety Audit — 2026-09-20
 
 ### Fixed
