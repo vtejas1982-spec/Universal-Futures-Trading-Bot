@@ -1,3 +1,30 @@
+## V8.4.2-R8 — 2026-09-27 Crypto Fixed-Qty Risk Protection
+
+### Fixed
+- **Critical percentage conversion:** the R7 live worker divided Risk Per Trade (%) by 100 before passing it to the sizing engine, while the sizing engine already treated the value as a percentage. R8 removes that double conversion. A GUI value of **0.75** now consistently means **0.75%**.
+- Fixed-quantity entries remain literal exchange quantities; selecting FIXED_QTY no longer causes the risk-sizing engine to replace the requested quantity.
+- **Risk-based hard SL:** added explicit RISK_% SL mode. With FIXED_QTY, Risk Per Trade (%) becomes the account-risk budget and the hard SL is calculated from the actual filled quantity and actual entry price.
+- RISK_% protection uses the actual filled position, so the final SL is recalculated after the exchange confirms the fill.
+- ATR sizing/protection is not silently mixed with RISK_% SL mode.
+- RISK_% is fail-closed unless Sizing Mode is FIXED_QTY; it is also incompatible with Hold-All-Reverse because Hold-All-Reverse intentionally owns the hard-stop semantics.
+
+### Added
+- SL Mode option: RISK_%.
+- Runtime diagnostics for fixed-quantity risk SL.
+- R8 regression suite: tests/test_crypto_r8_regressions.py.
+- Clear separation between EQUITY_RISK_% quantity sizing and FIXED_QTY + RISK_% stop-risk budgeting.
+
+### Preserved
+- ADAPTIVE_EVIDENCE strategy logic and thresholds.
+- R6 cooldown and Hold-SL WAIT fixes.
+- R7 lifecycle, stale RUNNING normalization, exchange max-quantity enforcement and profile locking.
+- Actual-fill protection/recovery architecture.
+- Grid risk remains independent from normal-strategy sizing/protection.
+
+### Risk note
+A fixed quantity plus a percentage-of-equity risk target can mathematically require a much wider price stop than an ATR stop. At high leverage, the liquidation price may be reached before such a stop. R8 therefore treats the percentage as a calculated risk target, not a guarantee against liquidation; exchange margin and liquidation rules remain authoritative.
+
+---
 ## V8.4.2-R7 — 2026-09-27 Crypto Lifecycle + Risk-Boundary Hardening
 
 ### Fixed
