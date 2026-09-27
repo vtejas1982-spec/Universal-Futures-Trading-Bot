@@ -58,6 +58,40 @@ This repository is intentionally kept clean: the main branch contains the **curr
 
 See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
 
+## V8.4.2-FOREX-AI-AGENT-R6.5 — Crypto R6.5 strategy parity + MT5-native execution — 2026-09-28
+
+### Added
+- AI_AGENT signal mode to the Forex/MT5 engine.
+- The same six AI-Agent council controls used by Crypto R6.5: AI Min Families, AI Min Edge, AI Family Confidence, AI Max Conflicts, AI Require Trend, AI Require Structure.
+- YES/NO AI-Agent preset confirmation. YES applies AI_AGENT_RECOMMENDED_R6.5; NO keeps current settings while AI_AGENT stays enabled.
+- Bounded AI trade management with the same R6.5 hard envelopes: Risk 0.20%–0.50%; SL 1.50–2.40 ATR; TP1 1.00–1.50R; TP2 2.00–3.00R.
+- Dedicated Forex/MT5 R6.5 backtester with completed-candle entries, risk-based sizing, ATR SL/TP, TP1 break-even, drawdown/loss guards and performance metrics.
+- Forex AI-Agent parity regression suite.
+
+### Fixed
+- Forex StrategyEngine was upgraded to the same AI-aware R6.5 implementation as Crypto.
+- Core strategy calculation parity was synchronized, including ADX and Volume/SR logic.
+- Missing AI runtime arguments are now propagated into signal and decision-reason paths.
+- Existing MT5 protection remains the execution authority: actual fill/lot quantity and broker precision are used for final SL/TP.
+- Existing Hold-All-Reverse now supports both ALL_ACTIVE and MIN_FAMILIES.
+- Forex configuration schema advanced to 16 with AI-Agent fields persisted.
+- Max Open Trades is explicitly constrained to the current MT5 single-position contract of 1.
+
+### Preserved
+- MT5 PAPER / TERMINAL / LIVE modes.
+- Broker symbol/suffix discovery, MT5 lot rules, order_calc_profit, margin/P/L and broker-native protection/recovery.
+- Existing Forex spread, slippage, session, Friday, news, correlation and trailing guardrails.
+
+### Verification
+- UniversalForexBot_MT5.py compiles and imports successfully.
+- Forex StrategyEngine AST matches Crypto R6.5.
+- All shared core indicator/strategy functions audited for parity.
+- AI preset values match Crypto R6.5 exactly (134/134).
+- AI decision and AI risk/SL/TP hard-envelope tests pass.
+- Forex backtester smoke test passes.
+- GUI initialization and AI preset save/load confirmation test passes.
+
+See docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md and docs/CRYPTO_FX_PARITY_AUDIT_2026-09-28.md.
 ## Current repository cleanup — 2026-09-27
 
 The active root is now consolidated to one current Crypto R9.6 engine, one current Crypto AI-Agent R6.5 engine, one Forex/MT5 engine, and their current backtest/build files. Superseded duplicate bot files were removed from the main branch; historical versions remain in Git history.
