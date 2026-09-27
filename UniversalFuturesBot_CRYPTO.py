@@ -44,9 +44,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R5-HOTFIX2"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-R5 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-22-R5-HOTFIX2"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R6"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-R6 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R6"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -9339,14 +9339,6 @@ class UniversalFuturesBotGUI:
                     f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
                     "ATR/ADX are regime gates only."
                 )
-            elif signal_mode == "ADAPTIVE_EVIDENCE":
-                self.log(
-                    f"ADAPTIVE EVIDENCE: MinFamilies={evidence_min_families} | "
-                    f"FamilyScore>={evidence_family_min_score:.2f} | "
-                    f"TrendReq={'ON' if self.v_evidence_require_trend.get() else 'OFF'} | "
-                    f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
-                    "REGIME ATR/ADX are gates only."
-                )
             self.log(
                 "REVERSAL HOLD: "
                 + (
@@ -11603,6 +11595,10 @@ class UniversalFuturesBotGUI:
                         # not reset the cooldown on every 30-second poll.
                         if had_live_state:
                             self.last_flat_time = time.time()
+                            if cooldown_min > 0:
+                                self.log(
+                                    f"COOLDOWN STARTED: {cooldown_min:g} min after verified live->flat transition."
+                                )
 
                     closed_candle_ts = int(df["time"].iloc[-2])
                     closed_candle_time = time.strftime(
@@ -11726,31 +11722,35 @@ class UniversalFuturesBotGUI:
                         and self.v_hold_until_all_reverse.get()
                     ):
                         if self.hold_sl_wait_reversal and not self.hold_sl_threshold_hit:
+                            # R6 FIX: Hold-SL WAIT is a hard prerequisite for
+                            # strategy reversal until the configured ROI threshold
+                            # has actually been reached.
                             reversal_allowed = False
                             self.log(
                                 f"HOLD-SL WAIT: {pos_type} remains open because the "
                                 "configured Hold-SL ROI threshold has not been reached yet."
                             )
-                        # IMPORTANT: a trend/signal change by ONE indicator is NOT
-                        # an exit. A live position is closed/reversed by strategy
-                        # only after ALL currently active directional modules have
-                        # reversed to the opposite side. The hard SL remains an
-                        # independent price-protection order and may only close the
-                        # trade when its price trigger is reached.
-                        opposite_checks = []
-                        for name, bull, bear in hold_directional_modules:
-                            opposite_checks.append((name, bool(bear if pos_type == "LONG" else bull)))
-                        not_reversed = [name for name, is_opposite in opposite_checks if not is_opposite]
-                        reversal_allowed = bool(opposite_checks) and not not_reversed
-                        if not reversal_allowed:
-                            self.log(
-                                f"HOLD {pos_type}: signal={desired_side}; waiting for ALL active directional states to reverse. "
-                                f"Waiting={', '.join(not_reversed) if not_reversed else 'NONE'}"
-                            )
                         else:
-                            self.log(
-                                f"HOLD {pos_type}: ALL active directional states reversed -> strategy reversal allowed."
-                            )
+                            # IMPORTANT: a trend/signal change by ONE indicator is NOT
+                            # an exit. A live position is closed/reversed by strategy
+                            # only after ALL currently active directional modules have
+                            # reversed to the opposite side. The hard SL remains an
+                            # independent price-protection order and may only close the
+                            # trade when its price trigger is reached.
+                            opposite_checks = []
+                            for name, bull, bear in hold_directional_modules:
+                                opposite_checks.append((name, bool(bear if pos_type == "LONG" else bull)))
+                            not_reversed = [name for name, is_opposite in opposite_checks if not is_opposite]
+                            reversal_allowed = bool(opposite_checks) and not not_reversed
+                            if not reversal_allowed:
+                                self.log(
+                                    f"HOLD {pos_type}: signal={desired_side}; waiting for ALL active directional states to reverse. "
+                                    f"Waiting={', '.join(not_reversed) if not_reversed else 'NONE'}"
+                                )
+                            else:
+                                self.log(
+                                    f"HOLD {pos_type}: ALL active directional states reversed -> strategy reversal allowed."
+                                )
 
                     if (
                         desired_side in ("LONG", "SHORT")
@@ -11800,6 +11800,10 @@ class UniversalFuturesBotGUI:
                                 balance=reversal_balance,
                             )
                             self.last_flat_time = time.time()
+                            if cooldown_min > 0:
+                                self.log(
+                                    f"COOLDOWN STARTED: {cooldown_min:g} min after strategy reversal."
+                                )
 
                         else:
                             # If flat, clean up orphan orders.
