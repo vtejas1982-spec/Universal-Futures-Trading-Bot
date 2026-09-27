@@ -1,660 +1,455 @@
-"""V8.4.2-FOREX-AI-AGENT-R6.5 MT5/Forex strategy + risk + SL/TP backtester.
-
-This backtester is intentionally paired with UniversalForexBot_MT5.py R6.5.
-The trading decision contract is the same as the live engine:
-- same five Evidence Families (REGIME is gate-only)
-- same AI-Agent council thresholds and bounded management
-- same completed-candle discipline
-- same indicator parameters and entry semantics from the R6.5 preset
-- same ATR-based AI SL and R-multiple TP1/TP2 management
-
-MT5 execution itself is NOT simulated as an exchange API. Backtest fills are
-modeled at the next completed bar open, with optional spread/slippage costs.
-Forex P/L uses price-distance * lots * contract_size; USD-quoted pairs such as
-EURUSD map directly to account-USD P/L. Cross-currency pairs require an
-appropriate quote-currency conversion outside this simple backtest model.
 """
+Universal Forex / MT5 AI-Agent R6.5 Backtester
+
+The production strategy source of truth is UniversalForexBot_MT5.py.
+
+Parity contract:
+- completed-candle strategy decisions
+- same Evidence Families and AI-Agent council
+- AI thresholds: 3 families / 0.20 edge / 0.55 family confidence /
+  Trend ON / Structure ON / max 1 conflict
+- bounded AI risk: 0.20%..0.50%
+- bounded AI SL: 1.50..2.40 ATR
+- bounded AI TP1: 1.00..1.50R
+- bounded AI TP2: 2.00..3.00R
+- TP1 partial + break-even management
+- one simulated open trade
+- post-SL opposite-direction lock
+- max drawdown and emergency-capital guards
+
+Forex-specific simulation:
+- risk sizing uses tick-size/tick-value and MT5-style lots
+- spread and slippage are modeled adversely
+- commission is configurable
+- entry is simulated at the next candle open
+- 4H MTF is availability-aligned to avoid future leakage
+- Grid Mode is OFF-only in the Forex production contract
+
+This is a research simulator. Broker execution, swaps, latency, fills,
+freeze levels, spread history and liquidity can differ from live MT5.
+"""
+
 from __future__ import annotations
 
 import argparse
 import importlib.util
 import json
 import math
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 
-LIVE = Path(__file__).with_name("UniversalForexBot_MT5.py")
-spec = importlib.util.spec_from_file_location("fx_r65", str(LIVE))
-if spec is None or spec.loader is None:
-    raise ImportError(f"Could not load Forex engine: {LIVE}")
-fx = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(fx)
+ROOT = Path(__file__).resolve().parent
+LIVE_FILE = ROOT / "UniversalForexBot_MT5.py"
+RESULT_DIR = ROOT / "backtest_results_forex_r6_5"
 
-APP_VERSION = "V8.4.2-FOREX-AI-AGENT-BACKTESTER-R6.5"
-AUDIT_BUILD = "V8.4.2-FOREX-AI-AGENT-BACKTEST-AUDIT-2026-09-28"
+AI_MIN_FAMILIES = 3
+AI_MIN_EDGE = 0.20
+AI_FAMILY_CONFIDENCE = 0.55
+AI_REQUIRE_TREND = True
+AI_REQUIRE_STRUCTURE = True
+AI_MAX_CONFLICTS = 1
 
-AI_DEFAULTS = dict(fx.AI_AGENT_PRESET)
-DEFAULTS: dict[str, Any] = {
-    **AI_DEFAULTS,
-    "capital": 10000.0,
-    "symbol": "EURUSD",
-    "contract_size": 100000.0,
-    "min_lot": 0.01,
-    "lot_step": 0.01,
-    "max_lot": 100.0,
-    "spread_pips": 0.0,
-    "slippage_pips": 0.0,
-    "use_session_filter": False,
-    "session_start_utc": "07:00",
-    "session_end_utc": "20:00",
-    "friday_protect": False,
-    "friday_cutoff_utc": "20:00",
-    "use_daily_loss": True,
-    "daily_loss_pct": 2.0,
-    "use_daily_profit": False,
-    "daily_profit_pct": 0.0,
-    "use_loss_streak": True,
-    "max_loss_streak": 3,
+AI_MIN_RISK = 0.20
+AI_MAX_RISK = 0.50
+AI_MIN_SL = 1.50
+AI_MAX_SL = 2.40
+AI_MIN_TP1 = 1.00
+AI_MAX_TP1 = 1.50
+AI_MIN_TP2 = 2.00
+AI_MAX_TP2 = 3.00
+
+DEFAULT = {
+    "signal_mode": "AI_AGENT",
+    "timeframe": "15m",
+    "max_trades": 10,
+    "max_open_trades": 1,
+    "no_same_candle": True,
+    "cooldown_min": 15,
+    "risk_pct": 0.35,
+    "grid_mode": "OFF",
+    "max_dd_pct": 5.0,
+    "emergency_loss_pct": 10.0,
+
+    "use_st": True, "st_len": 10, "st_mult": 2.0, "st_source": "CLOSE",
+    "st_change_atr": True, "st_entry_mode": "FRESH_FLIP",
+    "use_ema": True, "ema_len": 200,
+    "use_ema_cross": True, "ema_fast": 9, "ema_slow": 20,
+    "ema_cross_entry_mode": "FRESH_CROSS",
+    "use_macd": True, "macd_fast": 12, "macd_slow": 26, "macd_signal": 9,
+    "use_rsi": True, "rsi_len": 14, "rsi_ob": 80, "rsi_os": 20,
+    "rsi_logic": "REVERSAL_ZONE", "rsi_ma_type": "EMA", "rsi_ma_len": 9,
+    "use_bb": False, "bb_len": 20, "bb_std": 2.0,
+    "use_stoch": True, "stoch_k": 14, "stoch_smooth": 3, "stoch_d": 3,
+    "use_vwap": True, "vwap_len": 50,
+    "use_vwap_delta": True, "vwap_delta_smooth": False,
+    "vwap_delta_smooth_len": 21, "vwap_delta_baseline": 50,
+    "vwap_delta_logic": "CURRENT_TREND",
+    "use_vidya": True, "vidya_len": 10, "vidya_momentum": 20,
+    "vidya_band": 2, "vidya_entry_mode": "CURRENT_TREND",
+    "use_nwe": True, "nwe_bandwidth": 8, "nwe_mult": 3,
+    "nwe_entry_mode": "FRESH_CROSS", "nwe_repaint": False,
+    "use_liq_swing": True, "liq_len": 14, "liq_area": "Wick Extremity",
+    "liq_filter": "Count", "liq_filter_value": 0, "liq_entry_mode": "FRESH_BREAK",
+    "use_trendline": True, "trend_len": 14, "trend_min_dist": 5,
+    "trend_buffer": 0.0, "trend_retest": 3, "trend_entry": "FRESH_BREAK",
+    "use_divergence": True, "div_pivot": 5, "div_min_count": 1,
+    "div_max_pivots": 10, "div_max_bars": 100, "div_type": "Regular",
+    "div_source": "Close", "div_entry_mode": "FRESH",
+    "div_use_all": True, "div_cci_len": 10, "div_mom_len": 10,
+    "div_vwmacd_fast": 12, "div_vwmacd_slow": 26,
+    "div_cmf_len": 21, "div_mfi_len": 14,
+    "use_vol_sr": True, "sr_volume_ma": 6, "sr_vote_mode": "MAJORITY",
+    "sr_entry_mode": "CURRENT_ZONE", "sr_tf1": "Chart", "sr_tf2": "4h",
+    "sr_tf3": "D", "sr_tf4": "W",
+    "use_vol": True, "vol_len": 20, "use_adx": True, "adx_len": 14,
+    "adx_thresh": 20, "use_atr": True, "atr_min_pct": 0.30, "use_mtf": True,
+    "atr_sl_mult": 1.8, "atr_tp1_mult": 1.2, "atr_tp2_mult": 2.2,
+    "tp1_close_pct": 50.0, "tp1_be": True,
 }
 
-
-def _bool(v: Any) -> bool:
-    if isinstance(v, bool):
-        return v
-    return str(v).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _float(v: Any, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return float(default)
-
-
-def _int(v: Any, default: int = 0) -> int:
-    try:
-        return int(float(v))
-    except Exception:
-        return int(default)
-
-
-def load_ohlcv(data: str | Path | pd.DataFrame) -> pd.DataFrame:
-    """Load normalized OHLCV data from CSV/Parquet/DataFrame.
-
-    Required: open, high, low, close
-    Time column: datetime, time, timestamp or date. Volume is optional.
-    """
-    if isinstance(data, pd.DataFrame):
-        x = data.copy()
-    else:
-        path = Path(data)
-        if not path.exists():
-            raise FileNotFoundError(path)
-        if path.suffix.lower() in {".parquet", ".pq"}:
-            x = pd.read_parquet(path)
-        else:
-            x = pd.read_csv(path)
-
-    x.columns = [str(c).strip().lower() for c in x.columns]
-    rename = {
-        "timestamp": "time",
-        "date": "datetime",
-        "datetime_utc": "datetime",
-        "tick_volume": "vol",
-        "volume": "vol",
-    }
-    for old, new in rename.items():
-        if old in x.columns and new not in x.columns:
-            x[new] = x[old]
-
-    if "datetime" not in x.columns:
-        if "time" not in x.columns:
-            raise ValueError("Input needs datetime/date or time/timestamp.")
-        raw = pd.to_numeric(x["time"], errors="coerce")
-        unit = "ms" if raw.dropna().median() > 1e11 else "s"
-        x["datetime"] = pd.to_datetime(raw, unit=unit, utc=True, errors="coerce")
-    else:
-        x["datetime"] = pd.to_datetime(x["datetime"], utc=True, errors="coerce")
-
-    for col in ["open", "high", "low", "close"]:
-        if col not in x.columns:
-            raise ValueError(f"Missing required column: {col}")
-        x[col] = pd.to_numeric(x[col], errors="coerce")
-
-    if "vol" not in x.columns:
-        x["vol"] = 1.0
-    x["vol"] = pd.to_numeric(x["vol"], errors="coerce").fillna(0.0)
-    x = x.dropna(subset=["datetime", "open", "high", "low", "close"])
-    x = x.sort_values("datetime").drop_duplicates("datetime").reset_index(drop=True)
-    x["time"] = (x["datetime"].astype("int64") // 10**6).astype("int64")
-    return x
-
-
-def _cfg(c: dict[str, Any]) -> dict[str, Any]:
-    x = dict(DEFAULTS)
-    x.update(c or {})
-    # Normalize the Forex GUI's historical singular spellings to the shared
-    # Crypto R6.5 preset spellings used by the strategy engine.
-    if "use_liq_swing" in x and "use_liq_swings" not in c:
-        x["use_liq_swings"] = x["use_liq_swing"]
-    if "trend_len" in x and "trendline_length" not in c:
-        x["trendline_length"] = x["trend_len"]
-    if "trend_min_dist" in x and "trendline_min_distance" not in c:
-        x["trendline_min_distance"] = x["trend_min_dist"]
-    if "trend_entry" in x and "trendline_entry_mode" not in c:
-        x["trendline_entry_mode"] = x["trend_entry"]
-    if "trend_buffer" in x and "trendline_buffer" not in c:
-        x["trendline_buffer"] = x["trend_buffer"]
-    if "trend_retest" in x and "trendline_retest_candles" not in c:
-        x["trendline_retest_candles"] = x["trend_retest"]
-    # Backwards-compatible local aliases used by the Forex loop implementation.
-    x.setdefault("liq_len", x.get("liq_length", 14))
-    x.setdefault("use_liq_swing", x.get("use_liq_swings", True))
-    x.setdefault("trend_len", x.get("trendline_length", 14))
-    x.setdefault("trend_min_dist", x.get("trendline_min_distance", 5))
-    x.setdefault("trend_entry", x.get("trendline_entry_mode", "FRESH_BREAK"))
-    x.setdefault("trend_buffer", x.get("trendline_buffer", 0))
-    x.setdefault("trend_retest", x.get("trendline_retest_candles", 3))
-    x.setdefault("st_change_atr", True)
-    # Keep R6.5 AI-Agent live contract explicit in every test even if caller
-    # changes a non-AI field.
-    x["signal_mode"] = str(x.get("signal_mode", "AI_AGENT")).strip().upper()
-    x["max_open_trades"] = 1
-    return x
-
-
-def build_frame(df: pd.DataFrame, c: dict[str, Any]) -> pd.DataFrame:
-    """Build the same causal indicator families used by the live Forex engine."""
-    x = load_ohlcv(df)
-    x = fx.calculate_supertrend(
-        x,
-        int(c.get("st_len", 10)),
-        float(c.get("st_mult", 2.0)),
-        str(c.get("st_source", "CLOSE")),
-        _bool(c.get("st_change_atr", True)),
-    )
-    x = fx.calculate_adx(x, int(c.get("adx_len", 14)))
-    x["ema"] = x.close.ewm(span=int(c["ema_len"]), adjust=False).mean()
-    x["ema_fast"] = x.close.ewm(span=int(c["ema_fast"]), adjust=False).mean()
-    x["ema_slow"] = x.close.ewm(span=int(c["ema_slow"]), adjust=False).mean()
-
-    if _bool(c["use_macd"]):
-        x = fx.calculate_macd(x, int(c["macd_fast"]), int(c["macd_slow"]), int(c["macd_signal"]))
-    if _bool(c["use_rsi"]):
-        x = fx.calculate_rsi(x, int(c["rsi_len"]))
-        x = fx.calculate_rsi_ma(x, str(c["rsi_ma_type"]), int(c["rsi_ma_len"]))
-    if _bool(c["use_bb"]):
-        x = fx.calculate_bollinger(x, int(c["bb_len"]), float(c["bb_std"]))
-    if _bool(c["use_stoch"]):
-        x = fx.calculate_stochastic(x, int(c["stoch_k"]), int(c["stoch_smooth"]), int(c["stoch_d"]))
-    if _bool(c["use_vwap"]):
-        x = fx.calculate_vwap(x, int(c["vwap_len"]))
-    if _bool(c["use_vwap_delta"]):
-        x = fx.calculate_vwap_delta(
-            x,
-            _bool(c["vwap_delta_smooth"]),
-            int(c["vwap_delta_smooth_len"]),
-            int(c["vwap_delta_baseline"]),
-        )
-    if _bool(c["use_vidya"]):
-        x = fx.calculate_vidya(
-            x,
-            int(c["vidya_len"]),
-            int(c["vidya_momentum"]),
-            float(c["vidya_band"]),
-        )
-    if _bool(c["use_nwe"]):
-        x = fx.calculate_nadaraya_watson_envelope(
-            x,
-            float(c["nwe_bandwidth"]),
-            float(c["nwe_mult"]),
-        )
-
-    x["vol_ma"] = x.vol.rolling(int(c["vol_len"])).mean()
-
-    if _bool(c.get("use_liq_swings", c.get("use_liq_swing", True))):
-        x = fx.calculate_liquidity_swings(
-            x,
-            length=int(c.get("liq_length", c.get("liq_len", 14))),
-            area=str(c["liq_area"]),
-            filter_options=str(c["liq_filter"]),
-            filter_value=float(c["liq_filter_value"]),
-        )
-    if _bool(c["use_trendline"]):
-        x = fx.calculate_trendline_breakout(
-            x,
-            length=int(c.get("trendline_length", c.get("trend_len", 14))),
-            min_pivot_distance=int(c.get("trendline_min_distance", c.get("trend_min_dist", 5))),
-            breakout_buffer_pct=float(c.get("trendline_buffer", c.get("trend_buffer", 0))),
-            retest_candles=int(c.get("trendline_retest_candles", c.get("trend_retest", 3))),
-        )
-    if _bool(c["use_divergence"]):
-        div_cfg = dict(c)
-        div_cfg.setdefault("div_max_pivots", c.get("div_max_pivots", 10))
-        div_cfg.setdefault("div_max_bars", c.get("div_max_bars", 100))
-        x = fx.calculate_divergence_module(x, div_cfg)
-    if _bool(c["use_vol_sr"]):
-        x = fx._volume_sr_base_series(x, dict(c))
-
-    if _bool(c["use_mtf"]):
-        z = (
-            x.set_index("datetime")
-            .resample("4h", label="left", closed="left")
-            .agg({"open": "first", "high": "max", "low": "min", "close": "last", "vol": "sum"})
-            .dropna()
-        )
-        z["ema200"] = z.close.ewm(span=200, adjust=False).mean()
-        z["available_at"] = z.index + pd.Timedelta(hours=4)
-        z = z.reset_index()
-        x = pd.merge_asof(
-            x.sort_values("datetime"),
-            z[["available_at", "close", "ema200"]]
-            .rename(columns={"close": "mtf_close"})
-            .sort_values("available_at"),
-            left_on="datetime",
-            right_on="available_at",
-            direction="backward",
-        )
-    else:
-        x["mtf_close"] = np.nan
-        x["ema200"] = np.nan
-
-    return x.reset_index(drop=True)
-
-
-def module_votes(x: pd.DataFrame, i: int, c: dict[str, Any]):
-    """Return live-equivalent directional modules and gate state for bar i."""
-    q, p, pp = x.iloc[i], x.iloc[i - 1], x.iloc[i - 2]
-    close = float(q.close)
-    candle_bull = float(q.close) > float(q.open)
-    candle_bear = float(q.close) < float(q.open)
-
-    use_st = _bool(c["use_st"])
-    use_ema = _bool(c["use_ema"])
-    use_ema_cross = _bool(c["use_ema_cross"])
-    use_macd = _bool(c["use_macd"])
-    use_rsi = _bool(c["use_rsi"])
-    use_bb = _bool(c["use_bb"])
-    use_stoch = _bool(c["use_stoch"])
-    use_vwap = _bool(c["use_vwap"])
-    use_vwap_delta = _bool(c["use_vwap_delta"])
-    use_vidya = _bool(c["use_vidya"])
-    use_nwe = _bool(c["use_nwe"])
-    use_liq_swing = _bool(c.get("use_liq_swings", c.get("use_liq_swing", True)))
-    use_trendline = _bool(c.get("use_trendline", True))
-    use_mtf = _bool(c["use_mtf"])
-    use_divergence = _bool(c["use_divergence"])
-    use_vol_sr = _bool(c["use_vol_sr"])
-    use_vol = _bool(c["use_vol"])
-    use_adx = _bool(c["use_adx"])
-    use_atr = _bool(c["use_atr"])
-
-    st_trend_bull = bool(q.trend)
-    st_trend_bear = not st_trend_bull
-    st_flip_bull = bool(q.trend) and not bool(p.trend)
-    st_flip_bear = bool(p.trend) and not bool(q.trend)
-
-    st_entry = str(c["st_entry_mode"]).strip().upper()
-    ema_bull = close > float(q.ema)
-    ema_bear = close < float(q.ema)
-
-    ema_cross_up = float(p.ema_fast) <= float(p.ema_slow) and float(q.ema_fast) > float(q.ema_slow)
-    ema_cross_down = float(p.ema_fast) >= float(p.ema_slow) and float(q.ema_fast) < float(q.ema_slow)
-    ema_cross_trend_bull = float(q.ema_fast) > float(q.ema_slow)
-    ema_cross_trend_bear = float(q.ema_fast) < float(q.ema_slow)
-    if str(c["ema_cross_entry_mode"]).strip().upper() == "CURRENT_TREND":
-        ema_cross_bull, ema_cross_bear = ema_cross_trend_bull, ema_cross_trend_bear
-    else:
-        ema_cross_bull, ema_cross_bear = ema_cross_up, ema_cross_down
-
-    macd_bull = (
-        float(p.macd) <= float(p.macd_signal)
-        and float(q.macd) > float(q.macd_signal)
-    ) if use_macd else True
-    macd_bear = (
-        float(p.macd) >= float(p.macd_signal)
-        and float(q.macd) < float(q.macd_signal)
-    ) if use_macd else True
-
-    if use_rsi:
-        rsi_reversal_bull = float(q.rsi) <= float(c["rsi_os"])
-        rsi_reversal_bear = float(q.rsi) >= float(c["rsi_ob"])
-        rsi_cross_bull = float(p.rsi) <= float(p.rsi_ma) and float(q.rsi) > float(q.rsi_ma)
-        rsi_cross_bear = float(p.rsi) >= float(p.rsi_ma) and float(q.rsi) < float(q.rsi_ma)
-        logic = str(c["rsi_logic"]).strip().upper()
-        if logic == "CROSS_MA":
-            rsi_bull, rsi_bear = rsi_cross_bull, rsi_cross_bear
-        elif logic == "EITHER":
-            rsi_bull, rsi_bear = rsi_reversal_bull or rsi_cross_bull, rsi_reversal_bear or rsi_cross_bear
-        else:
-            rsi_bull, rsi_bear = rsi_reversal_bull, rsi_reversal_bear
-    else:
-        rsi_bull = rsi_bear = True
-
-    if use_bb:
-        bb_bull = close > float(q.bb_upper); bb_bear = close < float(q.bb_lower)
-    else:
-        bb_bull = bb_bear = True
-
-    if use_stoch:
-        stoch_bull = float(p.stoch_k) <= float(p.stoch_d) and float(q.stoch_k) > float(q.stoch_d)
-        stoch_bear = float(p.stoch_k) >= float(p.stoch_d) and float(q.stoch_k) < float(q.stoch_d)
-    else:
-        stoch_bull = stoch_bear = True
-
-    if use_vwap:
-        vwap_bull = close > float(q.vwap); vwap_bear = close < float(q.vwap)
-    else:
-        vwap_bull = vwap_bear = True
-
-    if use_vwap_delta:
-        vd_now = float(q.vwap_delta); vd_base_now = float(q.vwap_delta_baseline)
-        vd_prev = float(p.vwap_delta); vd_base_prev = float(p.vwap_delta_baseline)
-        if str(c["vwap_delta_logic"]).strip().upper() == "CROSS_BASELINE":
-            vwap_delta_bull = vd_prev <= vd_base_prev and vd_now > vd_base_now
-            vwap_delta_bear = vd_prev >= vd_base_prev and vd_now < vd_base_now
-        else:
-            vwap_delta_bull = vd_now > vd_base_now; vwap_delta_bear = vd_now < vd_base_now
-    else:
-        vwap_delta_bull = vwap_delta_bear = True
-
-    if use_vidya:
-        if str(c["vidya_entry_mode"]).strip().upper() == "FRESH_FLIP":
-            vidya_bull = bool(q.vidya_cross_up); vidya_bear = bool(q.vidya_cross_down)
-        else:
-            vidya_bull = bool(q.vidya_trend_up); vidya_bear = not bool(q.vidya_trend_up)
-    else:
-        vidya_bull = vidya_bear = True
-
-    if use_nwe:
-        vals = [q.nwe_out, p.nwe_out, q.nwe_upper, q.nwe_lower, q.close, p.close, p.nwe_upper, p.nwe_lower]
-        if not all(np.isfinite(float(v)) for v in vals):
-            nwe_bull = nwe_bear = False
-        elif str(c["nwe_entry_mode"]).strip().upper() == "FRESH_CROSS":
-            nwe_bull = float(q.close) < float(q.nwe_lower) and float(p.close) >= float(p.nwe_lower)
-            nwe_bear = float(q.close) > float(q.nwe_upper) and float(p.close) <= float(p.nwe_upper)
-        else:
-            nwe_bull = float(q.nwe_out) > float(p.nwe_out); nwe_bear = float(q.nwe_out) < float(p.nwe_out)
-    else:
-        nwe_bull = nwe_bear = True
-
-    atr = float(q.atr); atr_pct = atr / close * 100.0 if close > 0 else 0.0
-    atr_pass = (not use_atr) or atr_pct >= _float(c["atr_min_pct"])
-    vol_pass = (not use_vol) or float(q.vol) > float(q.vol_ma)
-    adx_pass = (not use_adx) or float(q.adx) >= _float(c["adx_thresh"])
-
-    if use_mtf:
-        mtf_close = float(q.mtf_close) if pd.notna(q.mtf_close) else math.nan
-        mtf_ema = float(q.ema200) if pd.notna(q.ema200) else math.nan
-        mtf_pass_bull = np.isfinite(mtf_close) and np.isfinite(mtf_ema) and mtf_close > mtf_ema
-        mtf_pass_bear = np.isfinite(mtf_close) and np.isfinite(mtf_ema) and mtf_close < mtf_ema
-    else:
-        mtf_pass_bull = mtf_pass_bear = True
-
-    mods=[]
-    if use_st: mods.append(("ST", st_trend_bull if st_entry=="CURRENT_TREND" else st_flip_bull, st_trend_bear if st_entry=="CURRENT_TREND" else st_flip_bear))
-    if use_ema: mods.append(("EMA", ema_bull, ema_bear))
-    if use_ema_cross: mods.append(("EMA_CROSS", ema_cross_bull, ema_cross_bear))
-    if use_macd: mods.append(("MACD", macd_bull, macd_bear))
-    if use_rsi: mods.append(("RSI", rsi_bull, rsi_bear))
-    if use_bb: mods.append(("BB", bb_bull, bb_bear))
-    if use_stoch: mods.append(("STOCH", stoch_bull, stoch_bear))
-    if use_vwap: mods.append(("VWAP", vwap_bull, vwap_bear))
-    if use_vwap_delta: mods.append(("VWAP_DELTA", vwap_delta_bull, vwap_delta_bear))
-    if use_vidya: mods.append(("VIDYA", vidya_bull, vidya_bear))
-    if use_nwe: mods.append(("NWE", nwe_bull, nwe_bear))
-    if use_liq_swing:
-        mods.append(("LIQ_SWING", float(q.liq_swing_trend)>0, float(q.liq_swing_trend)<0))
-    if use_trendline:
-        mode=str(c["trend_entry"]).strip().upper()
-        up = bool(q.trendline_break_up) if mode=="FRESH_BREAK" else bool(q.trendline_retest_up) if mode=="BREAK_RETEST" else bool(q.trendline_state>0)
-        dn = bool(q.trendline_break_down) if mode=="FRESH_BREAK" else bool(q.trendline_retest_down) if mode=="BREAK_RETEST" else bool(q.trendline_state<0)
-        mods.append(("TRENDLINE",up,dn))
-    if use_mtf: mods.append(("MTF", mtf_pass_bull, mtf_pass_bear))
-    if use_divergence: mods.append(("DIVERGENCE", bool(q.div_bull_signal), bool(q.div_bear_signal)))
-    if use_vol_sr: mods.append(("VOL_SR", bool(q.sr_bull), bool(q.sr_bear)))
-    if use_vol and vol_pass: mods.append(("VOL", candle_bull, candle_bear))
-    if use_adx and adx_pass: mods.append(("ADX", float(q.plus_di)>float(q.minus_di), float(q.minus_di)>float(q.plus_di)))
-    if use_atr and atr_pass: mods.append(("ATR", candle_bull, candle_bear))
-
-    return mods, {"atr_pass":atr_pass,"vol_pass":vol_pass,"adx_pass":adx_pass,"mtf_bull":mtf_pass_bull,"mtf_bear":mtf_pass_bear,"atr_value":atr,"atr_pct":atr_pct}
-
-
-def signal_at(x: pd.DataFrame, i: int, c: dict[str, Any]):
-    mods, gates = module_votes(x, i, c)
-    mode = str(c["signal_mode"]).upper()
-    result = fx.StrategyEngine.ai_agent_decision(
-        mods,
-        atr_pass=gates["atr_pass"], vol_pass=gates["vol_pass"], adx_pass=gates["adx_pass"],
-        mtf_pass_bull=gates["mtf_bull"], mtf_pass_bear=gates["mtf_bear"],
-        min_families=_int(c["ai_min_families"], 3),
-        min_edge=_float(c["ai_min_edge"], .20),
-        min_family_confidence=_float(c["ai_family_confidence"], .55),
-        require_trend=_bool(c["ai_require_trend"]),
-        require_structure=_bool(c["ai_require_structure"]),
-        max_conflicting_families=_int(c["ai_max_conflicts"], 1),
-    ) if mode == "AI_AGENT" else None
-    if mode == "AI_AGENT":
-        side = result["side"]
-        reason = fx.StrategyEngine.decision_reason(
-            mods, mode, _int(c.get("min_score"),1),
-            atr_pass=gates["atr_pass"], vol_pass=gates["vol_pass"], adx_pass=gates["adx_pass"],
-            mtf_pass_bull=gates["mtf_bull"], mtf_pass_bear=gates["mtf_bear"],
-            ai_min_families=_int(c["ai_min_families"],3), ai_min_edge=_float(c["ai_min_edge"],.20),
-            ai_min_family_confidence=_float(c["ai_family_confidence"],.55),
-            ai_require_trend=_bool(c["ai_require_trend"]), ai_require_structure=_bool(c["ai_require_structure"]),
-            ai_max_conflicting_families=_int(c["ai_max_conflicts"],1),
-        )
-        return ("BUY" if side == "BUY" else "SELL" if side == "SELL" else "NONE"), mods, gates, result, reason
-
-    buy, sell, *_ = fx.StrategyEngine.decide_signal(
-        mods, mode, _int(c.get("min_score"), 1),
-        atr_pass=gates["atr_pass"], vol_pass=gates["vol_pass"], adx_pass=gates["adx_pass"],
-        mtf_pass_bull=gates["mtf_bull"], mtf_pass_bear=gates["mtf_bear"],
-        adaptive_edge=_float(c.get("adaptive_edge"),.18), adaptive_min_weight=_float(c.get("adaptive_min_weight"),3.5),
-        evidence_min_families=_int(c.get("evidence_min_families"),2), evidence_family_min_score=_float(c.get("evidence_family_min_score"),.35),
-        evidence_require_trend=_bool(c.get("evidence_require_trend")), evidence_require_independent=_bool(c.get("evidence_require_independent")),
-    )
-    return ("BUY" if buy else "SELL" if sell else "NONE"), mods, gates, None, fx.StrategyEngine.decision_reason(mods,mode,_int(c.get("min_score"),1))
-
-
-def _parse_hm(value: str):
-    try:
-        h,m=[int(x) for x in str(value).strip().split(":",1)]
-        if 0<=h<=23 and 0<=m<=59: return h,m
-    except Exception: pass
-    return None,None
-
-
-def _in_session(ts: pd.Timestamp, start: str, end: str):
-    sh,sm=_parse_hm(start); eh,em=_parse_hm(end)
-    if sh is None or eh is None: return True
-    cur=ts.hour*60+ts.minute; a=sh*60+sm; b=eh*60+em
-    return a<=cur<=b if a<=b else (cur>=a or cur<=b)
-
-
-def _pip_size(symbol: str):
-    s=str(symbol).upper().replace("/","")
-    return 0.01 if "JPY" in s else 0.0001
-
-
-def _round_lot(qty: float, c: dict[str,Any]):
-    step=max(_float(c.get("lot_step"),.01),1e-12); mn=max(_float(c.get("min_lot"),.01),step); mx=max(_float(c.get("max_lot"),100.0),mn)
-    q=math.floor(min(qty,mx)/step+1e-12)*step
-    return round(q,8) if q>=mn else 0.0
-
-
-def run_backtest(data: str | Path | pd.DataFrame, config: dict[str,Any]|None=None, return_dataframes: bool=False):
-    c=_cfg(config or {})
-    x=build_frame(data,c)
-    if len(x)<650:
-        raise ValueError(f"Need at least ~650 candles for full R6.5 warm-up; got {len(x)}.")
-
-    equity=float(c.get("capital",10000.0)); starting=equity; peak=equity; max_dd_abs=0.0; max_dd_pct=0.0
-    daily_anchor=None; daily_start=equity; loss_streak=0; cooldown_until=None; locked_side=None; last_entry_bar=None
-    pos=None; trades=[]; rejects={"ai_blocked":0,"session":0,"daily_loss":0,"daily_profit":0,"loss_streak":0,"cooldown":0,"post_sl_lock":0}
-
-    warmup=max(650, int(c["st_len"])*5, int(c["ema_len"])+10, int(c["vol_len"])+10)
-    last_i=len(x)-1
-    spread_price=_float(c.get("spread_pips"),0)*_pip_size(c.get("symbol","EURUSD"))
-    slip_price=_float(c.get("slippage_pips"),0)*_pip_size(c.get("symbol","EURUSD"))
-
-    def update_dd():
-        nonlocal peak,max_dd_abs,max_dd_pct
-        peak=max(peak,equity); dd=peak-equity; pct=(dd/peak*100) if peak>0 else 0
-        max_dd_abs=max(max_dd_abs,dd); max_dd_pct=max(max_dd_pct,pct)
-
-    def close_trade(exit_price, reason, bar_ts):
-        nonlocal equity,pos,locked_side,cooldown_until,loss_streak
-        if pos is None: return
-        side=pos["side"]; qty=pos["qty"]; entry=pos["entry"]
-        gross=(exit_price-entry)*qty*float(c["contract_size"]) if side=="LONG" else (entry-exit_price)*qty*float(c["contract_size"])
-        pnl=gross + float(pos.get("realized_pnl",0.0))
-        equity+=gross; update_dd()
-        total_realized=pnl
-        r_multiple=total_realized/max(pos["risk_amount"],1e-12)
-        tr={**pos,"exit":float(exit_price),"pnl":float(total_realized),"r":float(r_multiple),"exit_reason":reason,"exit_time":str(bar_ts)}
-        trades.append(tr)
-        if pnl<0: loss_streak+=1
-        elif pnl>0: loss_streak=0
-        if reason.startswith("SL"):
-            locked_side=side
-            cd=int(float(c.get("cooldown_min",15)))
-            cooldown_until=bar_ts+pd.Timedelta(minutes=max(0,cd))
-        pos=None
-
-    for i in range(warmup,last_i):
-        ts=pd.Timestamp(x.datetime.iloc[i])
-        # reset daily guard at UTC date.
-        day=str(ts.date())
-        if day!=daily_anchor:
-            daily_anchor=day; daily_start=equity
-        daily_loss_hit=_bool(c.get("use_daily_loss",True)) and equity <= daily_start*(1-_float(c.get("daily_loss_pct"),2)/100)
-        daily_profit_hit=_bool(c.get("use_daily_profit",False)) and _float(c.get("daily_profit_pct"),0)>0 and equity >= daily_start*(1+_float(c.get("daily_profit_pct"),0)/100)
-
-        # Manage existing position on current completed candle. Same-bar SL has
-        # precedence over TP to remain conservative when both extremes are hit.
-        if pos is not None:
-            hi=float(x.high.iloc[i]); lo=float(x.low.iloc[i]); side=pos["side"]
-            if side=="LONG":
-                sl_hit=lo<=pos["sl"]; tp2_hit=hi>=pos["tp2"]; tp1_hit=(hi>=pos["tp1"] and not pos["tp1_done"])
-            else:
-                sl_hit=hi>=pos["sl"]; tp2_hit=lo<=pos["tp2"]; tp1_hit=(lo<=pos["tp1"] and not pos["tp1_done"])
-            if sl_hit:
-                close_trade(float(pos["sl"]),"SL",ts); last_entry_bar=None
-            elif tp2_hit:
-                close_trade(float(pos["tp2"]),"TP2",ts); last_entry_bar=None
-            elif tp1_hit:
-                part=pos["qty"]*float(c.get("tp1_close",50))/100.0
-                part=max(0.0,min(part,pos["qty"]))
-                if part>0:
-                    p1=(float(pos["tp1"])-pos["entry"])*part*float(c["contract_size"]) if side=="LONG" else (pos["entry"]-float(pos["tp1"]))*part*float(c["contract_size"])
-                    equity+=p1
-                    pos["realized_pnl"]=float(pos.get("realized_pnl",0.0))+float(p1)
-                    pos["qty"]-=part; pos["tp1_done"]=True
-                    if _bool(c.get("tp1_be",True)): pos["sl"]=pos["entry"]
-                    update_dd()
-
-        if pos is not None:
-            continue
-
-        if daily_loss_hit:
-            rejects["daily_loss"]+=1; continue
-        if daily_profit_hit:
-            rejects["daily_profit"]+=1; continue
-        if _bool(c.get("use_loss_streak",True)) and loss_streak>=_int(c.get("max_loss_streak"),3):
-            rejects["loss_streak"]+=1; continue
-        if cooldown_until is not None and ts<cooldown_until:
-            rejects["cooldown"]+=1; continue
-        if _bool(c.get("use_session_filter",False)) and not _in_session(ts,str(c.get("session_start_utc","07:00")),str(c.get("session_end_utc","20:00"))):
-            rejects["session"]+=1; continue
-        if _bool(c.get("friday_protect",False)) and ts.weekday()==4:
-            fh,fm=_parse_hm(str(c.get("friday_cutoff_utc","20:00")))
-            if fh is not None and ts.hour*60+ts.minute>=fh*60+fm:
-                rejects["session"]+=1; continue
-
-        sig,mods,gates,ai,reason=signal_at(x,i,c)
-        if sig=="NONE":
-            if str(c["signal_mode"]).upper()=="AI_AGENT": rejects["ai_blocked"]+=1
-            continue
-        desired="LONG" if sig=="BUY" else "SHORT"
-        if locked_side==desired and _bool(c.get("require_opposite_after_sl",True)):
-            rejects["post_sl_lock"]+=1; continue
-        locked_side=None
-
-        entry=float(x.open.iloc[i+1])
-        # Apply half-spread/slippage adverse to the entry.
-        if desired=="LONG": entry += spread_price/2 + slip_price
-        else: entry -= spread_price/2 + slip_price
-
-        if ai is None:
-            # Non-AI modes: use fixed baseline risk/SL/TP; retained for parity testing.
-            risk_pct=_float(c.get("risk_pct"),.35)
-            sl_mult=_float(c.get("atr_sl_mult"),1.8)
-            tp1_r=_float(c.get("atr_tp1_mult"),1.2)
-            tp2_r=_float(c.get("atr_tp2_mult"),2.2)
-            atr_val=float(gates["atr_value"])
-        else:
-            # Reuse the exact live R6.5 AI manager implementation.
-            dummy=object()
-            ai=fx.UniversalFuturesBotGUI._ai_agent_trade_management(
-                dummy,mods,desired,gates["atr_value"],entry,_float(c["risk_pct"],.35),_float(c["atr_sl_mult"],1.8),_float(c["atr_tp1_mult"],1.2),_float(c["atr_tp2_mult"],2.2),
-                _int(c["ai_min_families"],3),_float(c["ai_min_edge"],.20),_float(c["ai_family_confidence"],.55),_bool(c["ai_require_trend"]),_bool(c["ai_require_structure"]),_int(c["ai_max_conflicts"],1)
-            )
-            risk_pct=float(ai["risk_pct"]); sl_mult=float(ai["atr_sl_mult"]); tp1_r=float(ai["tp1_r"]); tp2_r=float(ai["tp2_r"]); atr_val=float(gates["atr_value"])
-
-        stop_distance=atr_val*sl_mult
-        if not np.isfinite(stop_distance) or stop_distance<=0: continue
-        risk_amount=equity*risk_pct/100
-        qty=_round_lot(risk_amount/(stop_distance*float(c["contract_size"])),c)
-        if qty<=0: continue
-        sl=entry-stop_distance if desired=="LONG" else entry+stop_distance
-        tp1=entry+stop_distance*tp1_r if desired=="LONG" else entry-stop_distance*tp1_r
-        tp2=entry+stop_distance*tp2_r if desired=="LONG" else entry-stop_distance*tp2_r
-        if not (sl<entry<tp1<tp2 if desired=="LONG" else sl>entry>tp1>tp2): continue
-        pos={"side":desired,"entry":entry,"qty":qty,"initial_qty":qty,"realized_pnl":0.0,"sl":sl,"tp1":tp1,"tp2":tp2,"tp1_done":False,"risk_pct":risk_pct,"risk_amount":risk_amount,"sl_atr":sl_mult,"tp1_r":tp1_r,"tp2_r":tp2_r,"ai_families":(ai or {}).get("families",[]),"ai_edge":(ai or {}).get("edge",0.0),"ai_confidence":(ai or {}).get("confidence",0.0),"signal_reason":reason,"entry_time":str(x.datetime.iloc[i+1])}
-        last_entry_bar=i+1
-
-    if pos is not None:
-        final_close=float(x.close.iloc[last_i])
-        close_trade(final_close,"FORCED_CLOSE_END",pd.Timestamp(x.datetime.iloc[last_i]))
-
-    wins=[t for t in trades if t["pnl"]>0]; losses=[t for t in trades if t["pnl"]<0]
-    gp=sum(t["pnl"] for t in wins); gl=sum(t["pnl"] for t in losses)
-    metrics={
-        "app_version":APP_VERSION,"symbol":str(c.get("symbol","EURUSD")),"starting_equity":starting,"ending_equity":equity,"net_pnl":equity-starting,
-        "return_pct":(equity/starting-1)*100 if starting else 0.0,"trades":len(trades),"wins":len(wins),"losses":len(losses),"win_rate_pct":(len(wins)/len(trades)*100) if trades else 0.0,
-        "gross_profit":gp,"gross_loss":gl,"profit_factor":(gp/abs(gl)) if gl<0 else (math.inf if gp>0 else 0.0),"avg_trade":((equity-starting)/len(trades)) if trades else 0.0,
-        "largest_win":max((t["pnl"] for t in trades),default=0.0),"largest_loss":min((t["pnl"] for t in trades),default=0.0),"avg_R":(sum(t["r"] for t in trades)/len(trades)) if trades else 0.0,
-        "max_drawdown_abs":max_dd_abs,"max_drawdown_pct":max_dd_pct,"final_loss_streak":loss_streak,"rejects":rejects,
-        "ai_min_families":_int(c["ai_min_families"],3),"ai_min_edge":_float(c["ai_min_edge"],.20),"ai_family_confidence":_float(c["ai_family_confidence"],.55),"ai_max_conflicts":_int(c["ai_max_conflicts"],1),
-        "ai_risk_envelope":f"{fx.AI_AGENT_MIN_RISK_PCT:.2f}-{fx.AI_AGENT_MAX_RISK_PCT:.2f}%","ai_sl_envelope":f"{fx.AI_AGENT_MIN_ATR_SL_MULT:.2f}-{fx.AI_AGENT_MAX_ATR_SL_MULT:.2f} ATR","ai_tp1_envelope":f"{fx.AI_AGENT_MIN_TP1_R_MULT:.2f}-{fx.AI_AGENT_MAX_TP1_R_MULT:.2f}R","ai_tp2_envelope":f"{fx.AI_AGENT_MIN_TP2_R_MULT:.2f}-{fx.AI_AGENT_MAX_TP2_R_MULT:.2f}R",
-    }
-    out={"metrics":metrics,"trades":trades}
-    if return_dataframes:
-        out["trades_df"]=pd.DataFrame(trades)
-        out["frame"]=x
+def live_module():
+    spec = importlib.util.spec_from_file_location("forex_live_r65", LIVE_FILE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load UniversalForexBot_MT5.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+LIVE = live_module()
+
+def read_csv(path):
+    d = pd.read_csv(path)
+    cols = {str(c).strip().lower(): c for c in d.columns}
+    def pick(*names):
+        for name in names:
+            if name in cols:
+                return cols[name]
+        return None
+    dt = pick("datetime","date","time","timestamp")
+    op = pick("open"); hi = pick("high"); lo = pick("low"); cl = pick("close")
+    vol = pick("vol","volume","tick_volume","tickvolume")
+    if not all([dt,op,hi,lo,cl]):
+        raise ValueError("CSV requires datetime/time + OHLC columns.")
+    out = pd.DataFrame({
+        "datetime": d[dt], "open": d[op], "high": d[hi],
+        "low": d[lo], "close": d[cl],
+        "vol": d[vol] if vol else 1.0,
+    })
+    out["datetime"] = pd.to_datetime(out["datetime"], utc=True, errors="coerce")
+    if out["datetime"].isna().all():
+        raw = pd.to_numeric(d[dt], errors="coerce")
+        unit = "ms" if raw.median() > 1e11 else "s"
+        out["datetime"] = pd.to_datetime(raw, unit=unit, utc=True, errors="coerce")
+    for c in ["open","high","low","close","vol"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+    out = out.dropna(subset=["datetime","open","high","low","close"]).sort_values("datetime")
+    out = out.drop_duplicates("datetime").reset_index(drop=True)
+    out["time"] = (out["datetime"].astype("int64") // 10**6).astype("int64")
+    if len(out) < 500:
+        raise ValueError("At least 500 candles are required for R6.5 warm-up.")
     return out
 
+def fetch_mt5(symbol, timeframe, start, end):
+    import MetaTrader5 as mt5
+    if not mt5.initialize():
+        raise RuntimeError(f"MT5 initialize failed: {mt5.last_error()}")
+    tf_map = {
+        "1m": getattr(mt5,"TIMEFRAME_M1",None),
+        "3m": getattr(mt5,"TIMEFRAME_M3",None),
+        "5m": getattr(mt5,"TIMEFRAME_M5",None),
+        "15m": getattr(mt5,"TIMEFRAME_M15",None),
+        "30m": getattr(mt5,"TIMEFRAME_M30",None),
+        "1h": getattr(mt5,"TIMEFRAME_H1",None),
+        "4h": getattr(mt5,"TIMEFRAME_H4",None),
+    }
+    tf = tf_map.get(str(timeframe).lower())
+    if tf is None:
+        raise ValueError(f"Unsupported MT5 timeframe: {timeframe}")
+    a = pd.Timestamp(start, tz="UTC").to_pydatetime()
+    b = pd.Timestamp(end, tz="UTC").to_pydatetime()
+    rates = mt5.copy_rates_range(symbol, tf, a, b)
+    if rates is None or len(rates) == 0:
+        raise RuntimeError(f"No MT5 history returned: {mt5.last_error()}")
+    d = pd.DataFrame(rates)
+    d["datetime"] = pd.to_datetime(d["time"], unit="s", utc=True)
+    d["time"] = d["time"].astype("int64") * 1000
+    d = d.rename(columns={"tick_volume":"vol"})
+    if "vol" not in d:
+        d["vol"] = 1.0
+    return d[["datetime","time","open","high","low","close","vol"]].copy()
 
-def main(argv=None):
-    ap=argparse.ArgumentParser(description="Forex/MT5 R6.5 AI-Agent backtester")
-    ap.add_argument("data",help="CSV/Parquet with OHLCV")
-    ap.add_argument("--capital",type=float,default=10000.0)
-    ap.add_argument("--symbol",default="EURUSD")
-    ap.add_argument("--risk",dest="risk_pct",type=float,default=.35)
-    ap.add_argument("--spread-pips",type=float,default=0.0)
-    ap.add_argument("--slippage-pips",type=float,default=0.0)
-    ap.add_argument("--output",default="forex_ai_r6_5_backtest_report.json")
-    args=ap.parse_args(argv)
-    result=run_backtest(args.data,{"capital":args.capital,"symbol":args.symbol,"risk_pct":str(args.risk_pct),"spread_pips":args.spread_pips,"slippage_pips":args.slippage_pips})
-    Path(args.output).write_text(json.dumps(result["metrics"],indent=2,default=str),encoding="utf-8")
-    print(json.dumps(result["metrics"],indent=2,default=str))
-    return 0
+def build_frame(raw, c):
+    x = raw.copy()
+    x = LIVE.calculate_supertrend(x,int(c["st_len"]),float(c["st_mult"]),c["st_source"],bool(c["st_change_atr"]))
+    x = LIVE.calculate_adx(x,int(c["adx_len"]))
+    x["ema"] = x["close"].ewm(span=int(c["ema_len"]),adjust=False).mean()
+    x["ema_fast"] = x["close"].ewm(span=int(c["ema_fast"]),adjust=False).mean()
+    x["ema_slow"] = x["close"].ewm(span=int(c["ema_slow"]),adjust=False).mean()
+    if c["use_macd"]: x=LIVE.calculate_macd(x,int(c["macd_fast"]),int(c["macd_slow"]),int(c["macd_signal"]))
+    if c["use_rsi"]:
+        x=LIVE.calculate_rsi(x,int(c["rsi_len"]))
+        x=LIVE.calculate_rsi_ma(x,c["rsi_ma_type"],int(c["rsi_ma_len"]))
+    if c["use_bb"]: x=LIVE.calculate_bollinger(x,int(c["bb_len"]),float(c["bb_std"]))
+    if c["use_stoch"]: x=LIVE.calculate_stochastic(x,int(c["stoch_k"]),int(c["stoch_smooth"]),int(c["stoch_d"]))
+    if c["use_vwap"]: x=LIVE.calculate_vwap(x,int(c["vwap_len"]))
+    if c["use_vwap_delta"]:
+        x=LIVE.calculate_vwap_delta(x,bool(c["vwap_delta_smooth"]),int(c["vwap_delta_smooth_len"]),int(c["vwap_delta_baseline"]))
+    if c["use_vidya"]:
+        x=LIVE.calculate_vidya(x,int(c["vidya_len"]),int(c["vidya_momentum"]),float(c["vidya_band"]),200,15)
+    if c["use_nwe"]:
+        x=LIVE.calculate_nadaraya_watson_envelope(x,float(c["nwe_bandwidth"]),float(c["nwe_mult"]),500,499)
+    x["vol_ma"]=x["vol"].rolling(int(c["vol_len"])).mean()
+    if c["use_liq_swing"]:
+        x=LIVE.calculate_liquidity_swings(x,int(c["liq_len"]),c["liq_area"],c["liq_filter"],float(c["liq_filter_value"]))
+    if c["use_trendline"]:
+        x=LIVE.calculate_trendline_breakout(x,int(c["trend_len"]),int(c["trend_min_dist"]),float(c["trend_buffer"]),int(c["trend_retest"]))
+    if c["use_divergence"]:
+        x=LIVE.calculate_divergence_module(x,dict(c))
+    if c["use_vol_sr"]:
+        x=LIVE._volume_sr_base_series(x,dict(c))
+    if c["use_mtf"]:
+        h=x.set_index("datetime").resample("4h",label="left",closed="left").agg(
+            {"open":"first","high":"max","low":"min","close":"last","vol":"sum"}).dropna()
+        h["ema200"]=h["close"].ewm(span=200,adjust=False).mean()
+        h["available_at"]=h.index+pd.Timedelta(hours=4)
+        x=pd.merge_asof(x.sort_values("datetime"),
+                        h[["available_at","close","ema200"]].rename(columns={"close":"mtf_close"}).sort_values("available_at"),
+                        left_on="datetime",right_on="available_at",direction="backward")
+        x["mtf_bull"]=x["mtf_close"]>x["ema200"]
+        x["mtf_bear"]=x["mtf_close"]<x["ema200"]
+    else:
+        x["mtf_bull"]=True; x["mtf_bear"]=True
+    x["mtf_bull"]=x["mtf_bull"].astype("boolean").fillna(False).astype(bool)
+    x["mtf_bear"]=x["mtf_bear"].astype("boolean").fillna(False).astype(bool)
+    return x.reset_index(drop=True)
 
+def votes_at(x,i,c):
+    q=x.iloc[i]; p=x.iloc[i-1]; pp=x.iloc[i-2]
+    close=float(q.close); votes=[]
+    if c["use_st"]:
+        b=bool(q.trend); d=not b
+        if c["st_entry_mode"]=="CURRENT_TREND":
+            votes.append(("ST",b,d))
+        else:
+            votes.append(("ST",not bool(pp.trend) and b,bool(pp.trend) and not b))
+    if c["use_ema"]: votes.append(("EMA",close>q.ema,close<q.ema))
+    if c["use_ema_cross"]:
+        if c["ema_cross_entry_mode"]=="CURRENT_TREND":
+            votes.append(("EMA_CROSS",q.ema_fast>q.ema_slow,q.ema_fast<q.ema_slow))
+        else:
+            votes.append(("EMA_CROSS",p.ema_fast<=p.ema_slow and q.ema_fast>q.ema_slow,p.ema_fast>=p.ema_slow and q.ema_fast<q.ema_slow))
+    if c["use_macd"]: votes.append(("MACD",q.macd>q.macd_signal,q.macd<q.macd_signal))
+    if c["use_rsi"]:
+        if c["rsi_logic"]=="CROSS_MA":
+            votes.append(("RSI",p.rsi<=p.rsi_ma and q.rsi>q.rsi_ma,p.rsi>=p.rsi_ma and q.rsi<q.rsi_ma))
+        elif c["rsi_logic"]=="EITHER":
+            rb=q.rsi<=c["rsi_os"] or (p.rsi<=p.rsi_ma and q.rsi>q.rsi_ma)
+            rs=q.rsi>=c["rsi_ob"] or (p.rsi>=p.rsi_ma and q.rsi<p.rsi_ma)
+            votes.append(("RSI",rb,rs))
+        else:
+            votes.append(("RSI",q.rsi<=c["rsi_os"],q.rsi>=c["rsi_ob"]))
+    if c["use_bb"]: votes.append(("BB",close>q.bb_upper,close<q.bb_lower))
+    if c["use_stoch"]:
+        votes.append(("STOCH",p.stoch_k<=p.stoch_d and q.stoch_k>q.stoch_d,p.stoch_k>=p.stoch_d and q.stoch_k<q.stoch_d))
+    if c["use_vwap"]: votes.append(("VWAP",close>q.vwap,close<q.vwap))
+    if c["use_vwap_delta"]:
+        if c["vwap_delta_logic"]=="CROSS_BASELINE":
+            votes.append(("VWAP_DELTA",p.vwap_delta<=p.vwap_delta_baseline and q.vwap_delta>q.vwap_delta_baseline,p.vwap_delta>=p.vwap_delta_baseline and q.vwap_delta<p.vwap_delta_baseline))
+        else: votes.append(("VWAP_DELTA",q.vwap_delta>q.vwap_delta_baseline,q.vwap_delta<q.vwap_delta_baseline))
+    if c["use_vidya"]:
+        votes.append(("VIDYA",bool(q.vidya_cross_up) if c["vidya_entry_mode"]=="FRESH_FLIP" else bool(q.vidya_trend_up),
+                      bool(q.vidya_cross_down) if c["vidya_entry_mode"]=="FRESH_FLIP" else bool(not q.vidya_trend_up)))
+    if c["use_nwe"]:
+        if c["nwe_entry_mode"]=="FRESH_CROSS":
+            votes.append(("NWE",q.close<q.nwe_lower and p.close>=p.nwe_lower,q.close>q.nwe_upper and p.close<=p.nwe_upper))
+        else: votes.append(("NWE",q.nwe_out>p.nwe_out,q.nwe_out<p.nwe_out))
+    if c["use_liq_swing"]:
+        if c["liq_entry_mode"]=="FRESH_BREAK":
+            votes.append(("LIQ_SWING",bool(q.liq_swing_high_break),bool(q.liq_swing_low_break)))
+        else: votes.append(("LIQ_SWING",q.liq_swing_trend>0,q.liq_swing_trend<0))
+    if c["use_trendline"]:
+        if c["trend_entry"]=="BREAK_RETEST":
+            votes.append(("TRENDLINE",bool(q.trendline_retest_up),bool(q.trendline_retest_down)))
+        elif c["trend_entry"]=="CURRENT_TREND":
+            votes.append(("TRENDLINE",q.trendline_state>0,q.trendline_state<0))
+        else: votes.append(("TRENDLINE",bool(q.trendline_break_up),bool(q.trendline_break_down)))
+    if c["use_mtf"]: votes.append(("MTF",bool(q.mtf_bull),bool(q.mtf_bear)))
+    if c["use_divergence"]:
+        cnt=int(c["div_min_count"])
+        if c["div_entry_mode"]=="CURRENT_STATE":
+            votes.append(("DIVERGENCE",q.divergence_state>0 and int(q.div_bull_count)>=cnt,q.divergence_state<0 and int(q.div_bear_count)>=cnt))
+        else:
+            votes.append(("DIVERGENCE",bool(q.div_bull_signal) and int(q.div_bull_count)>=cnt,bool(q.div_bear_signal) and int(q.div_bear_count)>=cnt))
+    if c["use_vol_sr"]: votes.append(("VOL_SR",bool(q.sr_bull),bool(q.sr_bear)))
+    atr_pct=float(q.atr)/close*100 if close else 0
+    atr_pass=(not c["use_atr"]) or atr_pct>=float(c["atr_min_pct"])
+    vol_pass=(not c["use_vol"]) or float(q.vol)>float(q.vol_ma)
+    adx_pass=(not c["use_adx"]) or float(q.adx)>=float(c["adx_thresh"])
+    candle_bull=float(q.close)>float(q.open); candle_bear=float(q.close)<float(q.open)
+    if c["use_vol"] and vol_pass: votes.append(("VOL",candle_bull,candle_bear))
+    if c["use_adx"] and adx_pass: votes.append(("ADX",q.plus_di>q.minus_di,q.minus_di>q.plus_di))
+    if c["use_atr"] and atr_pass: votes.append(("ATR",candle_bull,candle_bear))
+    return votes,atr_pass,vol_pass,adx_pass,bool(q.mtf_bull),bool(q.mtf_bear)
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def ai_manage(votes,side,atr,entry,c):
+    return LIVE.UniversalFuturesBotGUI._ai_agent_trade_management(
+        SimpleNamespace(),votes,side,float(atr),float(entry),float(c["risk_pct"]),
+        float(c["atr_sl_mult"]),float(c["atr_tp1_mult"]),float(c["atr_tp2_mult"]),
+        AI_MIN_FAMILIES,AI_MIN_EDGE,AI_FAMILY_CONFIDENCE,AI_REQUIRE_TREND,
+        AI_REQUIRE_STRUCTURE,AI_MAX_CONFLICTS)
+
+def lots_for_risk(equity,risk_pct,stop_distance,tick_size,tick_value,min_lot,lot_step,max_lot):
+    if stop_distance<=0 or tick_size<=0 or tick_value<=0: return 0.0
+    risk_money=equity*float(risk_pct)/100.0
+    loss_per_lot=(stop_distance/tick_size)*tick_value
+    raw=risk_money/loss_per_lot if loss_per_lot else 0.0
+    raw=min(max_lot,max(min_lot,raw))
+    q=math.floor(raw/lot_step+1e-12)*lot_step if lot_step>0 else raw
+    return round(q,8) if q>=min_lot else 0.0
+
+def run(df,c,args):
+    eq=float(args.capital); peak=eq; position=None; trades=[]; last_flat=None; lock_side=None
+    cooldown=pd.Timedelta(minutes=float(c["cooldown_min"]))
+    curve=[]
+    for i in range(450,len(df)-1):
+        row=df.iloc[i]; now=pd.Timestamp(row.datetime)
+        if peak>0 and (peak-eq)/peak*100>=args.max_dd_pct: break
+        if args.capital>0 and (args.capital-eq)/args.capital*100>=args.emergency_loss_pct: break
+
+        if position is not None:
+            hi=float(row.high); lo=float(row.low); side=position["side"]; sl=position["sl"]; tp1=position["tp1"]; tp2=position["tp2"]
+            sl_hit=(lo<=sl) if side=="LONG" else (hi>=sl)
+            if sl_hit:
+                px=sl; rem=position["remaining"]; gross=(px-position["entry"] if side=="LONG" else position["entry"]-px)*rem*args.contract_size
+                commission=rem*args.commission_per_lot; eq+=gross-commission
+                t=position["trade"]; t.realized_net+=gross-commission; t.commission+=commission; t.exit_price=px; t.exit_time=str(now); t.exit_reason="SL_BE" if position["be"] else "SL"
+                trades.append(t); lock_side=side; position=None; last_flat=now; peak=max(peak,eq); continue
+            if not position["tp1_done"]:
+                hit=(hi>=tp1) if side=="LONG" else (lo<=tp1)
+                if hit:
+                    rem_tp1=position["tp1_lots"]; px=tp1; gross=(px-position["entry"] if side=="LONG" else position["entry"]-px)*rem_tp1*args.contract_size
+                    eq+=gross-rem_tp1*args.commission_per_lot; t=position["trade"]; t.realized_net+=gross-rem_tp1*args.commission_per_lot
+                    t.tp1_lots=rem_tp1; position["remaining"]-=rem_tp1; position["tp1_done"]=True
+                    if c["tp1_be"]: position["sl"]=position["entry"]; position["be"]=True
+                    be_hit=(lo<=position["entry"]) if side=="LONG" else (hi>=position["entry"])
+                    if position["remaining"]>1e-12 and position["be"] and be_hit:
+                        rem=position["remaining"]; px=position["entry"]; gross=0.0; eq-=rem*args.commission_per_lot
+                        t.realized_net-=rem*args.commission_per_lot; t.exit_price=px; t.exit_time=str(now); t.exit_reason="TP1_BE"; trades.append(t); lock_side=side; position=None; last_flat=now; peak=max(peak,eq); continue
+            if position is not None and position["remaining"]>1e-12:
+                hit=(hi>=tp2) if side=="LONG" else (lo<=tp2)
+                if hit:
+                    rem=position["remaining"]; px=tp2; gross=(px-position["entry"] if side=="LONG" else position["entry"]-px)*rem*args.contract_size
+                    eq+=gross-rem*args.commission_per_lot; t=position["trade"]; t.realized_net+=gross-rem*args.commission_per_lot; t.exit_price=px; t.exit_time=str(now); t.exit_reason="TP2"; trades.append(t); position=None; last_flat=now; peak=max(peak,eq); continue
+            curve.append({"datetime":str(now),"equity":eq,"peak":peak})
+
+        if position is not None: continue
+        if int(c["max_trades"])>0 and len(trades)>=int(c["max_trades"]): break
+        if last_flat is not None and now-last_flat<cooldown: continue
+
+        votes,ap,vp,dp,mb,ms=votes_at(df,i,c)
+        buy,sell,_,_=LIVE.StrategyEngine.decide_signal(votes,"AI_AGENT",1,atr_pass=ap,vol_pass=vp,adx_pass=dp,mtf_pass_bull=mb,mtf_pass_bear=ms,
+            ai_min_families=AI_MIN_FAMILIES,ai_min_edge=AI_MIN_EDGE,ai_min_family_confidence=AI_FAMILY_CONFIDENCE,
+            ai_require_trend=AI_REQUIRE_TREND,ai_require_structure=AI_REQUIRE_STRUCTURE,ai_max_conflicting_families=AI_MAX_CONFLICTS)
+        side="LONG" if buy and not sell else "SHORT" if sell and not buy else None
+        if side is None or (lock_side and side==lock_side): continue
+
+        entry=float(df.iloc[i+1].open) + (args.spread_points*args.point_size + args.slippage_points*args.point_size if side=="LONG" else -(args.spread_points*args.point_size + args.slippage_points*args.point_size))
+        mgr=ai_manage(votes,side,float(row.atr),entry,c)
+        stop_distance=float(row.atr)*float(mgr["atr_sl_mult"])
+        lots=lots_for_risk(eq,mgr["risk_pct"],stop_distance,args.tick_size,args.tick_value,args.min_lot,args.lot_step,args.max_lot)
+        if lots<=0: continue
+        q1=round(lots*float(c["tp1_close_pct"])/100.0,8); q2=round(lots-q1,8)
+        if q1<=0 or q2<=0: continue
+        if side=="LONG":
+            sl=entry-stop_distance; tp1=entry+stop_distance*float(mgr["tp1_r"]); tp2=entry+stop_distance*float(mgr["tp2_r"])
+        else:
+            sl=entry+stop_distance; tp1=entry-stop_distance*float(mgr["tp1_r"]); tp2=entry-stop_distance*float(mgr["tp2_r"])
+        tr=SimpleNamespace(
+            side=side,signal_time=str(now),entry_time=str(df.iloc[i+1].datetime),entry=entry,lots=lots,
+            sl=sl,tp1=tp1,tp2=tp2,tp1_lots=q1,tp2_lots=q2,
+            ai_risk_pct=mgr["risk_pct"],ai_sl_atr=mgr["atr_sl_mult"],ai_tp1_r=mgr["tp1_r"],ai_tp2_r=mgr["tp2_r"],
+            ai_edge=mgr["edge"],ai_confidence=mgr["confidence"],ai_conviction=mgr["conviction"],ai_families=",".join(mgr["families"]),
+            realized_net=0.0,commission=0.0,exit_price=0.0,exit_time="",exit_reason="")
+        position={"side":side,"entry":entry,"sl":sl,"tp1":tp1,"tp2":tp2,"tp1_lots":q1,"remaining":lots,"tp1_done":False,"be":False,"trade":tr}
+
+        lock_side=None
+        peak=max(peak,eq)
+
+    if position is not None:
+        row=df.iloc[-1]; px=float(row.close); rem=position["remaining"]
+        gross=(px-position["entry"] if position["side"]=="LONG" else position["entry"]-px)*rem*args.contract_size
+        eq+=gross-rem*args.commission_per_lot; t=position["trade"]; t.realized_net+=gross-rem*args.commission_per_lot; t.exit_price=px; t.exit_time=str(row.datetime); t.exit_reason="END"; trades.append(t)
+
+    curve_df=pd.DataFrame(curve)
+    if curve_df.empty: curve_df=pd.DataFrame([{"datetime":str(df.iloc[-1].datetime),"equity":eq,"peak":eq}])
+    curve_df["peak"]=curve_df["equity"].cummax()
+    curve_df["dd_pct"]=(curve_df["equity"]-curve_df["peak"])/curve_df["peak"]*100
+    return trades,eq,curve_df
+
+def main():
+    p=argparse.ArgumentParser(description="Universal Forex MT5 AI-Agent R6.5 backtester")
+    p.add_argument("--source",choices=("csv","mt5"),default="csv")
+    p.add_argument("--input",type=Path)
+    p.add_argument("--symbol",default="EURUSD")
+    p.add_argument("--timeframe",default="15m")
+    p.add_argument("--start",default="2026-01-01")
+    p.add_argument("--end",default="2026-09-01")
+    p.add_argument("--capital",type=float,default=1000.0)
+    p.add_argument("--tick-size",type=float,default=0.00001)
+    p.add_argument("--tick-value",type=float,default=1.0)
+    p.add_argument("--contract-size",type=float,default=100000.0)
+    p.add_argument("--min-lot",type=float,default=0.01)
+    p.add_argument("--max-lot",type=float,default=100.0)
+    p.add_argument("--lot-step",type=float,default=0.01)
+    p.add_argument("--point-size",type=float,default=0.00001)
+    p.add_argument("--spread-points",type=float,default=15.0)
+    p.add_argument("--slippage-points",type=float,default=2.0)
+    p.add_argument("--commission-per-lot",type=float,default=0.0)
+    p.add_argument("--max-dd-pct",type=float,default=5.0)
+    p.add_argument("--emergency-loss-pct",type=float,default=10.0)
+    a=p.parse_args()
+    if str(DEFAULT["grid_mode"]).upper()!="OFF": raise ValueError("Forex R6.5 Grid Mode must be OFF.")
+    c=dict(DEFAULT)
+    if a.source=="csv":
+        if not a.input: raise ValueError("--input is required with --source=csv")
+        raw=read_csv(a.input)
+    else:
+        raw=fetch_mt5(a.symbol,a.timeframe,a.start,a.end)
+    raw=raw[(raw.datetime>=pd.Timestamp(a.start,tz="UTC")) & (raw.datetime<=pd.Timestamp(a.end,tz="UTC"))].reset_index(drop=True)
+    if len(raw)<500: raise ValueError("Not enough candles after date filtering.")
+    frame=build_frame(raw,c)
+    trades,ending,curve=run(frame,{**c,"max_dd_pct":a.max_dd_pct,"emergency_loss_pct":a.emergency_loss_pct},
+                            SimpleNamespace(capital=a.capital,contract_size=a.contract_size,tick_size=a.tick_size,tick_value=a.tick_value,
+                                            min_lot=a.min_lot,max_lot=a.max_lot,lot_step=a.lot_step,point_size=a.point_size,
+                                            spread_points=a.spread_points,slippage_points=a.slippage_points,commission_per_lot=a.commission_per_lot,
+                                            max_dd_pct=a.max_dd_pct,emergency_loss_pct=a.emergency_loss_pct))
+    RESULT_DIR.mkdir(exist_ok=True)
+    stem=f"{a.symbol}_{a.timeframe}_{a.start.replace(':','-')}_{a.end.replace(':','-')}"
+    rows=[getattr(t,"__dict__",{}) for t in trades]
+    pd.DataFrame(rows).to_csv(RESULT_DIR/f"trades_{stem}.csv",index=False)
+    curve.to_csv(RESULT_DIR/f"equity_{stem}.csv",index=False)
+    net=ending-a.capital; wins=sum(1 for t in trades if getattr(t,"realized_net",0)>0)
+    losses=sum(1 for t in trades if getattr(t,"realized_net",0)<=0)
+    gross_w=sum(max(0,getattr(t,"realized_net",0)) for t in trades)
+    gross_l=sum(max(0,-getattr(t,"realized_net",0)) for t in trades)
+    metrics={"version":"V8.4.2-FOREX-AI-AGENT-R6.5-BT","symbol":a.symbol,"timeframe":a.timeframe,
+             "trades":len(trades),"wins":wins,"losses":losses,"win_rate_pct":wins/len(trades)*100 if trades else 0,
+             "net_pnl":net,"return_pct":net/a.capital*100 if a.capital else 0,
+             "max_drawdown_pct":float(abs(curve.dd_pct.min())) if not curve.empty else 0,
+             "profit_factor":gross_w/gross_l if gross_l else None,"ending_equity":ending,
+             "ai_contract":{"min_families":AI_MIN_FAMILIES,"min_edge":AI_MIN_EDGE,"family_confidence":AI_FAMILY_CONFIDENCE,
+                            "require_trend":AI_REQUIRE_TREND,"require_structure":AI_REQUIRE_STRUCTURE,"max_conflicts":AI_MAX_CONFLICTS,
+                            "risk_envelope":[AI_MIN_RISK,AI_MAX_RISK],"sl_envelope":[AI_MIN_SL,AI_MAX_SL],
+                            "tp1_envelope":[AI_MIN_TP1,AI_MAX_TP1],"tp2_envelope":[AI_MIN_TP2,AI_MAX_TP2]}}
+    (RESULT_DIR/f"summary_{stem}.json").write_text(json.dumps(metrics,indent=2),encoding="utf-8")
+    print("V8.4.2-FOREX-AI-AGENT-R6.5-BT")
+    print(json.dumps(metrics,indent=2))
+    print("Results:",RESULT_DIR)
+
+if __name__=="__main__":
+    main()
