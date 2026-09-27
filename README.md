@@ -1,7 +1,7 @@
 # Universal Futures & Forex Trading Bot
 
 **Current production release: V8.4.2-R9.6**  
-**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R5**
+**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.5**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -9,8 +9,8 @@ This repository is intentionally kept clean: the main branch contains the **curr
 
 | Area | Live engine | Backtester |
 |---|---|---|
-| Crypto / Futures | `UniversalFuturesBot_CRYPTO.py` | `UniversalFuturesBot_CRYPTO_BACKTESTER.py` |
-| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R4.py` | `UniversalFuturesBot_CRYPTO_BACKTESTER.py` |
+| Crypto / Futures | `UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py` | — |
+| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py` | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py` |
 | Forex / MT5 | `UniversalForexBot_MT5.py` | `UniversalForexBot_MT5_BACKTESTER.py` |
 
 ### Tests
@@ -24,6 +24,20 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `BUILD_CRYPTO_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
+
+## Current repository cleanup — 2026-09-27
+
+The active root is now consolidated to one current Crypto R9.6 engine, one current Crypto AI-Agent R6.5 engine, one Forex/MT5 engine, and their current backtest/build files. Superseded duplicate bot files were removed from the main branch; historical versions remain in Git history.
+
+### Current active files
+
+- `UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py`
+- `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py`
+- `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py`
+- `UniversalForexBot_MT5.py`
+- `UniversalForexBot_MT5_BACKTESTER.py`
+
+The changelog below is historical by design; old release numbers in it do not represent active root files.
 
 ## V8.4.2-CRYPTO-AI-AGENT-R5 — Confirmed AI-Agent recommended preset + decision-diagnostic hardening — 2026-09-27
 
@@ -309,7 +323,7 @@ This does **not** claim support for two independent same-symbol positions.
 
 ## Crypto backtester
 
-`UniversalFuturesBot_CRYPTO_BACKTESTER.py` is the R5 research simulator.
+`UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py` is the R5 research simulator.
 
 It supports the strategy-side contract including:
 
