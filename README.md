@@ -390,13 +390,13 @@ Important persisted R5 fields include:
 ### Crypto
 
 ```
-py -3.14 UniversalFuturesBot_CRYPTO.py
+py -3.14 current Crypto R9.6 engine
 ```
 
 ### Crypto backtester
 
 ```
-py -3.14 UniversalFuturesBot_CRYPTO_BACKTESTER.py
+py -3.14 current dedicated Crypto AI-Agent R6.5 backtester
 ```
 
 ### Forex / MT5
@@ -602,4 +602,4 @@ After the overnight SL event, Bybit returned terminal order state 110001 (order 
 
 
 ## Latest Crypto R8
-See `docs/CRYPTO_R8_RELEASE_NOTES.md` and `CHANGELOG.md` for the 2026-09-27 lifecycle, risk-sizing and exchange-quantity hardening. The stable production filename remains `UniversalFuturesBot_CRYPTO.py`.
+See `docs/CRYPTO_R8_RELEASE_NOTES.md` and `CHANGELOG.md` for the 2026-09-27 lifecycle, risk-sizing and exchange-quantity hardening. The stable production filename remains `current Crypto R9.6 engine`.
