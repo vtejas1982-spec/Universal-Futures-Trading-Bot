@@ -44,9 +44,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9.1"
 APP_TITLE = "Universal Futures Trading Bot V8.4.2-R9 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9.1"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,7 +61,7 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
 CONFIG_SCHEMA_VERSION = 10  # R8 adds explicit FIXED_QTY + RISK_% SL semantics
-RUNTIME_SCHEMA_VERSION = 8  # R9 adds worker identity + remote profile stop control.
+RUNTIME_SCHEMA_VERSION = 9  # R9.1 adds stale-lock identity and explicit recovery decision.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
@@ -1999,11 +1999,9 @@ class UniversalFuturesBotGUI:
         finally:
             self._schedule_profile_status_heartbeat()
 
-    def _request_selected_profile_stop(self):
-        """Stop the selected profile, including a bot running in another GUI process."""
-        profile = self._selected_profile_id()
-        if not profile:
-            return
+    def _request_profile_stop(self, profile_id):
+        """Stop exactly one profile, even when its worker runs in another process."""
+        profile = self._sanitize_profile_id(profile_id)
         current = self._sanitize_profile_id(getattr(self, "bot_profile_id", ""))
         same_process_worker = (
             profile == current
@@ -2013,8 +2011,33 @@ class UniversalFuturesBotGUI:
         if same_process_worker:
             self.stop_bot()
             return
-
         if not self._profile_lock_is_active(profile):
+            state_path = PROFILE_DIR / profile / "runtime_state.json"
+            state = self._read_json_file(state_path) or {}
+            if str(state.get("status") or "").upper() in {"RUNNING", "STOPPING", "CRASHED"}:
+                ps = state.get("position_state") or {}
+                gs = state.get("grid_state") or {}
+                has_inventory = bool(
+                    ps.get("last_protected_position")
+                    or ps.get("active_trade")
+                    or gs.get("active")
+                    or gs.get("filled_levels")
+                    or gs.get("entry_orders")
+                    or gs.get("tp_order_id")
+                    or gs.get("sl_order_id")
+                )
+                state["status"] = "RECOVERY_REQUIRED" if has_inventory else "STOPPED"
+                state["recovery_decision"] = "STOP_REQUESTED_WHILE_NOT_RUNNING"
+                state["recovery_decision_at_utc"] = datetime.now(timezone.utc).isoformat()
+                state["last_error"] = (
+                    "Stop requested but no live worker was found; recovery is required."
+                    if has_inventory else "Stop requested; stale runtime marker normalized to STOPPED."
+                )
+                try:
+                    self._write_json_atomic(state_path, state)
+                except Exception as e:
+                    self.log(f"PROFILE STOP STATE SAVE WARNING | {profile} | {e}")
+                self._refresh_profile_list(select_profile=profile)
             messagebox.showinfo("Profile not running", f"Profile {profile} is not currently running.")
             return
         if not messagebox.askyesno(
@@ -2027,12 +2050,14 @@ class UniversalFuturesBotGUI:
             return
         try:
             request = self._write_profile_control(profile, "STOP", "Remote stop requested from Profile Manager")
-            self.log(
-                f"REMOTE STOP REQUESTED | Profile={profile} | Request={request['request_id']}"
-            )
+            self.log(f"REMOTE STOP REQUESTED | Profile={profile} | Request={request['request_id']}")
             self._refresh_profile_list(select_profile=profile)
         except Exception as e:
             messagebox.showerror("Remote stop failed", str(e))
+
+    def _request_selected_profile_stop(self):
+        """Backward-compatible selected-profile STOP action."""
+        self._request_profile_stop(self._selected_profile_id())
 
     def _consume_remote_stop_request(self):
         """Consume a STOP control request for this worker without touching Tk widgets."""
@@ -2269,10 +2294,21 @@ class UniversalFuturesBotGUI:
             else:
                 self.resume_candidate = state
                 self.resume_requested = False
+                state["status"] = "STOPPED"
+                state["recovery_decision"] = "START_NEW"
+                state["recovery_decision_at_utc"] = datetime.now(timezone.utc).isoformat()
+                state["stop_requested"] = False
+                state["stop_started_at"] = None
+                state["last_error"] = "Recovery declined: Start New Bot selected; previous runtime state was not resumed."
+                try:
+                    self._write_json_atomic(self._get_runtime_state_path(), state)
+                except Exception as persist_error:
+                    self.log(f"RECOVERY DECISION SAVE WARNING: {persist_error}")
                 self.log(
-                    "RECOVERY SELECTED: Start New Bot. "
-                    "The exchange will be checked for existing inventory/orders."
+                    "RECOVERY SELECTED: Start New Bot. Previous saved runtime marked STOPPED; "
+                    "the exchange will be checked for existing inventory/orders."
                 )
+                self._refresh_profile_list(select_profile=bot_id)
         except Exception as e:
             self.log(f"Recovery prompt error: {e}")
 
@@ -2732,7 +2768,13 @@ class UniversalFuturesBotGUI:
         return PROFILE_DIR / profile / "config.json"
 
     def _profile_lock_is_active(self, profile_id):
-        """Return True when another live process owns the profile lock."""
+        """Return True only when the profile lock belongs to a live bot worker.
+
+        R9.1 hardening: os.kill(pid, 0) alone can report a zombie/reused PID as
+        alive on Linux. Validate the process identity where /proc is available
+        and clean stale locks immediately so the Profile Manager cannot show a
+        phantom RUNNING profile.
+        """
         profile = self._sanitize_profile_id(profile_id)
         lock_path = PROFILE_DIR / profile / "bot.lock"
         if not lock_path.exists():
@@ -2744,26 +2786,59 @@ class UniversalFuturesBotGUI:
             pid = 0
         if pid and pid == os.getpid():
             current_profile = self._sanitize_profile_id(getattr(self, "bot_profile_id", "BOT-01"))
-            worker_alive = bool(
-                getattr(self, "bot_thread", None)
-                and self.bot_thread.is_alive()
-            )
+            worker_alive = bool(getattr(self, "bot_thread", None) and self.bot_thread.is_alive())
             if profile == current_profile and (
                 bool(getattr(self, "is_running", False))
                 or worker_alive
                 or bool(getattr(self, "stop_requested", False))
             ):
                 return True
+            self._remove_stale_profile_lock(profile, expected_pid=pid)
             return False
-        if pid:
+        if pid and self._profile_process_identity_alive(pid, payload):
+            return True
+        self._remove_stale_profile_lock(profile, expected_pid=pid or None)
+        return False
+
+    def _profile_process_identity_alive(self, pid, payload=None):
+        """Check whether PID is still the bot process that created the lock."""
+        if not pid or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except Exception:
+            return False
+        proc = Path(f"/proc/{pid}")
+        if proc.exists():
             try:
-                os.kill(pid, 0)
-                return True
+                stat_text = (proc / "stat").read_text(encoding="utf-8", errors="ignore")
+                fields = stat_text.split()
+                if len(fields) > 2 and fields[2] == "Z":
+                    return False
             except Exception:
                 pass
-        # A stale lock is not considered active; _acquire_profile_lock will
-        # remove it safely when the profile is actually started.
-        return False
+            try:
+                cmdline = (proc / "cmdline").read_bytes().replace(b"\\x00", b" ").decode("utf-8", errors="ignore").lower()
+                if cmdline and ("python" not in cmdline and ".py" not in cmdline and "universal" not in cmdline):
+                    return False
+            except Exception:
+                pass
+        return True
+
+    def _remove_stale_profile_lock(self, profile_id, expected_pid=None):
+        """Remove a lock only when it is stale or still owned by expected_pid."""
+        profile = self._sanitize_profile_id(profile_id)
+        path = PROFILE_DIR / profile / "bot.lock"
+        if not path.exists():
+            return
+        try:
+            payload = self._read_json_file(path) or {}
+            actual_pid = int(payload.get("pid") or 0)
+            if expected_pid is not None and actual_pid not in (0, int(expected_pid)):
+                return
+            path.unlink()
+        except Exception:
+            pass
 
     def _profile_strategy_summary(self, cfg):
         labels = [
@@ -2881,15 +2956,33 @@ class UniversalFuturesBotGUI:
             ids.add("BOT-01")
         return sorted(ids)
 
+    def _refresh_profile_stop_buttons(self, profiles=None):
+        frame = getattr(self, "profile_stop_buttons_frame", None)
+        if frame is None:
+            return
+        for child in frame.winfo_children():
+            if child is not getattr(self, "profile_stop_buttons_label", None):
+                child.destroy()
+        ids = profiles if profiles is not None else self._list_saved_profiles()
+        for profile in ids:
+            p = self._sanitize_profile_id(profile)
+            ttk.Button(
+                frame,
+                text=f"STOP {p}",
+                command=lambda profile_id=p: self._request_profile_stop(profile_id),
+            ).pack(side="left", padx=2)
+
     def _refresh_profile_list(self, select_profile=None):
         tree = getattr(self, "profile_tree", None)
         if tree is None:
             return
         selected = select_profile or self._sanitize_profile_id(self.v_bot_id.get())
+        profiles = self._list_saved_profiles()
+        self._refresh_profile_stop_buttons(profiles)
         for item in tree.get_children():
             tree.delete(item)
         selected_item = None
-        for profile in self._list_saved_profiles():
+        for profile in profiles:
             rec = self._profile_summary_record(profile)
             if not rec:
                 continue
@@ -3901,6 +3994,16 @@ class UniversalFuturesBotGUI:
             text="Copy keeps strategy/risk/Grid/exchange settings and credentials; edit Pair, Qty/Risk and Leverage afterward.",
             fg="#555555",
         ).pack(side="left", padx=8)
+
+        self.profile_stop_buttons_frame = tk.Frame(f_profiles)
+        self.profile_stop_buttons_frame.pack(fill="x", padx=5, pady=(0, 2))
+        self.profile_stop_buttons_label = tk.Label(
+            self.profile_stop_buttons_frame,
+            text="Individual profile STOP controls:",
+            anchor="w",
+            fg="#555555",
+        )
+        self.profile_stop_buttons_label.pack(side="left", padx=(2, 6))
 
         profile_tree_frame = tk.Frame(f_profiles)
         profile_tree_frame.pack(fill="x", padx=5, pady=2)
@@ -5067,17 +5170,10 @@ class UniversalFuturesBotGUI:
         try:
             mode = str(selected or self.v_size_mode.get()).strip().upper()
             if mode == "FIXED_QTY":
-                if bool(self.v_hold_until_all_reverse.get()):
-                    self.log(
-                        "FIXED QTY SELECTED: Hold-All-Reverse is still ON. "
-                        "Risk Per Trade (%) cannot define the hard SL until Hold-All-Reverse is disabled."
-                    )
-                else:
-                    self.v_sl_mode.set("RISK_%")
-                    self.log(
-                        "FIXED QTY SELECTED: SL Mode automatically set to RISK_% | "
-                        "Risk Per Trade (%) now defines the hard-SL account-risk budget."
-                    )
+                self.log(
+                    "FIXED QTY SELECTED: requested Fixed Qty remains literal exchange/base quantity; "
+                    "SL mode is preserved and is not auto-changed."
+                )
             elif mode == "EQUITY_RISK_%":
                 if self.v_sl_mode.get().strip().upper() == "RISK_%":
                     self.v_sl_mode.set("PRICE_%")
