@@ -23,11 +23,11 @@ def synthetic(n=1200):
 
 def main():
     s=LIVE.read_text(encoding="utf-8"); b=BT.read_text(encoding="utf-8")
-    ast.parse(s); ast.parse(b); fx=load(LIVE,"crypto_r5_live"); bt=load(BT,"crypto_r5_bt")
+    ast.parse(s); ast.parse(b); fx=load(LIVE,"crypto_r6_live"); bt=load(BT,"crypto_r6_bt")
     checks=[
         fx.APP_VERSION.endswith("R6"), fx.AUDIT_BUILD.endswith("R6"), fx.CONFIG_SCHEMA_VERSION==9,
         "evidence_min_families = int" in s, "evidence_family_min_score = float" in s,
-        "Normalizing to 1." in s, "ATR Dynamic multipliers are outside the safety range" in s,
+        "Normalizing to 1." in s, "ATR SL Multiplier must be greater than 0." in s,
         "def run_backtest" in b, "atr_sl_mult" in b, "atr_tp1_mult" in b, "atr_tp2_mult" in b,
         fx.StrategyEngine.decide_signal([("A",True,False),("B",False,True)],"SINGLE_SIGNAL",1)[:2]==(False,False)
     ]
@@ -49,7 +49,7 @@ def main():
 
 if __name__=="__main__": main()
 
-def test_r5_exchange_resilience_contract():
+def test_r6_exchange_resilience_contract():
     src = Path(__file__).resolve().parents[1].joinpath("UniversalFuturesBot_CRYPTO.py").read_text(encoding="utf-8")
     assert "ACCOUNT_READ_RETRIES = 3" in src
     assert "MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10" in src
