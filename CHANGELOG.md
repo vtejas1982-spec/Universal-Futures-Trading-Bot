@@ -7,6 +7,7 @@
 - RISK_% protection uses the actual filled position, so the final SL is recalculated after the exchange confirms the fill.
 - ATR sizing/protection is not silently mixed with RISK_% SL mode.
 - RISK_% is fail-closed unless Sizing Mode is FIXED_QTY; it is also incompatible with Hold-All-Reverse because Hold-All-Reverse intentionally owns the hard-stop semantics.
+- Added a GUI callback: switching to FIXED_QTY automatically selects RISK_% SL when Hold-All-Reverse is OFF; switching back to EQUITY_RISK_% returns the SL selector to PRICE_%.
 
 ### Added
 - SL Mode option: RISK_%.
