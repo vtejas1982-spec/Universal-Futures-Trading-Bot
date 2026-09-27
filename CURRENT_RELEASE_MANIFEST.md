@@ -21,6 +21,7 @@
 ## Documentation
 - README.md
 - CHANGELOG.md
+- docs/CRYPTO_R6_RELEASE_NOTES.md
 - docs/CRYPTO_R5_RELEASE_NOTES.md
 - docs/FOREX_R5_RELEASE_NOTES.md
 - docs/R5_ENGINE_AUDIT_2026-09-22.md
