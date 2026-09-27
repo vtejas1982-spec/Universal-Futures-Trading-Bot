@@ -2,6 +2,7 @@ import ast
 import importlib.util
 import sys
 import types
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -190,3 +191,12 @@ def test_r8_sizing_mode_callback_links_fixed_qty_to_risk_sl():
     assert "def _on_size_mode_changed(self, selected=None):" in source
     assert "self.v_sl_mode.set(\"RISK_%\")" in source
     assert "self.v_sl_mode.set(\"PRICE_%\")" in source
+
+
+def test_r8_worker_uses_gui_snapshot_not_tk_getters():
+    source = LIVE.read_text(encoding="utf-8")
+    assert "def _refresh_runtime_gui_snapshot(self):" in source
+    start = source.find("def _run_bot_logic(self):")
+    assert start >= 0
+    worker = source[start:]
+    assert not re.search(r"self\\.(?:e_|v_)[A-Za-z0-9_]+\\.get\\(\\)", worker)
