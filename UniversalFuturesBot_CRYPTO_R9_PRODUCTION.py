@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9.3"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-R9.3 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9.3-STOP-FIX-FIXED-QTY"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9.6"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-R9.6 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9.6-UNIFIED-SLTP-HOLD-RISK-FIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 10  # R8 adds Fixed-Qty Risk Guard configuration.
-RUNTIME_SCHEMA_VERSION = 9  # R9.3 hardens stop completion + Fixed-Qty independence.
+CONFIG_SCHEMA_VERSION = 12  # R9.6 adds unified protection toggles and reversal-hold controls.
+RUNTIME_SCHEMA_VERSION = 12  # R9.6 unifies protection resolution and hold-exit runtime.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
@@ -98,6 +98,20 @@ EVIDENCE_DEFAULT_FAMILY_MIN_SCORE = 0.35
 EVIDENCE_DEFAULT_REQUIRE_TREND = True
 EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT = True
 
+# R9.5/R9.6 reversal-hold contract. Directional modules are grouped so
+# correlated indicators do not masquerade as independent reversal votes.
+REVERSAL_EXIT_MODES = ("ALL_ACTIVE", "MIN_FAMILIES")
+DEFAULT_REVERSAL_EXIT_MODE = "MIN_FAMILIES"
+DEFAULT_MIN_REVERSE_FAMILIES = 2
+REVERSAL_FAMILY_MAP = {
+    "ST": "TREND", "EMA": "TREND", "EMA_CROSS": "TREND",
+    "MACD": "TREND", "VIDYA": "TREND", "NWE": "TREND",
+    "RSI": "MOMENTUM", "STOCH": "MOMENTUM", "DIVERGENCE": "MOMENTUM",
+    "VWAP": "FLOW", "VWAP_DELTA": "FLOW", "VOL": "FLOW", "VOL_SR": "FLOW",
+    "LIQ_SWING": "STRUCTURE", "TRENDLINE": "STRUCTURE", "MTF": "STRUCTURE",
+    "BB": "LEGACY_BB",
+}
+
 # V8.3.2 requested default trading profile.
 # These are GUI defaults for a NEW/unsaved profile; an existing saved profile
 # remains authoritative and is not silently overwritten.
@@ -121,6 +135,24 @@ DEFAULT_NO_SAME_CANDLE = True
 DEFAULT_COOLDOWN_MIN = "15"
 DEFAULT_USE_DIVERGENCE = True
 DEFAULT_DIV_USE_ALL = True
+
+# R9.6 unified normal protection defaults. Simple mode uses ROI for the user-facing
+# SL/TP contract; legacy R9.3 modes remain available behind an explicit switch.
+DEFAULT_SIMPLE_SL_ROI = 30.0
+DEFAULT_SIMPLE_FALLBACK_SL_ROI = 30.0
+DEFAULT_SIMPLE_TP1_ROI = 60.0
+DEFAULT_SIMPLE_TP2_ROI = 120.0
+DEFAULT_SIMPLE_ROI_SL_ENABLED = True
+DEFAULT_SIMPLE_FALLBACK_SL_ENABLED = True
+DEFAULT_SIMPLE_ATR_SL_ENABLED = False
+DEFAULT_SIMPLE_TP_ENABLED = True
+DEFAULT_SIMPLE_TP1_ENABLED = True
+DEFAULT_SIMPLE_TP2_ENABLED = True
+DEFAULT_SIMPLE_ATR_TP_ENABLED = False
+DEFAULT_LEGACY_PROTECTION_ENABLED = False
+DEFAULT_SIMPLE_TP1_BE_ENABLED = True
+DEFAULT_SIMPLE_HOLD_ENABLED = True
+DEFAULT_SIMPLE_HOLD_WAIT = False
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10
 MAX_STOP_WAIT_SECONDS = 20.0
@@ -965,7 +997,6 @@ def _pivot_high_at(series, p, prd):
         and all(v > float(series.iloc[j]) for j in range(p-prd, p))
         and all(v >= float(series.iloc[j]) for j in range(p+1, p+prd+1))
     )
-
 def _pivot_low_at(series, p, prd):
     if p - prd < 0 or p + prd >= len(series):
         return False
@@ -997,7 +1028,8 @@ def _divergence_line_clear(values, current_idx, pivot_idx, bullish=True):
         # bullish divergences cannot cut below the interpolated line;
         # bearish divergences cannot cut above it.
         if bullish and v < expected:
-            return False        if not bullish and v > expected:
+            return False
+        if not bullish and v > expected:
             return False
     return True
 
@@ -1964,7 +1996,6 @@ def calculate_bollinger(df, length=20, std_mult=2.0):
 
     return df
 
-
 def calculate_stochastic(df, k_length=14, k_smooth=3, d_length=3):
     """Calculate Stochastic %K and %D."""
     df = df.copy()
@@ -1996,6 +2027,7 @@ def calculate_stochastic(df, k_length=14, k_smooth=3, d_length=3):
 def calculate_vwap(df, length=50):
     """Calculate a rolling volume-weighted average price."""
     df = df.copy()
+
     length = int(length)
     if length <= 0:
         raise ValueError("VWAP period must be greater than 0.")
@@ -2964,7 +2996,6 @@ class UniversalFuturesBotGUI:
                 f"ManagedOpenOrders={len(known_ids & current_ids)}"
             )
             return
-
         # Normal strategy engine.
         if saved_active_trade or saved_position:
             if current_position:
@@ -2995,7 +3026,8 @@ class UniversalFuturesBotGUI:
                 self.last_protected_position["entry"] = current_position["entry"]
                 expected_protection_ids = {
                     str(self.last_protected_position.get(key))
-                    for key in ("sl_id", "tp1_id", "tp2_id")                    if self.last_protected_position
+                    for key in ("sl_id", "tp1_id", "tp2_id")
+                    if self.last_protected_position
                     and self.last_protected_position.get(key)
                 }
                 unknown_protection_orders = current_ids - expected_protection_ids
@@ -3963,7 +3995,6 @@ class UniversalFuturesBotGUI:
                     if time.time() >= deadline:
                         return
                     time.sleep(0.05)
-
             with sqlite3.connect(MASTER_DB_FILE, timeout=30) as db:
                 df = pd.read_sql_query(
                     "SELECT * FROM trades ORDER BY started_at ASC",
@@ -3994,7 +4025,8 @@ class UniversalFuturesBotGUI:
                     "ActualEntry",
                     "Qty",
                     "SL",
-                    "TP1",                    "TP2",
+                    "TP1",
+                    "TP2",
                     "Notes",
                 ]
             )
@@ -4943,26 +4975,54 @@ class UniversalFuturesBotGUI:
         )
         _check(
             fr,
-            "Hold Position Until ALL Active Signals Reverse",
+            "Hold Position Until Reverse",
             "v_hold_until_all_reverse",
-            True,
+            DEFAULT_SIMPLE_HOLD_ENABLED,
             3,
             0,
+            2,
+        )
+        _option(
+            fr,
+            "Reverse Exit Rule",
+            "v_reverse_exit_mode",
+            DEFAULT_REVERSAL_EXIT_MODE,
+            REVERSAL_EXIT_MODES,
+            3,
+            3,
+            2,
+        )
+        _entry(
+            fr,            "Minimum Reverse Families",
+            "e_min_reverse_families",
+            DEFAULT_MIN_REVERSE_FAMILIES,
             4,
+            0,
         )
 
         tk.Label(
             fr,
             text=(
-                "ADAPTIVE_EVIDENCE: weighted evidence is normalized inside "
-                "each family. Minimum independent families prevents correlated "
-                "Trend indicators from acting as separate confirmations. "
-                "REGIME is gating only."
+                "ALL_ACTIVE = every enabled directional module must reverse. "
+                "MIN_FAMILIES = at least N evidence families must reverse; "
+                "correlated indicators inside a family count once. ATR/ADX never count."
             ),
             fg="#444444",
             wraplength=1100,
             justify="left",
-        ).grid(row=4, column=0, columnspan=8, sticky="w", pady=3)
+        ).grid(row=4, column=2, columnspan=6, sticky="w", pady=2)
+
+        tk.Label(
+            fr,
+            text=(
+                "ADAPTIVE_EVIDENCE: weighted evidence is normalized inside each family. "
+                "Minimum independent families prevents correlated Trend indicators from "
+                "acting as separate confirmations. REGIME is gating only."
+            ),
+            fg="#444444",
+            wraplength=1100,
+            justify="left",
+        ).grid(row=5, column=0, columnspan=8, sticky="w", pady=3)
 
         tk.Label(
             fr,
@@ -4993,7 +5053,8 @@ class UniversalFuturesBotGUI:
         f_grid.pack(fill="x", padx=10, pady=5)
 
         tk.Label(f_grid, text="Execution / Grid Mode:").grid(row=0, column=0, sticky="w")
-        self.v_grid_mode = tk.StringVar(value=DEFAULT_GRID_MODE)        ttk.OptionMenu(f_grid, self.v_grid_mode, DEFAULT_GRID_MODE, "OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID").grid(row=0, column=1, padx=5, sticky="w")
+        self.v_grid_mode = tk.StringVar(value=DEFAULT_GRID_MODE)
+        ttk.OptionMenu(f_grid, self.v_grid_mode, DEFAULT_GRID_MODE, "OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID").grid(row=0, column=1, padx=5, sticky="w")
         tk.Label(f_grid, text="Grid Levels:").grid(row=0, column=2, sticky="e")
         self.e_grid_levels = tk.Entry(f_grid, width=6); self.e_grid_levels.insert(0, "5"); self.e_grid_levels.grid(row=0, column=3, padx=3)
         tk.Label(f_grid, text="Spacing %:").grid(row=0, column=4, sticky="e")
@@ -5052,317 +5113,165 @@ class UniversalFuturesBotGUI:
             justify="left",
         ).grid(row=6, column=0, columnspan=8, sticky="w", pady=2)
 
-        # 5. Risk
+        # 5. Risk & Protection
         f_risk = tk.LabelFrame(
             self.tab_risk,
-            text=" 5. Dynamic Risk & Sizing ",
+            text=" 5. RISK & POSITION SIZING ",
         )
         f_risk.pack(fill="x", padx=10, pady=5)
 
-        tk.Label(
-            f_risk,
-            text="Sizing Mode (NORMAL STRATEGY ONLY):",
-        ).grid(row=0, column=0, sticky="w")
+        self.v_risk_sizing_enabled = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            f_risk, text="Risk-Based Sizing ON", variable=self.v_risk_sizing_enabled,
+            command=self._on_simple_risk_changed,
+        ).grid(row=0, column=0, sticky="w", padx=4, pady=3)
+        tk.Label(f_risk, text="Risk Per Trade (%):").grid(row=0, column=1, sticky="e")
+        self.e_risk_pct = tk.Entry(f_risk, width=8); self.e_risk_pct.insert(0, DEFAULT_RISK_PER_TRADE)
+        self.e_risk_pct.grid(row=0, column=2, padx=5)
+        tk.Label(f_risk, text="Fixed Qty (used when Risk-Based Sizing is OFF):").grid(row=0, column=3, sticky="e")
+        self.e_fixed_qty = tk.Entry(f_risk, width=10); self.e_fixed_qty.insert(0, "0.001")
+        self.e_fixed_qty.grid(row=0, column=4, padx=5)
 
-        tk.Label(
-            f_risk,
-            text="GLOBAL SAFETY: Max Daily Drawdown + Emergency Capital Loss Stop apply to BOTH Normal Strategy and Grid. Fixed Qty Risk Guard caps gross SL exposure to the Risk Per Trade % budget.",
-            fg="#444444",
-            wraplength=1100,
-            justify="left",
-        ).grid(row=3, column=0, columnspan=6, sticky="w", pady=(3, 0))
-
-        self.v_size_mode = tk.StringVar(
-            value=DEFAULT_RISK_MODE
-        )
-
-        ttk.OptionMenu(
-            f_risk,
-            self.v_size_mode,
-            "EQUITY_RISK_%",
-            "EQUITY_RISK_%",
-            "FIXED_QTY",
-        ).grid(row=0, column=1, padx=5)
-
-        tk.Label(
-            f_risk,
-            text="Risk Per Trade (%):",
-        ).grid(row=0, column=2, sticky="w")
-
-        self.e_risk_pct = tk.Entry(
-            f_risk,
-            width=8,
-        )
-        self.e_risk_pct.insert(0, DEFAULT_RISK_PER_TRADE)
-        self.e_risk_pct.grid(row=0, column=3, padx=5)
-
-        tk.Label(
-            f_risk,
-            text="Fixed Qty:",
-        ).grid(row=0, column=4, sticky="w")
-
-        self.e_fixed_qty = tk.Entry(
-            f_risk,
-            width=10,
-        )
-        self.e_fixed_qty.insert(0, "0.001")
-        self.e_fixed_qty.grid(row=0, column=5, padx=5)
-
-        tk.Label(
-            f_risk,
-            text="Max Daily Drawdown (%):",
-        ).grid(row=1, column=0, sticky="w")
-
-        self.e_max_dd = tk.Entry(
-            f_risk,
-            width=8,
-        )
-        self.e_max_dd.insert(0, "5.0")
-        self.e_max_dd.grid(row=1, column=1, padx=5)
-
-        tk.Label(f_risk, text="Emergency Capital Loss Stop (%):").grid(row=2, column=0, sticky="w")
-        self.e_emergency_capital_pct = tk.Entry(f_risk, width=8)
-        self.e_emergency_capital_pct.insert(0, "30.0")
-        self.e_emergency_capital_pct.grid(row=2, column=1, padx=5)
-        tk.Label(f_risk, text="Emergency Scope:").grid(row=2, column=2, sticky="e")
+        self.v_max_dd_enabled = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_risk, text="Daily Drawdown Stop ON", variable=self.v_max_dd_enabled).grid(row=1, column=0, sticky="w", padx=4)
+        self.e_max_dd = tk.Entry(f_risk, width=7); self.e_max_dd.insert(0, "5.0"); self.e_max_dd.grid(row=1, column=1, padx=5)
+        tk.Label(f_risk, text="% daily equity drawdown").grid(row=1, column=2, sticky="w")
+        self.v_emergency_enabled = tk.BooleanVar(value=True)
+        tk.Checkbutton(f_risk, text="Emergency Capital Stop ON", variable=self.v_emergency_enabled).grid(row=1, column=3, sticky="w")
+        self.e_emergency_capital_pct = tk.Entry(f_risk, width=7); self.e_emergency_capital_pct.insert(0, "10.0"); self.e_emergency_capital_pct.grid(row=1, column=4, padx=5)
+        tk.Label(f_risk, text="% account loss").grid(row=1, column=5, sticky="w")
+        tk.Label(f_risk, text="Emergency Scope:").grid(row=1, column=6, sticky="e")
         self.v_emergency_scope = tk.StringVar(value="BOT_SYMBOL")
-        ttk.OptionMenu(f_risk, self.v_emergency_scope, "BOT_SYMBOL", "BOT_SYMBOL", "ALL_ACCOUNT").grid(row=2, column=3, padx=5, sticky="w")
-        tk.Label(f_risk, text="BOT_SYMBOL is the safe default; ALL_ACCOUNT is an explicit account-wide kill switch.").grid(row=2, column=4, columnspan=2, sticky="w")
+        ttk.OptionMenu(f_risk, self.v_emergency_scope, "BOT_SYMBOL", "BOT_SYMBOL", "ALL_ACCOUNT").grid(row=1, column=7, padx=5, sticky="w")
 
-        # 5. SL/TP
+        tk.Label(
+            f_risk,
+            text="Sizing and account safety are separate. Risk-Based Sizing changes entry quantity only. Daily DD / Emergency Stop are kill limits. FIXED_QTY never uses the equity-risk sizing formula.",
+            fg="#444444", wraplength=1200, justify="left",
+        ).grid(row=2, column=0, columnspan=8, sticky="w", padx=4, pady=(3, 2))
+
         f_sltp = tk.LabelFrame(
             self.tab_risk,
-            text=" 6. Stop Loss & Take Profit Protection ",
+            text=" 6. UNIFIED SL / TP PROTECTION ",
         )
         f_sltp.pack(fill="x", padx=10, pady=5)
+        f_sltp.grid_columnconfigure(8, weight=1)
 
-        tk.Label(
-            f_sltp,
-            text="NORMAL STRATEGY SL/TP ONLY — NOT USED BY GRID",
-            font=("Arial", 9, "bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w")
-
-        tk.Label(f_sltp, text="SL Mode:").grid(row=0, column=2, sticky="w")
-        self.v_sl_mode = tk.StringVar(value="PRICE_%")
-        ttk.OptionMenu(f_sltp, self.v_sl_mode, "PRICE_%", "PRICE_%", "ROI_%", "RISK_%").grid(row=0, column=3, padx=5, sticky="w")
-        tk.Label(
-            f_sltp,
-            text="RISK_% = Fixed Qty + Risk Per Trade (%) defines the hard-SL equity-risk budget.",
-            fg="#444444",
-        ).grid(row=0, column=6, columnspan=3, padx=(8, 0), sticky="w")
-
-        tk.Label(f_sltp, text="TP Mode:").grid(row=0, column=4, sticky="w")
-        self.v_tp_mode = tk.StringVar(value="ROI_%")
-        ttk.OptionMenu(f_sltp, self.v_tp_mode, "ROI_%", "PRICE_%", "ROI_%").grid(row=0, column=5, padx=5, sticky="w")
-
-        tk.Label(
-            f_sltp,
-            text="Fallback SL Target (%):",
-        ).grid(row=1, column=0, sticky="w")
-
-        self.e_sl_pct = tk.Entry(
-            f_sltp,
-            width=8,
-        )
-        self.e_sl_pct.insert(0, "1.5")
-        self.e_sl_pct.grid(row=1, column=1, padx=5)
-
-        tk.Label(
-            f_sltp,
-            text="Fallback TP1 Target (%):",
-        ).grid(row=1, column=2, sticky="w")
-
-        self.e_tp1_pct = tk.Entry(
-            f_sltp,
-            width=8,
-        )
-        self.e_tp1_pct.insert(0, "2.0")
-        self.e_tp1_pct.grid(row=1, column=3, padx=5)
-
-        tk.Label(
-            f_sltp,
-            text="Fallback TP2 Target (%):",
-        ).grid(row=1, column=4, sticky="w")
-
-        self.e_tp2_pct = tk.Entry(
-            f_sltp,
-            width=8,
-        )
-        self.e_tp2_pct.insert(0, "4.0")
-        self.e_tp2_pct.grid(row=1, column=5, padx=5)
-
-        # TP1 break-even control gets its own dedicated row.
-        # Previous V8 UI placed this checkbox on row 2 while the TP Close Qty
-        # controls also used row 2, so Tkinter widgets overlapped and the
-        # checkbox became invisible even though the feature existed in code.
-        self.v_tp1_be = tk.BooleanVar(value=True)
+        self.v_legacy_protection_enabled = tk.BooleanVar(value=DEFAULT_LEGACY_PROTECTION_ENABLED)
         tk.Checkbutton(
-            f_sltp,
-            text="Move SL to Break-Even after TP1",
-            variable=self.v_tp1_be,
-        ).grid(row=2, column=0, columnspan=6, sticky="w", pady=(2, 0))
-
+            f_sltp, text="ADVANCED LEGACY R9.3 SL/TP ENGINE ON",
+            variable=self.v_legacy_protection_enabled,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=4, pady=3)
         tk.Label(
             f_sltp,
-            text="TP Close Qty Mode:",
-        ).grid(row=3, column=0, sticky="w")
+            text="OFF = Simple ROI engine below. ON = exact R9.3 PRICE/ROI/RISK selector path. Only one engine is allowed to calculate protection.",
+            fg="#444444", wraplength=950, justify="left",
+        ).grid(row=0, column=3, columnspan=6, sticky="w")
 
+        # Simple ROI engine. Each module has an explicit ON/OFF control.
+        simple = tk.LabelFrame(f_sltp, text=" SIMPLE ROI ENGINE (default) ")
+        simple.grid(row=1, column=0, columnspan=9, sticky="ew", padx=4, pady=4)
+        simple.grid_columnconfigure(8, weight=1)
+
+        self.v_sl_enabled = tk.BooleanVar(value=True)
+        tk.Checkbutton(simple, text="SL ENGINE ON", variable=self.v_sl_enabled).grid(row=0, column=0, sticky="w", padx=4, pady=3)
+        self.v_roi_sl_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_ROI_SL_ENABLED)
+        tk.Checkbutton(simple, text="ROI SL ON", variable=self.v_roi_sl_enabled).grid(row=0, column=1, sticky="w", padx=4)
+        tk.Label(simple, text="Normal SL ROI %:").grid(row=0, column=2, sticky="e")
+        self.e_roi_sl = tk.Entry(simple, width=7); self.e_roi_sl.insert(0, str(DEFAULT_SIMPLE_SL_ROI)); self.e_roi_sl.grid(row=0, column=3, padx=4)
+
+        self.v_simple_atr_sl_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_ATR_SL_ENABLED)
+        tk.Checkbutton(simple, text="ATR SL ON", variable=self.v_simple_atr_sl_enabled).grid(row=0, column=4, sticky="w", padx=4)
+        tk.Label(simple, text="ATR SL x:").grid(row=0, column=5, sticky="e")
+        self.e_atr_sl_mult = tk.Entry(simple, width=7); self.e_atr_sl_mult.insert(0, "1.8"); self.e_atr_sl_mult.grid(row=0, column=6, padx=4)
+        tk.Label(simple, text="(completed candle)", fg="#444444").grid(row=0, column=7, sticky="w")
+
+        self.v_fallback_sl_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_FALLBACK_SL_ENABLED)
+        tk.Checkbutton(simple, text="Fallback SL ON", variable=self.v_fallback_sl_enabled).grid(row=1, column=0, sticky="w", padx=4, pady=3)
+        tk.Label(simple, text="Fallback SL ROI %:").grid(row=1, column=1, sticky="e")
+        self.e_fallback_sl_roi = tk.Entry(simple, width=7); self.e_fallback_sl_roi.insert(0, str(DEFAULT_SIMPLE_FALLBACK_SL_ROI)); self.e_fallback_sl_roi.grid(row=1, column=2, padx=4)
+        tk.Label(simple, text="Used only if ATR and ROI SL sources are unavailable.", fg="#444444").grid(row=1, column=3, columnspan=5, sticky="w")
+
+        self.v_tp_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_TP_ENABLED)
+        tk.Checkbutton(simple, text="TP ENGINE ON", variable=self.v_tp_enabled).grid(row=2, column=0, sticky="w", padx=4, pady=3)
+        self.v_tp1_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_TP1_ENABLED)
+        tk.Checkbutton(simple, text="TP1 ON", variable=self.v_tp1_enabled).grid(row=2, column=1, sticky="w")
+        tk.Label(simple, text="TP1 ROI %:").grid(row=2, column=2, sticky="e")
+        self.e_roi_tp1 = tk.Entry(simple, width=7); self.e_roi_tp1.insert(0, str(DEFAULT_SIMPLE_TP1_ROI)); self.e_roi_tp1.grid(row=2, column=3, padx=4)
+        tk.Label(simple, text="Close %:").grid(row=2, column=4, sticky="e")
+        self.e_tp1_close = tk.Entry(simple, width=7); self.e_tp1_close.insert(0, "50"); self.e_tp1_close.grid(row=2, column=5, padx=4)
+
+        self.v_tp2_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_TP2_ENABLED)
+        tk.Checkbutton(simple, text="TP2 ON", variable=self.v_tp2_enabled).grid(row=3, column=1, sticky="w", pady=3)
+        tk.Label(simple, text="TP2 ROI %:").grid(row=3, column=2, sticky="e")
+        self.e_roi_tp2 = tk.Entry(simple, width=7); self.e_roi_tp2.insert(0, str(DEFAULT_SIMPLE_TP2_ROI)); self.e_roi_tp2.grid(row=3, column=3, padx=4)
+        tk.Label(simple, text="Close %:").grid(row=3, column=4, sticky="e")
+        self.e_tp2_close = tk.Entry(simple, width=7); self.e_tp2_close.insert(0, "50"); self.e_tp2_close.grid(row=3, column=5, padx=4)
+
+        self.v_simple_atr_tp_enabled = tk.BooleanVar(value=DEFAULT_SIMPLE_ATR_TP_ENABLED)
+        tk.Checkbutton(simple, text="ATR TP MULTIPLIERS ON", variable=self.v_simple_atr_tp_enabled).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=3)
+        tk.Label(simple, text="TP1 x SL:").grid(row=4, column=2, sticky="e")
+        self.e_atr_tp1_mult = tk.Entry(simple, width=7); self.e_atr_tp1_mult.insert(0, "1.2"); self.e_atr_tp1_mult.grid(row=4, column=3, padx=4)
+        tk.Label(simple, text="TP2 x SL:").grid(row=4, column=4, sticky="e")
+        self.e_atr_tp2_mult = tk.Entry(simple, width=7); self.e_atr_tp2_mult.insert(0, "2.2"); self.e_atr_tp2_mult.grid(row=4, column=5, padx=4)
+        tk.Label(simple, text="When ON, ATR defines TP distances from the resolved SL; otherwise TP uses ROI targets above.", fg="#444444").grid(row=4, column=6, columnspan=3, sticky="w")
+
+        self.v_tp1_be = tk.BooleanVar(value=DEFAULT_SIMPLE_TP1_BE_ENABLED)
+        tk.Checkbutton(simple, text="MOVE SL TO BREAK-EVEN AFTER TP1 ON", variable=self.v_tp1_be).grid(row=5, column=0, columnspan=4, sticky="w", padx=4, pady=3)
         self.v_tp_qty_mode = tk.StringVar(value="PERCENT_%")
-        ttk.OptionMenu(
-            f_sltp,
-            self.v_tp_qty_mode,
-            "PERCENT_%",
-            "PERCENT_%",
-            "FIXED_QTY",
-        ).grid(row=3, column=1, padx=5, sticky="w")
+        ttk.OptionMenu(simple, self.v_tp_qty_mode, "PERCENT_%", "PERCENT_%", "FIXED_QTY").grid(row=5, column=4, padx=4, sticky="w")
+        tk.Label(simple, text="TP quantity mode", fg="#444444").grid(row=5, column=5, sticky="w")
 
         tk.Label(
-            f_sltp,
-            text="TP1 Close (% / Qty):",
-        ).grid(row=3, column=2, sticky="w")
-
-        self.e_tp1_close = tk.Entry(
-            f_sltp,
-            width=8,
-        )
-        self.e_tp1_close.insert(0, "50")
-        self.e_tp1_close.grid(row=3, column=3, padx=5)
-
+            simple,
+            text=(
+                "RESOLUTION ORDER (no overlap): Hold-SL WAIT → ATR SL → ROI SL → Fallback SL. "
+                "Only one SL is installed. TP uses ATR multipliers only when ATR TP is ON; otherwise ROI. "
+                "If no valid SL source remains, the entry is rejected fail-closed."
+            ),
+            fg="#333333", wraplength=1200, justify="left",
+        ).grid(row=6, column=0, columnspan=9, sticky="w", padx=4, pady=(2, 4))
         tk.Label(
-            f_sltp,
-            text="TP2 Close (% / Qty):",
-        ).grid(row=3, column=4, sticky="w")
+            simple,
+            text=(
+                "ROI targets are position-ROI based: the bot converts them to exchange price triggers using actual leverage. "
+                "Risk-Based Sizing uses the resolved SL distance; Fixed Qty sends the configured quantity."
+            ),
+            fg="#555555", wraplength=1200, justify="left",
+        ).grid(row=7, column=0, columnspan=9, sticky="w", padx=4, pady=(0, 4))
 
-        self.e_tp2_close = tk.Entry(
-            f_sltp,
-            width=8,
-        )
-        self.e_tp2_close.insert(0, "50")
-        self.e_tp2_close.grid(row=3, column=5, padx=5)
+        hold = tk.LabelFrame(f_sltp, text=" HOLD-ALL-REVERSE / HOLD-SL ")
+        hold.grid(row=2, column=0, columnspan=9, sticky="ew", padx=4, pady=4)
+        self.v_hold_sl_wait_reversal = tk.BooleanVar(value=DEFAULT_SIMPLE_HOLD_WAIT)
+        tk.Label(hold, text="Hold-SL ROI %:").grid(row=0, column=0, sticky="e", padx=4, pady=3)
+        self.e_hold_sl_roi = tk.Entry(hold, width=7); self.e_hold_sl_roi.insert(0, "5.0"); self.e_hold_sl_roi.grid(row=0, column=1, padx=4)
+        tk.Checkbutton(hold, text="After threshold: WAIT for selected reversal rule", variable=self.v_hold_sl_wait_reversal).grid(row=0, column=2, columnspan=3, sticky="w")
+        tk.Label(hold, text="OFF = exchange Hold-SL hard stop. ON = threshold is monitored by bot; NO exchange SL is placed.", fg="#444444").grid(row=1, column=0, columnspan=7, sticky="w", padx=4, pady=2)
+
+        adv = tk.LabelFrame(f_sltp, text=" ADVANCED R9.3 COMPATIBILITY CONTROLS ")
+        adv.grid(row=3, column=0, columnspan=9, sticky="ew", padx=4, pady=4)
+        tk.Label(adv, text="Legacy SL Mode:").grid(row=0, column=0, sticky="w", padx=4, pady=3)
+        self.v_sl_mode = tk.StringVar(value="ROI_%")
+        ttk.OptionMenu(adv, self.v_sl_mode, "ROI_%", "PRICE_%", "ROI_%", "RISK_%").grid(row=0, column=1, padx=4, sticky="w")
+        tk.Label(adv, text="Legacy TP Mode:").grid(row=0, column=2, sticky="w", padx=4)
+        self.v_tp_mode = tk.StringVar(value="ROI_%")
+        ttk.OptionMenu(adv, self.v_tp_mode, "ROI_%", "PRICE_%", "ROI_%").grid(row=0, column=3, padx=4, sticky="w")
+        tk.Label(adv, text="Legacy SL %:").grid(row=0, column=4, sticky="e")
+        self.e_sl_pct = tk.Entry(adv, width=7); self.e_sl_pct.insert(0, "1.5"); self.e_sl_pct.grid(row=0, column=5, padx=4)
+        tk.Label(adv, text="Legacy TP1 %:").grid(row=0, column=6, sticky="e")
+        self.e_tp1_pct = tk.Entry(adv, width=7); self.e_tp1_pct.insert(0, "2.0"); self.e_tp1_pct.grid(row=0, column=7, padx=4)
+        tk.Label(adv, text="Legacy TP2 %:").grid(row=0, column=8, sticky="e")
+        self.e_tp2_pct = tk.Entry(adv, width=7); self.e_tp2_pct.insert(0, "4.0"); self.e_tp2_pct.grid(row=0, column=9, padx=4)
 
         tk.Label(
             f_sltp,
             text=(
-                "PERCENT_%: TP1 + TP2 must = 100% of the position "
-                "(recommended).  FIXED_QTY: TP1 + TP2 must = the actual position quantity."
+                "Legacy modules are preserved for backward compatibility: PRICE_% / ROI_% / RISK_% SL, PRICE_% / ROI_% TP, "
+                "ATR Dynamic SL/TP, TP close quantity mode, Hold-All-Reverse SL, and Hold-SL WAIT. "
+                "R9.6 protects against overlap by resolving a single normal SL source and a single normal TP model per position."
             ),
-            fg="#444444",
-        ).grid(row=3, column=6, columnspan=3, padx=(8, 0), sticky="w")
-
-        # V8.4.2 Dynamic ATR protection.
-        # Dedicated sub-frame prevents widget overlap/cropping on Windows DPI scaling.
-        atr_frame = tk.LabelFrame(
-            f_sltp,
-            text=" ATR Dynamic Protection ",
-        )
-        atr_frame.grid(
-            row=4,
-            column=0,
-            columnspan=7,
-            padx=4,
-            pady=(4, 3),
-            sticky="ew",
-        )
-        atr_frame.grid_columnconfigure(6, weight=1)
-
-        self.v_use_atr_sl = tk.BooleanVar(value=DEFAULT_ATR_SL_ENABLED)
-        tk.Checkbutton(
-            atr_frame,
-            text="Enable ATR Dynamic SL/TP",
-            variable=self.v_use_atr_sl,
-        ).grid(row=0, column=0, columnspan=2, padx=(4, 12), pady=3, sticky="w")
-
-        tk.Label(
-            atr_frame,
-            text="Source: completed candle",
-            fg="#333333",
-        ).grid(row=0, column=2, columnspan=2, padx=4, sticky="w")
-
-        tk.Label(atr_frame, text="ATR SL Multiplier:").grid(
-            row=0, column=4, padx=(12, 4), sticky="e"
-        )
-        self.e_atr_sl_mult = tk.Entry(atr_frame, width=7)
-        self.e_atr_sl_mult.insert(0, str(DEFAULT_ATR_SL_MULTIPLIER))
-        self.e_atr_sl_mult.grid(row=0, column=5, padx=(0, 4), sticky="w")
-        tk.Label(atr_frame, text="× ATR").grid(row=0, column=6, padx=2, sticky="w")
-
-        tk.Label(atr_frame, text="TP1 Dynamic Multiplier:").grid(
-            row=1, column=0, padx=(4, 4), pady=3, sticky="w"
-        )
-        self.e_atr_tp1_mult = tk.Entry(atr_frame, width=7)
-        self.e_atr_tp1_mult.insert(0, str(DEFAULT_ATR_TP1_MULTIPLIER))
-        self.e_atr_tp1_mult.grid(row=1, column=1, padx=(0, 12), sticky="w")
-        tk.Label(atr_frame, text="× actual SL distance").grid(
-            row=1, column=2, columnspan=2, padx=4, sticky="w"
-        )
-
-        tk.Label(atr_frame, text="TP2 Dynamic Multiplier:").grid(
-            row=1, column=4, padx=(12, 4), sticky="e"
-        )
-        self.e_atr_tp2_mult = tk.Entry(atr_frame, width=7)
-        self.e_atr_tp2_mult.insert(0, str(DEFAULT_ATR_TP2_MULTIPLIER))
-        self.e_atr_tp2_mult.grid(row=1, column=5, padx=(0, 4), sticky="w")
-        tk.Label(atr_frame, text="× actual SL distance").grid(
-            row=1, column=6, padx=2, sticky="w"
-        )
-
-        tk.Label(
-            atr_frame,
-            text=(
-                "When enabled: SL = latest completed-candle ATR × SL multiplier; "
-                "TP1/TP2 use the resulting SL distance. Runtime logs show actual "
-                "Entry Price, ATR, Price %, and ROI %."
-            ),
-            fg="#444444",
-            wraplength=1200,
-            justify="left",
-        ).grid(row=2, column=0, columnspan=7, padx=4, pady=(2, 4), sticky="w")
-
-        # Dedicated Hold-All-Reverse row; never share a grid row with ATR controls.
-        tk.Label(
-            f_sltp,
-            text="Hold-All-Reverse SL (ROI %):",
-            font=("Arial", 9, "bold"),
-        ).grid(row=5, column=0, sticky="w", padx=(0, 4))
-
-        self.e_hold_sl_roi = tk.Entry(
-            f_sltp,
-            width=10,
-            justify="center",
-        )
-        self.e_hold_sl_roi.insert(0, "5.0")
-        self.e_hold_sl_roi.grid(row=5, column=1, padx=5, pady=2, sticky="w")
-
-        tk.Label(
-            f_sltp,
-            text="Used ONLY when Hold-All-Reverse = ON",
-            fg="#444444",
-        ).grid(row=5, column=2, columnspan=2, sticky="w", padx=(8, 0))
-
-        self.v_hold_sl_wait_reversal = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            f_sltp,
-            text="After Hold SL threshold: WAIT for ALL active signals to reverse",
-            variable=self.v_hold_sl_wait_reversal,
-        ).grid(row=6, column=0, columnspan=7, sticky="w", pady=(2, 0))
-
-        tk.Label(
-            f_sltp,
-            text=(
-                "OFF = normal exchange SL closes at the ROI threshold.  "
-                "ON = threshold is monitored by the bot; no exchange SL is placed, "
-                "and the position closes only after ALL active directional signals reverse."
-            ),
-            fg="#444444",
-            wraplength=1200,
-            justify="left",
-        ).grid(row=7, column=0, columnspan=7, sticky="w", pady=2)
-
-        tk.Label(
-            f_sltp,
-            text="PRICE_% = market-price move | ROI_% = position ROI target",
-            fg="#444444",
-        ).grid(row=9, column=0, columnspan=6, sticky="w", pady=(0, 2))
+            fg="#555555", wraplength=1200, justify="left",
+        ).grid(row=4, column=0, columnspan=9, sticky="w", padx=4, pady=(2, 4))
 
         # 6. Telegram
         f_tele = tk.LabelFrame(
@@ -5571,7 +5480,24 @@ class UniversalFuturesBotGUI:
         except Exception:
             pass
 
+    def _on_simple_risk_changed(self):
+        """R9.6: Risk-Based Sizing toggle is authoritative for normal strategy sizing."""
+        try:
+            enabled = bool(self.v_risk_sizing_enabled.get())
+            self.v_size_mode.set("EQUITY_RISK_%" if enabled else "FIXED_QTY")
+            self.log(
+                "RISK SIZING: " + (
+                    "ON | Entry size = account risk / resolved protection distance."
+                    if enabled else
+                    "OFF | Entry size = literal Fixed Qty; Risk Per Trade does not recalculate order quantity."
+                )
+            )
+        except Exception:
+            pass
+
     def save_settings(self):
+        if hasattr(self, "v_risk_sizing_enabled") and hasattr(self, "v_size_mode"):
+            self.v_size_mode.set("EQUITY_RISK_%" if self.v_risk_sizing_enabled.get() else "FIXED_QTY")
         requested_profile = self._sanitize_profile_id(self.v_bot_id.get())
         if self.is_running:
             # A running worker owns its exchange/symbol/profile identity. Allow
@@ -5785,8 +5711,29 @@ class UniversalFuturesBotGUI:
             "evidence_require_trend": self.v_evidence_require_trend.get(),
             "evidence_require_independent": self.v_evidence_require_independent.get(),
             "hold_until_all_reverse": self.v_hold_until_all_reverse.get(),
+            "reverse_exit_mode": self.v_reverse_exit_mode.get(),
+            "min_reverse_families": self.e_min_reverse_families.get().strip(),
 
             "size_mode": self.v_size_mode.get(),
+            "risk_sizing_enabled": self.v_risk_sizing_enabled.get(),
+            "max_dd_enabled": self.v_max_dd_enabled.get(),
+            "emergency_stop_enabled": self.v_emergency_enabled.get(),
+
+            "legacy_protection_enabled": self.v_legacy_protection_enabled.get(),
+            "simple_sl_enabled": self.v_sl_enabled.get(),
+            "simple_roi_sl_enabled": self.v_roi_sl_enabled.get(),
+            "simple_roi_sl": self.e_roi_sl.get().strip(),
+            "simple_atr_sl_enabled": self.v_simple_atr_sl_enabled.get(),
+            "simple_fallback_sl_enabled": self.v_fallback_sl_enabled.get(),
+            "simple_fallback_sl_roi": self.e_fallback_sl_roi.get().strip(),
+            "simple_tp_enabled": self.v_tp_enabled.get(),
+            "simple_tp1_enabled": self.v_tp1_enabled.get(),
+            "simple_tp2_enabled": self.v_tp2_enabled.get(),
+            "simple_roi_tp1": self.e_roi_tp1.get().strip(),
+            "simple_roi_tp2": self.e_roi_tp2.get().strip(),
+            "simple_atr_tp_enabled": self.v_simple_atr_tp_enabled.get(),
+            "simple_tp1_be_enabled": self.v_tp1_be.get(),
+
             "risk_pct": self.e_risk_pct.get().strip(),
             "fixed_qty": self.e_fixed_qty.get().strip(),
             "max_dd": self.e_max_dd.get().strip(),
@@ -5851,7 +5798,7 @@ class UniversalFuturesBotGUI:
             if loaded_schema < CONFIG_SCHEMA_VERSION:
                 self.log(
                     f"CONFIG MIGRATION: schema {loaded_schema or 'legacy'} -> {CONFIG_SCHEMA_VERSION}; "
-                    "missing newer fields use current R8 defaults; existing saved values remain authoritative."
+                    "missing newer fields use current release defaults; existing saved values remain authoritative."
                 )
 
 
@@ -5992,7 +5939,8 @@ class UniversalFuturesBotGUI:
             self.v_st_entry_mode.set(
                 cfg.get(
                     "st_entry_mode",
-                    "FRESH_FLIP",                )
+                    "FRESH_FLIP",
+                )
             )
 
             self.v_use_ema.set(
@@ -6044,8 +5992,7 @@ class UniversalFuturesBotGUI:
                 ),
             )
             self.v_ema_cross_entry_mode.set(
-                cfg.get(
-                    "ema_cross_entry_mode",
+                cfg.get(                    "ema_cross_entry_mode",
                     "FRESH_CROSS",
                 )
             )
@@ -6382,7 +6329,10 @@ class UniversalFuturesBotGUI:
                 self.log(f"Unknown saved Signal Mode {saved_signal_mode}; falling back to SINGLE_SIGNAL.")
                 saved_signal_mode = "SINGLE_SIGNAL"
             self.v_signal_mode.set(saved_signal_mode)
-            self.v_hold_until_all_reverse.set(cfg.get("hold_until_all_reverse", True))
+            self.v_hold_until_all_reverse.set(cfg.get("hold_until_all_reverse", DEFAULT_SIMPLE_HOLD_ENABLED))
+            self.v_reverse_exit_mode.set(str(cfg.get("reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() if str(cfg.get("reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() in REVERSAL_EXIT_MODES else DEFAULT_REVERSAL_EXIT_MODE)
+            self.e_min_reverse_families.delete(0, tk.END)
+            self.e_min_reverse_families.insert(0, cfg.get("min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES))
 
             self.e_min_score.delete(0, tk.END)
             self.e_min_score.insert(
@@ -6409,9 +6359,6 @@ class UniversalFuturesBotGUI:
                     DEFAULT_RISK_MODE,
                 )
             )
-            loaded_size_mode = str(self.v_size_mode.get()).strip().upper()
-            migrate_fixed_qty_sl = False  # R9.1+: Fixed Qty no longer changes SL mode.
-
             self.e_risk_pct.delete(
                 0,
                 tk.END,
@@ -6448,8 +6395,27 @@ class UniversalFuturesBotGUI:
                 ),
             )
             self.e_emergency_capital_pct.delete(0, tk.END)
-            self.e_emergency_capital_pct.insert(0, cfg.get("emergency_capital_pct", "30.0"))
+            self.e_emergency_capital_pct.insert(0, cfg.get("emergency_capital_pct", "10.0"))
             self.v_emergency_scope.set(cfg.get("emergency_scope", "BOT_SYMBOL"))
+            self.v_risk_sizing_enabled.set(bool(cfg.get("risk_sizing_enabled", str(cfg.get("size_mode", DEFAULT_RISK_MODE)).strip().upper() == "EQUITY_RISK_%")))
+            self.v_size_mode.set("EQUITY_RISK_%" if self.v_risk_sizing_enabled.get() else "FIXED_QTY")
+            self.v_max_dd_enabled.set(bool(cfg.get("max_dd_enabled", True)))
+            self.v_emergency_enabled.set(bool(cfg.get("emergency_stop_enabled", True)))
+
+            self.v_legacy_protection_enabled.set(bool(cfg.get("legacy_protection_enabled", DEFAULT_LEGACY_PROTECTION_ENABLED)))
+            self.v_sl_enabled.set(bool(cfg.get("simple_sl_enabled", True)))
+            self.v_roi_sl_enabled.set(bool(cfg.get("simple_roi_sl_enabled", DEFAULT_SIMPLE_ROI_SL_ENABLED)))
+            self.e_roi_sl.delete(0, tk.END); self.e_roi_sl.insert(0, cfg.get("simple_roi_sl", DEFAULT_SIMPLE_SL_ROI))
+            self.v_simple_atr_sl_enabled.set(bool(cfg.get("simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED)))
+            self.v_fallback_sl_enabled.set(bool(cfg.get("simple_fallback_sl_enabled", DEFAULT_SIMPLE_FALLBACK_SL_ENABLED)))
+            self.e_fallback_sl_roi.delete(0, tk.END); self.e_fallback_sl_roi.insert(0, cfg.get("simple_fallback_sl_roi", DEFAULT_SIMPLE_FALLBACK_SL_ROI))
+            self.v_tp_enabled.set(bool(cfg.get("simple_tp_enabled", DEFAULT_SIMPLE_TP_ENABLED)))
+            self.v_tp1_enabled.set(bool(cfg.get("simple_tp1_enabled", DEFAULT_SIMPLE_TP1_ENABLED)))
+            self.v_tp2_enabled.set(bool(cfg.get("simple_tp2_enabled", DEFAULT_SIMPLE_TP2_ENABLED)))
+            self.e_roi_tp1.delete(0, tk.END); self.e_roi_tp1.insert(0, cfg.get("simple_roi_tp1", DEFAULT_SIMPLE_TP1_ROI))
+            self.e_roi_tp2.delete(0, tk.END); self.e_roi_tp2.insert(0, cfg.get("simple_roi_tp2", DEFAULT_SIMPLE_TP2_ROI))
+            self.v_simple_atr_tp_enabled.set(bool(cfg.get("simple_atr_tp_enabled", DEFAULT_SIMPLE_ATR_TP_ENABLED)))
+            self.v_tp1_be.set(bool(cfg.get("simple_tp1_be_enabled", DEFAULT_SIMPLE_TP1_BE_ENABLED)))
 
             legacy_protection_mode = cfg.get("sltp_mode", "PRICE_%")
             self.v_sl_mode.set(cfg.get("sl_mode", legacy_protection_mode))
@@ -6545,6 +6511,10 @@ class UniversalFuturesBotGUI:
             )
 
             self.v_use_atr_sl.set(bool(cfg.get("use_atr_sl", DEFAULT_ATR_SL_ENABLED)))
+            if "simple_atr_sl_enabled" not in cfg:
+                self.v_simple_atr_sl_enabled.set(bool(cfg.get("use_atr_sl", DEFAULT_SIMPLE_ATR_SL_ENABLED)))
+            if "simple_atr_tp_enabled" not in cfg:
+                self.v_simple_atr_tp_enabled.set(bool(cfg.get("use_atr_sl", DEFAULT_SIMPLE_ATR_TP_ENABLED)))
             self.e_atr_sl_mult.delete(0, tk.END)
             self.e_atr_sl_mult.insert(0, cfg.get("atr_sl_mult", DEFAULT_ATR_SL_MULTIPLIER))
             self.e_atr_tp1_mult.delete(0, tk.END)
@@ -6991,7 +6961,8 @@ class UniversalFuturesBotGUI:
         self.is_running = False
         self.log("CAPITAL STOP COMPLETE: Emergency equity limit reached. Bot stopped; no new trades will be opened.")
         try:
-            self.root.after(0, lambda: self._set_bot_button_states(running=False))        except Exception:
+            self.root.after(0, lambda: self._set_bot_button_states(running=False))
+        except Exception:
             pass
 
     def fetch_position(self, symbol):
@@ -7021,7 +6992,6 @@ class UniversalFuturesBotGUI:
                 continue
 
             active_positions.append((pos, contracts))
-
         # V8.1 is a one-way-position engine.  If the exchange/account returns
         # more than one live position for the symbol (for example hedge mode),
         # guessing which position belongs to the bot is unsafe.
@@ -7509,9 +7479,14 @@ class UniversalFuturesBotGUI:
                     f"ActualRiskAtSL={actual_risk_pct:.4f}%"
                 )
         if mode == "FIXED_QTY":
+            protection_mode = (
+                "LEGACY_R9.3"
+                if bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+                else ("HOLD_ALL_REVERSE" if bool(self._runtime_gui_value("v_hold_until_all_reverse", False)) else "SIMPLE_ROI")
+            )
             self.log(
                 f"FIXED QTY SIZING | Requested={requested_qty:g} | Final={qty:g} | "
-                f"SLMode={str(self._runtime_gui_value('v_sl_mode', 'PRICE_%')).strip().upper()}"
+                f"Entry sizing is literal; Protection={protection_mode}"
             )
         return qty
 
@@ -7588,6 +7563,117 @@ class UniversalFuturesBotGUI:
 
         # Pre-entry sizing fallback.
         return (target_pct / 100.0) / leverage
+
+    def _calculate_r96_protection_prices(
+        self, symbol, side, actual_entry, position_qty, position_initial_margin, leverage,
+        atr_value=None, use_legacy=False,
+        hold_all_reverse=False, hold_wait_reversal=False,
+        simple_sl_enabled=True, simple_roi_sl_enabled=True, roi_sl_target=30.0,
+        simple_atr_sl_enabled=False, fallback_sl_enabled=True, fallback_sl_roi=30.0,
+        simple_tp_enabled=True, tp1_enabled=True, tp2_enabled=True, tp1_roi=60.0, tp2_roi=120.0,
+        simple_atr_tp_enabled=False, atr_sl_mult=1.8, atr_tp1_mult=1.2, atr_tp2_mult=2.2,
+        legacy_sl_target=1.5, legacy_tp1_target=2.0, legacy_tp2_target=4.0,
+        legacy_sl_mode="PRICE_%", legacy_tp_mode="ROI_%", account_balance=None, risk_pct=None,
+    ):
+        """R9.6 single protection resolver. Exactly one SL basis and one TP basis are selected."""
+        if actual_entry <= 0:
+            raise RuntimeError("Actual entry price is invalid.")
+        if leverage <= 0:
+            raise RuntimeError("Leverage must be greater than zero.")
+
+        # Hold-SL is its own exit contract. It never overlaps normal TP.
+        if hold_all_reverse:
+            hold_move = float(self._runtime_gui_value("e_hold_sl_roi", 5.0) or 5.0) / 100.0 / float(leverage)
+            if hold_wait_reversal:
+                self.log("R9.6 PROTECTION RESOLVER: HOLD-SL WAIT owns the exit; no exchange SL/TP orders will be created.")
+            else:
+                self.log("R9.6 PROTECTION RESOLVER: HOLD-SL hard-stop owns the SL; normal TP is disabled by Hold-All-Reverse.")
+            sl_move = hold_move
+            tp1_move = 0.0
+            tp2_move = 0.0
+            source = "HOLD_SL_ROI"
+        elif use_legacy:
+            # Exact legacy R9.3 calculation path, kept behind explicit switch.
+            return (*self.calculate_protection_prices(
+                symbol, side, actual_entry, position_qty, position_initial_margin,
+                legacy_sl_target, legacy_tp1_target, legacy_tp2_target,
+                legacy_sl_mode, legacy_tp_mode, leverage,
+                account_balance=account_balance, risk_pct=risk_pct,
+                atr_value=atr_value, atr_sl_multiplier=atr_sl_mult,
+                atr_tp1_multiplier=atr_tp1_mult, atr_tp2_multiplier=atr_tp2_mult,
+            ), "LEGACY")
+        else:
+            if not simple_sl_enabled:
+                if not hold_wait_reversal:
+                    raise RuntimeError("SL ENGINE is OFF. R9.6 refuses a new unprotected normal-strategy position.")
+            sl_move = None
+            source = None
+            # Priority 1: ATR SL if explicitly enabled and usable.
+            if simple_atr_sl_enabled:
+                if atr_value is not None and np.isfinite(float(atr_value)) and float(atr_value) > 0:
+                    if atr_sl_mult <= 0:
+                        raise RuntimeError("ATR SL multiplier must be greater than zero.")
+                    sl_move = (float(atr_value) * float(atr_sl_mult)) / float(actual_entry)
+                    source = "ATR"
+                elif simple_roi_sl_enabled:
+                    sl_move = float(roi_sl_target) / 100.0 / float(leverage)
+                    source = "ROI"
+                elif fallback_sl_enabled:
+                    sl_move = float(fallback_sl_roi) / 100.0 / float(leverage)
+                    source = "FALLBACK_ROI"
+                else:
+                    raise RuntimeError("ATR SL unavailable and no ROI/Fallback SL is enabled.")
+            elif simple_roi_sl_enabled:
+                sl_move = float(roi_sl_target) / 100.0 / float(leverage)
+                source = "ROI"
+            elif fallback_sl_enabled:
+                sl_move = float(fallback_sl_roi) / 100.0 / float(leverage)
+                source = "FALLBACK_ROI"
+            else:
+                raise RuntimeError("No normal SL source is enabled.")
+
+            if not np.isfinite(sl_move) or sl_move <= 0 or sl_move >= 0.95:
+                raise RuntimeError(f"Resolved SL distance is invalid: {sl_move}")
+
+            if not simple_tp_enabled or not (tp1_enabled or tp2_enabled):
+                tp1_move = 0.0
+                tp2_move = 0.0
+            elif simple_atr_tp_enabled:
+                tp1_move = sl_move * float(atr_tp1_mult) if tp1_enabled else 0.0
+                tp2_move = sl_move * float(atr_tp2_mult) if tp2_enabled else 0.0
+                if (tp1_enabled and tp1_move <= 0) or (tp2_enabled and tp2_move <= 0):
+                    raise RuntimeError("ATR TP multiplier produced an invalid target.")
+            else:
+                tp1_move = (float(tp1_roi) / 100.0 / float(leverage)) if tp1_enabled else 0.0
+                tp2_move = (float(tp2_roi) / 100.0 / float(leverage)) if tp2_enabled else 0.0
+            if tp1_enabled and tp2_enabled and tp2_move <= tp1_move:
+                raise RuntimeError("TP2 must be farther from entry than TP1.")
+
+        if side == "LONG":
+            sl = actual_entry * (1 - sl_move)
+            tp1 = actual_entry * (1 + tp1_move) if tp1_move > 0 else None
+            tp2 = actual_entry * (1 + tp2_move) if tp2_move > 0 else None
+        else:
+            sl = actual_entry * (1 + sl_move)
+            tp1 = actual_entry * (1 - tp1_move) if tp1_move > 0 else None
+            tp2 = actual_entry * (1 - tp2_move) if tp2_move > 0 else None
+
+        sl = self.safe_price(symbol, sl)
+        if tp1 is not None: tp1 = self.safe_price(symbol, tp1)
+        if tp2 is not None: tp2 = self.safe_price(symbol, tp2)
+
+        if side == "LONG":
+            if not (sl < actual_entry): raise RuntimeError("Resolved LONG SL is invalid.")
+            if tp1 is not None and not (tp1 > actual_entry): raise RuntimeError("Resolved LONG TP1 is invalid.")
+            if tp2 is not None and not (tp2 > actual_entry): raise RuntimeError("Resolved LONG TP2 is invalid.")
+            if tp1 is not None and tp2 is not None and not (tp2 > tp1): raise RuntimeError("Resolved LONG TP ordering is invalid.")
+        else:
+            if not (sl > actual_entry): raise RuntimeError("Resolved SHORT SL is invalid.")
+            if tp1 is not None and not (tp1 < actual_entry): raise RuntimeError("Resolved SHORT TP1 is invalid.")
+            if tp2 is not None and not (tp2 < actual_entry): raise RuntimeError("Resolved SHORT TP2 is invalid.")
+            if tp1 is not None and tp2 is not None and not (tp2 < tp1): raise RuntimeError("Resolved SHORT TP ordering is invalid.")
+
+        return sl, tp1, tp2, sl_move, tp1_move, tp2_move, source
 
     def calculate_protection_prices(
         self,
@@ -7767,7 +7853,7 @@ class UniversalFuturesBotGUI:
                 self.log(
                     f"HOLD-SL THRESHOLD REACHED: {side} | "
                     f"Current={price:.12g} | Threshold={threshold:.12g} | "
-                    "POSITION REMAINS OPEN. Waiting for ALL active directional signals to reverse."
+                    f"POSITION REMAINS OPEN. Waiting for {self._runtime_gui_value('v_reverse_exit_mode', DEFAULT_REVERSAL_EXIT_MODE)} reversal rule."
                 )
         return self.hold_sl_threshold_hit
 
@@ -7905,7 +7991,6 @@ class UniversalFuturesBotGUI:
                 symbol,
                 qty * tp1_pct / 100.0,
             )
-
             # Derive TP2 as the exact remaining quantity after precision
             # so TP1 + TP2 always equals the actual position quantity.
             tp2_qty = self.safe_amount(
@@ -7990,7 +8075,8 @@ class UniversalFuturesBotGUI:
             # closed if verification fails.
             self.log(
                 f"TRIGGER CAPABILITY CHECK NOTICE | {self.exchange_id.upper()} "
-                f"{symbol} | {capability_error}"            )
+                f"{symbol} | {capability_error}"
+            )
 
         params = {
             "triggerPrice": trigger_price,
@@ -8043,22 +8129,35 @@ class UniversalFuturesBotGUI:
                 "Actual position quantity is invalid."
             )
 
-        hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
+        hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+        legacy_mode = bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+        if legacy_mode:
+            # Exact R9.3 compatibility: legacy calculated TP targets own their
+            # own enable state; Simple ROI TP toggles must not silently disable them.
+            tp_engine_enabled = True
+            tp1_enabled = tp1 is not None
+            tp2_enabled = tp2 is not None
+        else:
+            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
+            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
+            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
         tp1_qty = 0.0
         tp2_qty = 0.0
-        if not hold_all_reverse:
-            tp1_qty, tp2_qty = self.calculate_tp_close_quantities(
-                symbol,
-                qty,
-                tp_qty_mode,
-                tp1_close_value,
-                tp2_close_value,
-            )
+        if not hold_all_reverse and tp_engine_enabled and (tp1_enabled or tp2_enabled):
+            if tp1_enabled and tp2_enabled:
+                tp1_qty, tp2_qty = self.calculate_tp_close_quantities(
+                    symbol, qty, tp_qty_mode, tp1_close_value, tp2_close_value
+                )
+            elif tp1_enabled:
+                tp1_qty = qty
+            elif tp2_enabled:
+                tp2_qty = qty
             self.log(
-                f"TP CLOSE MODE: {tp_qty_mode} | "
-                f"TP1={tp1_qty:g} | TP2={tp2_qty:g} | "
-                f"Total={qty:g}"
+                f"TP CLOSE MODE: {tp_qty_mode} | TP1={'ON ' + str(tp1_qty) if tp1_enabled else 'OFF'} | "
+                f"TP2={'ON ' + str(tp2_qty) if tp2_enabled else 'OFF'} | Total={qty:g}"
             )
+        elif not hold_all_reverse:
+            self.log("TP ENGINE: OFF | No TP exchange orders will be created.")
         else:
             self.log(
                 "REVERSAL HOLD ON: Only the hard SL will be placed. "
@@ -8102,7 +8201,7 @@ class UniversalFuturesBotGUI:
                     ("SL", sl_order)
                 )
 
-                if not hold_all_reverse:
+                if (not hold_all_reverse) and tp_engine_enabled and tp1_enabled and tp1 is not None:
                     tp1_order = self.create_bybit_trigger(
                         symbol,
                         "TAKE_PROFIT_MARKET",
@@ -8116,6 +8215,7 @@ class UniversalFuturesBotGUI:
                         ("TP1", tp1_order)
                     )
 
+                if (not hold_all_reverse) and tp_engine_enabled and tp2_enabled and tp2 is not None:
                     tp2_order = self.create_bybit_trigger(
                         symbol,
                         "TAKE_PROFIT_MARKET",
@@ -8135,11 +8235,12 @@ class UniversalFuturesBotGUI:
                 )
                 created.append(("SL", sl_order))
 
-                if not hold_all_reverse:
+                if (not hold_all_reverse) and tp_engine_enabled and tp1_enabled and tp1 is not None:
                     tp1_order = self.create_binance_trigger(
                         symbol, "TAKE_PROFIT_MARKET", close_side, tp1_qty, tp1, "TP1"
                     )
                     created.append(("TP1", tp1_order))
+                if (not hold_all_reverse) and tp_engine_enabled and tp2_enabled and tp2 is not None:
                     tp2_order = self.create_binance_trigger(
                         symbol, "TAKE_PROFIT_MARKET", close_side, tp2_qty, tp2, "TP2"
                     )
@@ -8153,11 +8254,12 @@ class UniversalFuturesBotGUI:
                 )
                 created.append(("SL", sl_order))
 
-                if not hold_all_reverse:
+                if (not hold_all_reverse) and tp_engine_enabled and tp1_enabled and tp1 is not None:
                     tp1_order = self.create_generic_trigger(
                         symbol, close_side, tp1_qty, tp1, "TP1"
                     )
                     created.append(("TP1", tp1_order))
+                if (not hold_all_reverse) and tp_engine_enabled and tp2_enabled and tp2 is not None:
                     tp2_order = self.create_generic_trigger(
                         symbol, close_side, tp2_qty, tp2, "TP2"
                     )
@@ -8887,8 +8989,7 @@ class UniversalFuturesBotGUI:
                 for attempt in range(1, 4):
                     try:
                         self.exchange.cancel_order(oid, symbol)
-                        time.sleep(0.2)
-                    except Exception as e:
+                        time.sleep(0.2)                    except Exception as e:
                         self.log(
                             f"GRID FLAT PROTECTION CANCEL WARNING | ID={oid} | "
                             f"Attempt={attempt} | {e}"
@@ -8989,7 +9090,8 @@ class UniversalFuturesBotGUI:
                 raise RuntimeError("New Grid TP/SL could not be verified as active.")
         except Exception as e:
             # Roll back only newly created orders. The old protection remains.
-            for order in (new_tp, new_sl):                oid = str(order.get("id") or "") if order else ""
+            for order in (new_tp, new_sl):
+                oid = str(order.get("id") or "") if order else ""
                 if oid:
                     try:
                         self.exchange.cancel_order(oid, symbol)
@@ -9601,27 +9703,67 @@ class UniversalFuturesBotGUI:
 
         sl_mode = self.v_sl_mode.get().strip().upper(); tp_mode = self.v_tp_mode.get().strip().upper()
         if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
-            raise ValueError(f"Unknown SL/TP mode: SL={sl_mode} TP={tp_mode}")
-        hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
-        if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
-            raise ValueError("SL Mode RISK_% requires Sizing Mode FIXED_QTY.")
-        if sl_mode == "RISK_%" and hold_all_reverse:
-            raise ValueError("SL Mode RISK_% cannot be combined with Hold-All-Reverse.")
-        if float(self.e_sl_pct.get()) <= 0 or float(self.e_hold_sl_roi.get()) <= 0 or float(self.e_tp1_pct.get()) <= 0 or float(self.e_tp2_pct.get()) <= 0:
-            raise ValueError("SL/TP targets and Hold-All-Reverse SL ROI must be greater than 0.")
-        if bool(self.v_use_atr_sl.get()):
-            if float(self.e_atr_sl_mult.get()) <= 0:
-                raise ValueError("ATR SL Multiplier must be greater than 0.")
-            if float(self.e_atr_tp1_mult.get()) <= 0 or float(self.e_atr_tp2_mult.get()) <= 0:
-                raise ValueError("ATR TP multipliers must be greater than 0.")
-        tp_qty_mode = self.v_tp_qty_mode.get().strip().upper()
-        if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
-            raise ValueError(f"Unknown TP quantity mode: {tp_qty_mode}")
-        tp1_close = float(self.e_tp1_close.get()); tp2_close = float(self.e_tp2_close.get())
-        if tp1_close <= 0 or tp2_close <= 0:
-            raise ValueError("TP1 and TP2 close values must both be greater than 0.")
-        if tp_qty_mode == "PERCENT_%" and abs((tp1_close + tp2_close) - 100.0) > 1e-9:
-            raise ValueError("TP1 + TP2 close percentages must equal 100%.")
+            raise ValueError(f"Unknown legacy SL/TP mode: SL={sl_mode} TP={tp_mode}")
+
+        reverse_exit_mode = self.v_reverse_exit_mode.get().strip().upper()
+        min_reverse_families = int(self.e_min_reverse_families.get().strip())
+        if reverse_exit_mode not in REVERSAL_EXIT_MODES:
+            raise ValueError("Reverse Exit Rule must be ALL_ACTIVE or MIN_FAMILIES.")
+        if not 1 <= min_reverse_families <= len(EVIDENCE_FAMILY_ORDER):
+            raise ValueError("Minimum Reverse Families must be between 1 and 4.")
+        if self.v_hold_sl_wait_reversal.get() and not self.v_hold_until_all_reverse.get():
+            raise ValueError("Hold-SL WAIT requires Hold Position Until Reverse to be ON.")
+
+        size_mode = "EQUITY_RISK_%" if self.v_risk_sizing_enabled.get() else "FIXED_QTY"
+        risk_pct = float(self.e_risk_pct.get()); fixed_qty = float(self.e_fixed_qty.get())
+        if not 0 < risk_pct < 100 or fixed_qty <= 0:
+            raise ValueError("Risk Per Trade must be >0 and <100%; Fixed Qty must be >0.")
+
+        if self.v_sl_enabled.get():
+            roi_sl = float(self.e_roi_sl.get())
+            fallback_sl_roi = float(self.e_fallback_sl_roi.get())
+            if self.v_roi_sl_enabled.get() and roi_sl <= 0:
+                raise ValueError("Normal ROI SL must be greater than 0.")
+            if self.v_fallback_sl_enabled.get() and fallback_sl_roi <= 0:
+                raise ValueError("Fallback SL ROI must be greater than 0.")
+            if not self.v_simple_atr_sl_enabled.get() and not self.v_roi_sl_enabled.get() and not self.v_fallback_sl_enabled.get() and not self.v_hold_sl_wait_reversal.get():
+                raise ValueError("At least one normal SL source must be enabled, unless Hold-SL WAIT is active.")
+        else:
+            if not self.v_hold_sl_wait_reversal.get():
+                raise ValueError("Normal SL Engine cannot be disabled for a new position unless Hold-SL WAIT is active.")
+
+        if self.v_simple_atr_sl_enabled.get() and float(self.e_atr_sl_mult.get()) <= 0:
+            raise ValueError("ATR SL multiplier must be greater than 0.")
+        if self.v_simple_atr_tp_enabled.get() and (float(self.e_atr_tp1_mult.get()) <= 0 or float(self.e_atr_tp2_mult.get()) <= 0):
+            raise ValueError("ATR TP multipliers must be greater than 0.")
+
+        if self.v_tp_enabled.get():
+            tp1_on = self.v_tp1_enabled.get(); tp2_on = self.v_tp2_enabled.get()
+            if not tp1_on and not tp2_on:
+                raise ValueError("TP Engine is ON but both TP1 and TP2 are OFF.")
+            if tp1_on and float(self.e_roi_tp1.get()) <= 0:
+                raise ValueError("TP1 ROI must be greater than 0.")
+            if tp2_on and float(self.e_roi_tp2.get()) <= 0:
+                raise ValueError("TP2 ROI must be greater than 0.")
+            if tp1_on and tp2_on and float(self.e_roi_tp2.get()) <= float(self.e_roi_tp1.get()):
+                raise ValueError("TP2 ROI must be greater than TP1 ROI.")
+            tp1_close = float(self.e_tp1_close.get()); tp2_close = float(self.e_tp2_close.get())
+            if tp1_on and tp2_on and self.v_tp_qty_mode.get().strip().upper() == "PERCENT_%" and abs(tp1_close+tp2_close-100.0)>1e-9:
+                raise ValueError("TP1 + TP2 close percentages must equal 100%.")
+
+        hold_sl_roi = float(self.e_hold_sl_roi.get())
+        if self.v_hold_until_all_reverse.get() and hold_sl_roi <= 0:
+            raise ValueError("Hold-All-Reverse SL ROI must be greater than 0.")
+
+        # Legacy preflight remains valid when explicitly selected.
+        if self.v_legacy_protection_enabled.get():
+            if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
+                raise ValueError("Legacy SL Mode RISK_% requires Fixed Qty sizing.")
+            if sl_mode == "RISK_%" and self.v_hold_until_all_reverse.get():
+                raise ValueError("Legacy SL Mode RISK_% cannot be combined with Hold-All-Reverse.")
+            if float(self.e_sl_pct.get()) <= 0 or float(self.e_tp1_pct.get()) <= 0 or float(self.e_tp2_pct.get()) <= 0:
+                raise ValueError("Legacy SL/TP targets must be greater than 0.")
+
         return True
 
     def _validate_v83_preflight(self):
@@ -9846,7 +9988,6 @@ class UniversalFuturesBotGUI:
                     "peak_equity": 0.0, "paused_until": 0.0,
                     "auto_direction": None,
                 }
-
                 grid_cfg = self._grid_initialize(
                     self.symbol,
                     self.start_balance,
@@ -9988,7 +10129,8 @@ class UniversalFuturesBotGUI:
             self.log(
                 f"TRADE SESSION: Max Completed Trades={max_trades if max_trades > 0 else 'UNLIMITED'} | "
                 f"Max Open Trades={max_open_trades} | "
-                f"Estimated Window={self.lbl_est_time.cget('text')} | "                f"Actual duration may be longer if signals do not occur every candle."
+                f"Estimated Window={self.lbl_est_time.cget('text')} | "
+                f"Actual duration may be longer if signals do not occur every candle."
             )
 
             enabled_modules = []
@@ -10168,6 +10310,15 @@ class UniversalFuturesBotGUI:
                 f"Minimum Score={min_score}"
             )
             self.log(
+                f"SIZING: {'EQUITY_RISK_%' if self.v_risk_sizing_enabled.get() else 'FIXED_QTY'} | "
+                + (f"Risk Per Trade={self.e_risk_pct.get().strip()}%" if self.v_risk_sizing_enabled.get() else f"Fixed Qty={self.e_fixed_qty.get().strip()} | Risk % not used for entry size")
+            )
+            self.log(
+                f"GLOBAL SAFETY: DailyDD={'ON' if self.v_max_dd_enabled.get() else 'OFF'}({self.e_max_dd.get().strip()}%) | "
+                f"EmergencyStop={'ON' if self.v_emergency_enabled.get() else 'OFF'}({self.e_emergency_capital_pct.get().strip()}%) | "
+                f"Scope={self.v_emergency_scope.get().strip().upper()}"
+            )
+            self.log(
                 "DEFAULT PROFILE CONTRACT: "
                 f"Adaptive Edge={adaptive_edge:.2f} | MinWeight={adaptive_min_weight:.2f} | "
                 f"Evidence Families={evidence_min_families} | FamilyScore={evidence_family_min_score:.2f} | "
@@ -10199,14 +10350,17 @@ class UniversalFuturesBotGUI:
                     f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
                     "ATR/ADX are regime gates only."
                 )
-            self.log(
-                "REVERSAL HOLD: "
-                + (
-                    "ON | Wait for ALL active directional signals to reverse."
-                    if self.v_hold_until_all_reverse.get()
-                    else "OFF | Normal signal reversal."
+            if self.v_hold_until_all_reverse.get():
+                self.log(
+                    "REVERSAL HOLD: ON | "
+                    + (
+                        "ALL active directional signals must reverse."
+                        if self.v_reverse_exit_mode.get().strip().upper() == "ALL_ACTIVE"
+                        else f"At least {int(self.e_min_reverse_families.get().strip())} evidence families must reverse."
+                    )
                 )
-            )
+            else:
+                self.log("REVERSAL HOLD: OFF | Opposite signal can execute normal reversal.")
             self.log(
                 "POST-SL OPPOSITE LOCK: "
                 + (
@@ -10218,6 +10372,19 @@ class UniversalFuturesBotGUI:
             self.log(
                 "POST-SL LOCK RULE: If SL/BE closes a trade, the bot waits for a valid opposite signal "
                 "using the selected signal mode; TP1/TP2 exits do not create this lock."
+            )
+            self.log(
+                "PROTECTION CONFIG: Engine="
+                + ("LEGACY_R9.3" if self.v_legacy_protection_enabled.get() else "SIMPLE_ROI")
+                + f" | SL={'ON' if self.v_sl_enabled.get() else 'OFF'}"
+                + f" | ROI_SL={'ON' if self.v_roi_sl_enabled.get() else 'OFF'}({self.e_roi_sl.get().strip()}% ROI)"
+                + f" | ATR_SL={'ON' if self.v_simple_atr_sl_enabled.get() else 'OFF'}({self.e_atr_sl_mult.get().strip()}x)"
+                + f" | Fallback_SL={'ON' if self.v_fallback_sl_enabled.get() else 'OFF'}({self.e_fallback_sl_roi.get().strip()}% ROI)"
+                + f" | TP={'ON' if self.v_tp_enabled.get() else 'OFF'}"
+                + f" | TP1={'ON' if self.v_tp1_enabled.get() else 'OFF'}({self.e_roi_tp1.get().strip()}% ROI)"
+                + f" | TP2={'ON' if self.v_tp2_enabled.get() else 'OFF'}({self.e_roi_tp2.get().strip()}% ROI)"
+                + f" | ATR_TP={'ON' if self.v_simple_atr_tp_enabled.get() else 'OFF'}"
+                + f" | TP1_BE={'ON' if self.v_tp1_be.get() else 'OFF'}"
             )
 
             self.log(
@@ -10250,8 +10417,8 @@ class UniversalFuturesBotGUI:
                 else signal_mode
             )
             self.runtime_strategy_modules = " | ".join(enabled_modules) if enabled_modules else "None"
-            self.runtime_sizing_mode = str(self.v_size_mode.get()).strip().upper()
-            self.runtime_protection_basis = ("FIXED_QTY_RISK_SL" if str(self.v_sl_mode.get()).strip().upper() == "RISK_%" else "CONFIGURED_SL_OR_ATR")
+            self.runtime_sizing_mode = ("EQUITY_RISK_%" if bool(self.v_risk_sizing_enabled.get()) else "FIXED_QTY")
+            self.runtime_protection_basis = ("LEGACY_R9.3" if bool(self.v_legacy_protection_enabled.get()) else ("HOLD_ALL_REVERSE" if bool(self.v_hold_until_all_reverse.get()) else "SIMPLE_ROI"))
             self.runtime_config_hash = self._config_hash()
             if not self.session_id:
                 self.session_id = str(uuid.uuid4())
@@ -10820,8 +10987,7 @@ class UniversalFuturesBotGUI:
         if evidence_require_trend is None:
             evidence_require_trend = bool(self.v_evidence_require_trend.get())
         if evidence_require_independent is None:
-            evidence_require_independent = bool(self.v_evidence_require_independent.get())
-        return StrategyEngine.decide_signal(
+            evidence_require_independent = bool(self.v_evidence_require_independent.get())        return StrategyEngine.decide_signal(
             directional_modules,
             signal_mode,
             min_score,
@@ -10837,6 +11003,91 @@ class UniversalFuturesBotGUI:
             evidence_require_trend,
             evidence_require_independent,
         )
+
+    def _evaluate_reversal_hold(self, position_side, hold_directional_modules):
+        """Evaluate the R9.5 strategy-reversal exit rule.
+
+        ALL_ACTIVE:
+            Every enabled directional module must be on the opposite side.
+
+        MIN_FAMILIES:
+            Count evidence families whose weighted directional state has flipped
+            to the opposite side. Correlated indicators inside one family count
+            once. ATR/ADX are intentionally excluded because they are regime gates.
+        """
+        mode = str(
+            self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)
+        ).strip().upper()
+        try:
+            minimum_families = int(
+                self._runtime_gui_value(
+                    "e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES
+                )
+            )
+        except Exception:
+            minimum_families = DEFAULT_MIN_REVERSE_FAMILIES
+        minimum_families = max(1, min(len(EVIDENCE_FAMILY_ORDER), minimum_families))
+
+        directional = [
+            (name, bool(bull), bool(bear))
+            for name, bull, bear in (hold_directional_modules or [])
+            if name not in ("ATR", "ADX")
+        ]
+
+        if not directional:
+            return False, "NONE", [], []
+
+        if mode == "ALL_ACTIVE":
+            checks = []
+            for name, bull, bear in directional:
+                opposite = bool(bear if position_side == "LONG" else bull)
+                checks.append((name, opposite))
+            not_reversed = [name for name, ok in checks if not ok]
+            return (
+                not not_reversed,
+                "ALL_ACTIVE",
+                [name for name, ok in checks if ok],
+                not_reversed,
+            )
+
+        # MIN_FAMILIES: weighted family direction. A family is considered
+        # reversed only when the opposite-side weight strictly exceeds the
+        # original-side weight. This prevents one weak module from declaring
+        # a correlated family reversed while the family remains conflicted.
+        buckets = {}
+        for name, bull, bear in directional:
+            family = REVERSAL_FAMILY_MAP.get(name)
+            if not family:
+                continue
+            weight = float(ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0))
+            bucket = buckets.setdefault(
+                family, {"bull": 0.0, "bear": 0.0, "active": 0}
+            )
+            if bull and not bear:
+                bucket["bull"] += weight
+                bucket["active"] += 1
+            elif bear and not bull:
+                bucket["bear"] += weight
+                bucket["active"] += 1
+
+        active_families = []
+        reversed_families = []
+        waiting_families = []
+        for family, bucket in buckets.items():
+            if bucket["active"] <= 0:
+                continue
+            active_families.append(family)
+            same_weight = bucket["bull"] if position_side == "LONG" else bucket["bear"]
+            opposite_weight = bucket["bear"] if position_side == "LONG" else bucket["bull"]
+            if opposite_weight > 0 and opposite_weight > same_weight:
+                reversed_families.append(family)
+            else:
+                waiting_families.append(family)
+
+        required = min(minimum_families, len(active_families))
+        allowed = bool(active_families) and len(reversed_families) >= required
+        return allowed, "MIN_FAMILIES", reversed_families, waiting_families
+
 
     # -------------------- MAIN LOOP --------------------------
 
@@ -10987,6 +11238,7 @@ class UniversalFuturesBotGUI:
                 raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
             if vidya_entry_mode not in ("CURRENT_TREND", "FRESH_FLIP"):
                 raise ValueError("VIDYA Entry must be CURRENT_TREND or FRESH_FLIP.")
+
             use_nwe = self._runtime_gui_value("v_use_nwe")
             nwe_bandwidth = float(self._runtime_gui_value("e_nwe_bandwidth"))
             nwe_mult = float(self._runtime_gui_value("e_nwe_mult"))
@@ -11182,6 +11434,8 @@ class UniversalFuturesBotGUI:
             if fixed_qty <= 0:
                 raise ValueError("Fixed Qty must be greater than 0.")
 
+            max_dd_enabled = bool(self._runtime_gui_value("v_max_dd_enabled", True))
+            emergency_enabled = bool(self._runtime_gui_value("v_emergency_enabled", True))
             max_dd = (
                 float(
                     self._runtime_gui_value("e_max_dd")
@@ -11200,178 +11454,145 @@ class UniversalFuturesBotGUI:
                 self._runtime_gui_value("e_lev").strip()
             )
 
+            # ----------------------------------------------------------------
+            # R9.6 UNIFIED PROTECTION CONTRACT
+            # ----------------------------------------------------------------
+            leverage = int(self._runtime_gui_value("e_lev").strip())
+            if leverage <= 0:
+                raise ValueError("Leverage must be greater than 0.")
+
+            use_legacy_protection = bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+            hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+            hold_wait_reversal = bool(hold_all_reverse and self._runtime_gui_value("v_hold_sl_wait_reversal", False))
+            reverse_exit_mode = str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper()
+            min_reverse_families = int(self._runtime_gui_value("e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)
+            if reverse_exit_mode not in REVERSAL_EXIT_MODES:
+                raise ValueError("Reverse Exit Rule must be ALL_ACTIVE or MIN_FAMILIES.")
+            if not 1 <= min_reverse_families <= len(EVIDENCE_FAMILY_ORDER):
+                raise ValueError("Minimum Reverse Families must be between 1 and 4.")
+            if hold_wait_reversal and not hold_all_reverse:
+                raise ValueError("Hold-SL WAIT requires Hold Position Until Reverse to be ON.")
+
+            # Risk sizing toggle is authoritative for NORMAL strategy entry sizing.
+            risk_sizing_enabled = bool(self._runtime_gui_value("v_risk_sizing_enabled", True))
+            size_mode = "EQUITY_RISK_%" if risk_sizing_enabled else "FIXED_QTY"
+            risk_pct = float(self._runtime_gui_value("e_risk_pct"))
+            fixed_qty = float(self._runtime_gui_value("e_fixed_qty"))
+            if not 0 < risk_pct < 100:
+                raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
+            if fixed_qty <= 0:
+                raise ValueError("Fixed Qty must be greater than 0.")
+
+            tp_qty_mode = str(self._runtime_gui_value("v_tp_qty_mode", "PERCENT_%")).strip().upper()
+            tp1_close_value = float(self._runtime_gui_value("e_tp1_close", 50))
+            tp2_close_value = float(self._runtime_gui_value("e_tp2_close", 50))
+            if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
+                raise ValueError(f"Unknown TP quantity mode: {tp_qty_mode}")
+            if tp1_close_value <= 0 or tp2_close_value <= 0:
+                raise ValueError("TP close values must be greater than 0.")
+            if tp_qty_mode == "PERCENT_%" and abs((tp1_close_value + tp2_close_value) - 100.0) > 1e-9:
+                raise ValueError("TP1 + TP2 close percentages must equal 100%.")
+
+            # New simple fields. Legacy fields remain stored and validated only when legacy mode is selected.
+            simple_sl_enabled = bool(self._runtime_gui_value("v_sl_enabled", True))
+            simple_roi_sl_enabled = bool(self._runtime_gui_value("v_roi_sl_enabled", True))
+            roi_sl_target = float(self._runtime_gui_value("e_roi_sl", DEFAULT_SIMPLE_SL_ROI))
+            simple_atr_sl_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", False))
+            fallback_sl_enabled = bool(self._runtime_gui_value("v_fallback_sl_enabled", True))
+            fallback_sl_roi = float(self._runtime_gui_value("e_fallback_sl_roi", DEFAULT_SIMPLE_FALLBACK_SL_ROI))
+            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
+            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
+            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
+            tp1_roi = float(self._runtime_gui_value("e_roi_tp1", DEFAULT_SIMPLE_TP1_ROI))
+            tp2_roi = float(self._runtime_gui_value("e_roi_tp2", DEFAULT_SIMPLE_TP2_ROI))
+            atr_tp_enabled = bool(self._runtime_gui_value("v_simple_atr_tp_enabled", False))
+            atr_sl_mult = float(self._runtime_gui_value("e_atr_sl_mult", 1.8))
+            atr_tp1_mult = float(self._runtime_gui_value("e_atr_tp1_mult", 1.2))
+            atr_tp2_mult = float(self._runtime_gui_value("e_atr_tp2_mult", 2.2))
+
+            # Legacy values for explicit advanced mode.
             sl_mode = self._runtime_gui_value("v_sl_mode").strip().upper()
             tp_mode = self._runtime_gui_value("v_tp_mode").strip().upper()
-            if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%"):
-                raise ValueError(f"Unknown SL mode: {sl_mode}")
-            if tp_mode not in ("PRICE_%", "ROI_%"):
-                raise ValueError(f"Unknown TP mode: {tp_mode}")
-
-            sl_target_pct = float(
-                self._runtime_gui_value("e_sl_pct")
-            )
-            hold_sl_roi_pct = float(
-                self._runtime_gui_value("e_hold_sl_roi")
-            )
-            tp1_target_pct = float(
-                self._runtime_gui_value("e_tp1_pct")
-            )
-            tp2_target_pct = float(
-                self._runtime_gui_value("e_tp2_pct")
-            )
-
-            use_atr_sl = bool(self._runtime_gui_value("v_use_atr_sl"))
-            atr_sl_mult = float(self._runtime_gui_value("e_atr_sl_mult"))
-            atr_tp1_mult = float(self._runtime_gui_value("e_atr_tp1_mult"))
-            atr_tp2_mult = float(self._runtime_gui_value("e_atr_tp2_mult"))
-            if use_atr_sl:
-                if atr_sl_mult <= 0 or atr_tp1_mult <= 0 or atr_tp2_mult <= 0:
-                    raise ValueError("ATR SL/TP multipliers must be greater than 0.")
-                if atr_sl_mult > 10 or atr_tp1_mult > 20 or atr_tp2_mult > 50:
-                    raise ValueError(
-                        "ATR Dynamic multipliers are outside the safety range: "
-                        "SL<=10x, TP1<=20x, TP2<=50x."
-                    )
-
-            tp_qty_mode = (
-                self._runtime_gui_value("v_tp_qty_mode")
-            )
-
-            tp1_close_value = float(
-                self._runtime_gui_value("e_tp1_close")
-            )
-
-            tp2_close_value = float(
-                self._runtime_gui_value("e_tp2_close")
-            )
-
-            # Basic configuration validation.
-            if (
-                sl_target_pct <= 0
-                or hold_sl_roi_pct <= 0
-                or tp1_target_pct <= 0
-                or tp2_target_pct <= 0
-            ):
-                raise ValueError(
-                    "SL/TP targets and Hold-All-Reverse SL ROI must be greater than 0."
-                )
-
-            if leverage <= 0:
-                raise ValueError(
-                    "Leverage must be greater than 0."
-                )
-
+            sl_target_pct = float(self._runtime_gui_value("e_sl_pct"))
+            tp1_target_pct = float(self._runtime_gui_value("e_tp1_pct"))
+            tp2_target_pct = float(self._runtime_gui_value("e_tp2_pct"))
+            hold_sl_roi_pct = float(self._runtime_gui_value("e_hold_sl_roi"))
+            legacy_atr_enabled = bool(self._runtime_gui_value("v_use_atr_sl"))
             if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
-                raise ValueError(f"Unknown SL/TP mode: SL={sl_mode} TP={tp_mode}")
+                raise ValueError(f"Unknown legacy SL/TP mode: SL={sl_mode} TP={tp_mode}")
+            if min(roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct, sl_target_pct, tp1_target_pct, tp2_target_pct) <= 0:
+                raise ValueError("All enabled SL/TP targets must be greater than 0.")
+            if not all(np.isfinite(x) for x in (roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct)):
+                raise ValueError("SL/TP targets must be finite numbers.")
+            if atr_sl_mult <= 0 or atr_tp1_mult <= 0 or atr_tp2_mult <= 0:
+                raise ValueError("ATR multipliers must be greater than 0.")
+            if atr_sl_mult > 10 or atr_tp1_mult > 20 or atr_tp2_mult > 50:
+                raise ValueError("ATR Dynamic multipliers are outside the safety range.")
 
-            if tp_qty_mode not in (
-                "PERCENT_%",
-                "FIXED_QTY",
-            ):
-                raise ValueError(
-                    f"Unknown TP quantity mode: {tp_qty_mode}"
-                )
-
-            if tp1_close_value <= 0 or tp2_close_value <= 0:
-                raise ValueError(
-                    "TP1 and TP2 close values must both be greater than 0."
-                )
-
-            if (
-                tp_qty_mode == "PERCENT_%"
-                and abs((tp1_close_value + tp2_close_value) - 100.0) > 1e-9
-            ):
-                raise ValueError(
-                    "TP1 + TP2 close percentages must equal 100%."
-                )
-
-            # Hold-All-Reverse has its own dedicated hard-stop setting.
-            # When ON, the stop is ALWAYS interpreted as ROI %, independent
-            # of the normal SL Mode / SL Target controls.
-            hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse"))
-            effective_sl_target_pct = (
-                hold_sl_roi_pct if hold_all_reverse else sl_target_pct
-            )
-            if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
-                raise ValueError(
-                    "SL Mode RISK_% is only valid with Sizing Mode FIXED_QTY."
-                )
-            if sl_mode == "RISK_%" and hold_all_reverse:
-                raise ValueError(
-                    "SL Mode RISK_% cannot be combined with Hold-All-Reverse."
-                )
-            effective_sl_mode = (
-                "ROI_%" if hold_all_reverse else ("RISK_%" if sl_mode == "RISK_%" else ("ATR_DYNAMIC" if use_atr_sl else sl_mode))
-            )
-
-            # The sizing engine needs the actual market-price distance
-            # of the effective stop.
-            if sl_mode == "RISK_%":
-                # Fixed-Qty + RISK_% sizing does not need a pre-entry SL
-                # distance. The exact stop is calculated only after the actual
-                # exchange position quantity and entry are confirmed.
-                sl_price_fraction = 1e-9
-            elif use_atr_sl and not hold_all_reverse:
-                # Pre-entry fallback only; actual risk sizing is recalculated
-                # from the latest completed-candle ATR inside each cycle.
-                # Do not pass ATR_DYNAMIC into target_to_price_fraction because
-                # ATR is only known after the first completed-candle fetch.
-                sl_price_fraction = max(sl_target_pct / 100.0, 1e-9)
+            # Only one resolver is allowed to own normal protection.
+            # Pre-entry sizing distance is derived from the exact resolver priority.
+            effective_sl_mode = sl_mode
+            effective_sl_target_pct = sl_target_pct
+            effective_tp_mode = tp_mode
+            if use_legacy_protection:
+                if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
+                    raise ValueError("Legacy RISK_% SL requires FIXED_QTY sizing.")
+                if sl_mode == "RISK_%" and hold_all_reverse:
+                    raise ValueError("Legacy RISK_% SL cannot be combined with Hold-All-Reverse.")
+                effective_sl_target_pct = hold_sl_roi_pct if hold_all_reverse else sl_target_pct
+                effective_sl_mode = "ROI_%" if hold_all_reverse else ("ATR_DYNAMIC" if legacy_atr_enabled else sl_mode)
+                effective_tp_mode = tp_mode
+                if sl_mode == "RISK_%":
+                    sl_price_fraction = 1e-9
+                elif legacy_atr_enabled and not hold_all_reverse:
+                    sl_price_fraction = max(sl_target_pct / 100.0, 1e-9)
+                else:
+                    sl_price_fraction = self.target_to_price_fraction(effective_sl_target_pct, effective_sl_mode, leverage)
+                self.log(f"PROTECTION ENGINE: LEGACY R9.3 | SL={effective_sl_mode} | TP={effective_tp_mode}")
             else:
-                sl_price_fraction = (
-                    self.target_to_price_fraction(
-                        effective_sl_target_pct,
-                        effective_sl_mode,
-                        leverage,
-                    )
+                if hold_all_reverse:
+                    sl_price_fraction = self.target_to_price_fraction(hold_sl_roi_pct, "ROI_%", leverage)
+                elif not simple_sl_enabled:
+                    raise ValueError("Normal SL Engine is OFF. R9.6 blocks new entries unless Hold-SL WAIT is active.")
+                elif simple_atr_sl_enabled:
+                    # Actual completed-candle ATR is resolved later in the cycle; use ROI fallback for a pre-entry estimate.
+                    sl_price_fraction = self.target_to_price_fraction(roi_sl_target if simple_roi_sl_enabled else fallback_sl_roi, "ROI_%", leverage)
+                elif simple_roi_sl_enabled:
+                    sl_price_fraction = self.target_to_price_fraction(roi_sl_target, "ROI_%", leverage)
+                elif fallback_sl_enabled:
+                    sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
+                else:
+                    raise ValueError("No Simple ROI/ATR/Fallback SL source is enabled.")
+                self.log(
+                    "PROTECTION ENGINE: SIMPLE ROI | "
+                    f"SL={'HOLD' if hold_all_reverse else 'ATR' if simple_atr_sl_enabled else 'ROI' if simple_roi_sl_enabled else 'FALLBACK'} | "
+                    f"TP={'ATR' if atr_tp_enabled else 'ROI'} | TP1={'ON' if tp_engine_enabled and tp1_enabled else 'OFF'} | TP2={'ON' if tp_engine_enabled and tp2_enabled else 'OFF'}"
+                )
+                self.log(
+                    "SL RESOLUTION: HOLD-WAIT > ATR > ROI > FALLBACK. "
+                    "Only one SL is installed; no SL modes overlap."
                 )
 
             self.log(
-                f"SL mode: {sl_mode} | TP mode: {tp_mode} | "
-                f"Leverage={leverage}x"
+                f"SIZING MODE: {size_mode} | "
+                + (f"Risk={risk_pct:g}%" if risk_sizing_enabled else f"FixedQty={fixed_qty:g} | Risk Per Trade NOT used for entry size")
             )
-
-            if use_atr_sl:
-                self.log(
-                    f"ATR DYNAMIC SL/TP: ON | SL={atr_sl_mult:g} ATR | "
-                    f"TP1={atr_tp1_mult:g}x SL distance | TP2={atr_tp2_mult:g}x SL distance"
-                )
-                self.log(
-                    "User-facing entry protection will report actual Price % and ROI % "
-                    "from the completed-candle ATR and actual filled entry."
-                )
-            else:
-                self.log(
-                    f"Targets: SL={sl_target_pct:g}% | "
-                    f"TP1={tp1_target_pct:g}% | "
-                    f"TP2={tp2_target_pct:g}%"
-                )
+            self.log(f"HOLD-ALL-REVERSE: {'ON' if hold_all_reverse else 'OFF'} | ReverseExit={reverse_exit_mode} | MinReverseFamilies={min_reverse_families}")
 
             if hold_all_reverse:
-                if self._runtime_gui_value("v_hold_sl_wait_reversal"):
-                    self.log(
-                        f"HOLD-ALL-REVERSE SL: {hold_sl_roi_pct:g}% ROI | "
-                        "WAIT-FOR-ALL-REVERSE mode ON | No exchange SL; "
-                        "threshold triggers a wait, then ALL active signals must reverse."
-                    )
-                else:
-                    self.log(
-                        f"HOLD-ALL-REVERSE SL: {hold_sl_roi_pct:g}% ROI | "
-                        "Normal exchange hard SL is active."
-                    )
-
-            self.log(
-                f"TP close mode: {tp_qty_mode} | "
-                f"TP1={tp1_close_value:g} | "
-                f"TP2={tp2_close_value:g}"
-            )
-
-            if sl_mode == "ROI_%" or tp_mode == "ROI_%":
+                hold_rule = (
+                    "ALL_ACTIVE"
+                    if reverse_exit_mode == "ALL_ACTIVE"
+                    else f"MIN_FAMILIES({min_reverse_families})"
+                )
                 self.log(
-                    f"ROI-to-price conversion: "
-                    f"SL={sl_price_fraction * 100:.6g}% | "
-                    f"TP1={self.target_to_price_fraction(tp1_target_pct, tp_mode, leverage) * 100:.6g}% | "
-                    f"TP2={self.target_to_price_fraction(tp2_target_pct, tp_mode, leverage) * 100:.6g}%"
+                    f"HOLD-SL: {hold_sl_roi_pct:g}% ROI | Rule={hold_rule} | "
+                    + ("WAIT mode ON: no exchange SL; selected reversal rule controls exit." if hold_wait_reversal else "Hard exchange SL active; normal TP disabled.")
+                )
+            elif not use_legacy_protection:
+                self.log(
+                    f"SIMPLE ROI TARGETS: SL={roi_sl_target:g}% ROI | Fallback SL={fallback_sl_roi:g}% ROI | "
+                    f"TP1={tp1_roi:g}% ROI | TP2={tp2_roi:g}% ROI"
                 )
 
             grid_cfg = self._grid_validate_settings()
@@ -11411,7 +11632,7 @@ class UniversalFuturesBotGUI:
                         )
 
                     emergency_threshold = self.start_balance * (1.0 - emergency_capital_loss)
-                    if emergency_capital_loss > 0 and curr_equity <= emergency_threshold:
+                    if emergency_enabled and emergency_capital_loss > 0 and curr_equity <= emergency_threshold:
                         self._emergency_flatten_all_positions(
                             reason=f"Emergency Capital Loss Stop {emergency_capital_loss * 100:.2f}% reached",
                             equity=curr_equity,
@@ -11430,7 +11651,8 @@ class UniversalFuturesBotGUI:
                     )
 
                     if (
-                        max_dd > 0
+                        max_dd_enabled
+                        and max_dd > 0
                         and drawdown >= max_dd
                     ):
                         self.log(
@@ -11764,7 +11986,6 @@ class UniversalFuturesBotGUI:
                         or close
                         < df["ema"].iloc[-2]
                     )
-
                     # Optional EMA fast/slow directional module.
                     # FRESH_CROSS: BUY only on a fresh Fast-over-Slow crossover
                     #              on the latest completed candle; SELL only on
@@ -11986,7 +12207,8 @@ class UniversalFuturesBotGUI:
                     if use_liq_swings:
                         liq_bull_break = bool(df["liq_swing_high_break"].iloc[-2])
                         liq_bear_break = bool(df["liq_swing_low_break"].iloc[-2])
-                        if liq_entry_mode == "CURRENT_TREND":                            liq_state = int(df["liq_swing_trend"].iloc[-2])
+                        if liq_entry_mode == "CURRENT_TREND":
+                            liq_state = int(df["liq_swing_trend"].iloc[-2])
                             liq_bull = liq_state > 0
                             liq_bear = liq_state < 0
                         else:
@@ -12606,26 +12828,41 @@ class UniversalFuturesBotGUI:
                                 "configured Hold-SL ROI threshold has not been reached yet."
                             )
                         else:
-                            # IMPORTANT: a trend/signal change by ONE indicator is NOT
-                            # an exit. A live position is closed/reversed by strategy
-                            # only after ALL currently active directional modules have
-                            # reversed to the opposite side. The hard SL remains an
-                            # independent price-protection order and may only close the
-                            # trade when its price trigger is reached.
-                            opposite_checks = []
-                            for name, bull, bear in hold_directional_modules:
-                                opposite_checks.append((name, bool(bear if pos_type == "LONG" else bull)))
-                            not_reversed = [name for name, is_opposite in opposite_checks if not is_opposite]
-                            reversal_allowed = bool(opposite_checks) and not not_reversed
-                            if not reversal_allowed:
-                                self.log(
-                                    f"HOLD {pos_type}: signal={desired_side}; waiting for ALL active directional states to reverse. "
-                                    f"Waiting={', '.join(not_reversed) if not_reversed else 'NONE'}"
-                                )
+                            # R9.6 reversal hold uses the selectable R9.5 rule.
+                            # Correlated indicators inside one family never count as multiple families.
+                            (
+                                reversal_allowed,
+                                reversal_rule,
+                                reversed_states,
+                                waiting_states,
+                            ) = self._evaluate_reversal_hold(
+                                pos_type,
+                                hold_directional_modules,
+                            )
+                            if reversal_rule == "ALL_ACTIVE":
+                                if not reversal_allowed:
+                                    self.log(
+                                        f"HOLD {pos_type}: signal={desired_side}; "
+                                        "waiting for ALL active directional states to reverse. "
+                                        f"Waiting={', '.join(waiting_states) if waiting_states else 'NONE'}"
+                                    )
+                                else:
+                                    self.log(
+                                        f"HOLD {pos_type}: ALL active directional states reversed -> strategy reversal allowed."
+                                    )
                             else:
-                                self.log(
-                                    f"HOLD {pos_type}: ALL active directional states reversed -> strategy reversal allowed."
-                                )
+                                required = int(self._runtime_gui_value("e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)
+                                if not reversal_allowed:
+                                    self.log(
+                                        f"HOLD {pos_type}: signal={desired_side}; reverse rule=MIN_FAMILIES({required}) | "
+                                        f"Reversed={','.join(reversed_states) if reversed_states else 'NONE'} | "
+                                        f"Waiting={','.join(waiting_states) if waiting_states else 'NONE'}"
+                                    )
+                                else:
+                                    self.log(
+                                        f"HOLD {pos_type}: MIN_FAMILIES satisfied | "
+                                        f"Reversed={','.join(reversed_states)} | strategy reversal allowed."
+                                    )
 
                     if (
                         desired_side in ("LONG", "SHORT")
@@ -12745,15 +12982,20 @@ class UniversalFuturesBotGUI:
                         # ------------------------------------------------
                         entry_sl_price_fraction = sl_price_fraction
                         atr_entry_value = None
-                        if use_atr_sl and not hold_all_reverse and sl_mode != "RISK_%":
+                        if (use_legacy_protection and legacy_atr_enabled and not hold_all_reverse and sl_mode != "RISK_%") or (not use_legacy_protection and simple_atr_sl_enabled and not hold_all_reverse):
                             atr_entry_value = float(df["atr"].iloc[-2])
                             if not np.isfinite(atr_entry_value) or atr_entry_value <= 0:
-                                raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
-                            entry_sl_price_fraction = (
-                                atr_entry_value * atr_sl_mult / close
-                            )
-                            if entry_sl_price_fraction <= 0:
-                                raise RuntimeError("ATR_DYNAMIC_SL_DISTANCE_INVALID")
+                                if not use_legacy_protection and fallback_sl_enabled:                                    entry_sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
+                                    self.log("ATR SL unavailable: using configured fallback ROI SL for entry sizing.")
+                                elif not use_legacy_protection and simple_roi_sl_enabled:
+                                    entry_sl_price_fraction = self.target_to_price_fraction(roi_sl_target, "ROI_%", leverage)
+                                    self.log("ATR SL unavailable: using configured normal ROI SL for entry sizing.")
+                                else:
+                                    raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
+                            else:
+                                entry_sl_price_fraction = (atr_entry_value * atr_sl_mult / close)
+                                if entry_sl_price_fraction <= 0:
+                                    raise RuntimeError("ATR_DYNAMIC_SL_DISTANCE_INVALID")
 
                         entry_qty = (
                             self.calculate_entry_qty(
@@ -12859,26 +13101,21 @@ class UniversalFuturesBotGUI:
                                 sl_move,
                                 tp1_move,
                                 tp2_move,
-                            ) = (
-                                self.calculate_protection_prices(
-                                    self.symbol,
-                                    desired_side,
-                                    actual_entry,
-                                    actual_qty,
-                                    new_position.get("initial_margin", 0.0),
-                                    effective_sl_target_pct,
-                                    tp1_target_pct,
-                                    tp2_target_pct,
-                                    effective_sl_mode,
-                                    tp_mode,
-                                    leverage,
-                                    account_balance=curr_balance,
-                                    risk_pct=risk_pct,
-                                    atr_value=atr_entry_value,
-                                    atr_sl_multiplier=atr_sl_mult,
-                                    atr_tp1_multiplier=atr_tp1_mult,
-                                    atr_tp2_multiplier=atr_tp2_mult,
-                                )
+                                protection_source,
+                            ) = self._calculate_r96_protection_prices(
+                                self.symbol, desired_side, actual_entry, actual_qty,
+                                new_position.get("initial_margin", 0.0), leverage,
+                                atr_value=atr_entry_value, use_legacy=use_legacy_protection,
+                                hold_all_reverse=hold_all_reverse, hold_wait_reversal=hold_wait_reversal,
+                                simple_sl_enabled=simple_sl_enabled, simple_roi_sl_enabled=simple_roi_sl_enabled,
+                                roi_sl_target=roi_sl_target, simple_atr_sl_enabled=simple_atr_sl_enabled,
+                                fallback_sl_enabled=fallback_sl_enabled, fallback_sl_roi=fallback_sl_roi,
+                                simple_tp_enabled=tp_engine_enabled, tp1_enabled=tp1_enabled, tp2_enabled=tp2_enabled,
+                                tp1_roi=tp1_roi, tp2_roi=tp2_roi, simple_atr_tp_enabled=atr_tp_enabled,
+                                atr_sl_mult=atr_sl_mult, atr_tp1_mult=atr_tp1_mult, atr_tp2_mult=atr_tp2_mult,
+                                legacy_sl_target=effective_sl_target_pct, legacy_tp1_target=tp1_target_pct,
+                                legacy_tp2_target=tp2_target_pct, legacy_sl_mode=effective_sl_mode,
+                                legacy_tp_mode=tp_mode, account_balance=curr_balance, risk_pct=risk_pct,
                             )
 
                             self.log(
@@ -12898,45 +13135,32 @@ class UniversalFuturesBotGUI:
                                     f"ESTIMATED GROSS STOP RISK: {stop_risk_pct:.4f}% of current balance"
                                 )
 
-                            if use_atr_sl and sl_mode != "RISK_%" and not self._runtime_gui_value("v_hold_until_all_reverse"):
-                                atr_for_log = float(atr_entry_value or 0.0)
-                                margin_for_roi = float(actual_position_margin or 0.0)
-                                def _roi_from_move(move):
-                                    if margin_for_roi > 0:
-                                        pnl_abs = abs(float(move)) * float(actual_entry) * float(actual_qty)
-                                        return (pnl_abs / margin_for_roi) * 100.0
-                                    return abs(float(move)) * float(actual_position_leverage or leverage) * 100.0
+                            # Unified protection diagnostics: report the resolved source only;
+                            # never refer to an obsolete/unbound `use_atr_sl` variable.
+                            margin_for_roi = float(actual_position_margin or 0.0)
+                            def _roi_from_move(move):
+                                if move is None or float(move) <= 0:
+                                    return None
+                                if margin_for_roi > 0:
+                                    pnl_abs = abs(float(move)) * float(actual_entry) * float(actual_qty)
+                                    return (pnl_abs / margin_for_roi) * 100.0
+                                return abs(float(move)) * float(actual_position_leverage or leverage) * 100.0
 
-                                sl_roi = _roi_from_move(sl_move)
-                                tp1_roi = _roi_from_move(tp1_move)
-                                tp2_roi = _roi_from_move(tp2_move)
-                                self.log("SL/TP ENGINE — ATR DYNAMIC")
-                                self.log(
-                                    f"Entry Price = {actual_entry:.12g} | ATR = {atr_for_log:.12g} | "
-                                    f"ATR Multiplier = {atr_sl_mult:.2f}"
-                                )
-                                self.log(
-                                    f"SL = {sl:.12g} | Price -{sl_move * 100:.4f}% | ROI -{sl_roi:.2f}%"
-                                )
-                                self.log(
-                                    f"TP1 = {tp1:.12g} | Price +{tp1_move * 100:.4f}% | ROI +{tp1_roi:.2f}%"
-                                )
-                                self.log(
-                                    f"TP2 = {tp2:.12g} | Price +{tp2_move * 100:.4f}% | ROI +{tp2_roi:.2f}%"
-                                )
-
-                            if (
-                                (sl_mode == "ROI_%" or tp_mode == "ROI_%")
-                                and actual_position_margin > 0
-                            ):
-                                self.log(
-                                    "ROI targets converted using "
-                                    "ACTUAL POSITION MARGIN."
-                                )
-                            elif sl_mode == "ROI_%" or tp_mode == "ROI_%":
-                                self.log(
-                                    "ROI target conversion used configured leverage fallback."
-                                )
+                            resolved_sl_roi = _roi_from_move(sl_move)
+                            resolved_tp1_roi = _roi_from_move(tp1_move)
+                            resolved_tp2_roi = _roi_from_move(tp2_move)
+                            self.log(
+                                f"PROTECTION RESOLVED: Source={protection_source} | "
+                                f"SL PriceMove={sl_move * 100:.4f}%"
+                                + (f" | SL ROI={resolved_sl_roi:.2f}%" if resolved_sl_roi is not None else "")
+                            )
+                            self.log(
+                                "TP RESOLVED: "
+                                + (f"TP1 PriceMove={tp1_move * 100:.4f}%" if tp1 is not None else "TP1=OFF")
+                                + (f" | TP1 ROI={resolved_tp1_roi:.2f}%" if resolved_tp1_roi is not None else "")
+                                + (f" | TP2 PriceMove={tp2_move * 100:.4f}%" if tp2 is not None else " | TP2=OFF")
+                                + (f" | TP2 ROI={resolved_tp2_roi:.2f}%" if resolved_tp2_roi is not None else "")
+                            )
 
                             if self._runtime_gui_value("v_hold_until_all_reverse"):
                                 self.log(
@@ -12946,10 +13170,9 @@ class UniversalFuturesBotGUI:
                                 )
                             else:
                                 self.log(
-                                    f"PROTECTION CALCULATED FROM ACTUAL ENTRY: "
-                                    f"SL={sl:.12g} | "
-                                    f"TP1={tp1:.12g} | "
-                                    f"TP2={tp2:.12g}"
+                                    f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
+                                    f"TP1={(f'{tp1:.12g}' if tp1 is not None else 'OFF')} | "
+                                    f"TP2={(f'{tp2:.12g}' if tp2 is not None else 'OFF')} | Source={protection_source}"
                                 )
 
                             if self._runtime_gui_value("v_hold_until_all_reverse"):
@@ -12959,10 +13182,9 @@ class UniversalFuturesBotGUI:
                                 )
                             else:
                                 self.log(
-                                    f"PRICE MOVE EQUIVALENTS: "
-                                    f"SL={sl_move * 100:.6g}% | "
-                                    f"TP1={tp1_move * 100:.6g}% | "
-                                    f"TP2={tp2_move * 100:.6g}%"
+                                    f"PRICE MOVE EQUIVALENTS: SL={sl_move * 100:.6g}% | "
+                                    f"TP1={(f'{tp1_move * 100:.6g}%' if tp1 is not None else 'OFF')} | "
+                                    f"TP2={(f'{tp2_move * 100:.6g}%' if tp2 is not None else 'OFF')}"
                                 )
 
                             # ------------------------------------------------
@@ -12985,7 +13207,12 @@ class UniversalFuturesBotGUI:
                                 verified = True
                                 self.log(
                                     f"HOLD-SL WAIT MODE ACTIVE: threshold={sl:.12g} "
-                                    f"({hold_sl_roi_pct:g}% ROI). NO exchange SL placed. "                                    "The position will remain open until ALL active signals reverse."
+                                    f"({hold_sl_roi_pct:g}% ROI). NO exchange SL placed. "
+                                    + (
+                                        "Waiting for ALL active directional signals to reverse."
+                                        if str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() == "ALL_ACTIVE"
+                                        else f"Waiting for at least {int(self._runtime_gui_value('e_min_reverse_families', DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)} evidence families to reverse."
+                                    )
                                 )
                             else:
                                 created = (
@@ -13026,12 +13253,11 @@ class UniversalFuturesBotGUI:
                                 None,
                             )
                             tp1_order = next(
-                                (order for label, order in created if label == "TP1"),
-                                None,
+                                (order for label, order in created if label == "TP1"), None
                             )
                             tp2_order = next(
-                                (order for label, order in created if label == "TP2"),
-                                None,                            )
+                                (order for label, order in created if label == "TP2"), None
+                            )
 
                             self.last_protected_position = {
                                 "side": desired_side,
@@ -13048,6 +13274,7 @@ class UniversalFuturesBotGUI:
                             }
 
                             self.tp1_be_done = False
+                            self.tp1_be_enabled = bool(self._runtime_gui_value("v_tp1_be", True)) and bool(tp_engine_enabled and tp1_enabled and not hold_all_reverse)
                             # A fresh position is now active; any previous post-exit
                             # lock has already been cleared or satisfied.
                             self.reentry_direction_lock = None
@@ -13082,9 +13309,14 @@ class UniversalFuturesBotGUI:
                             )
                             if self._runtime_gui_value("v_hold_until_all_reverse"):
                                 if hold_wait_reversal:
+                                    rule_text = (
+                                        "ALL active directional signals"
+                                        if str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() == "ALL_ACTIVE"
+                                        else f"at least {int(self._runtime_gui_value('e_min_reverse_families', DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)} evidence families"
+                                    )
                                     self.log(
                                         "TP1/TP2 = DISABLED | Hold-SL WAIT mode: no exchange SL; "
-                                        "ROI threshold is monitored and ALL active signals must reverse to exit."
+                                        f"ROI threshold is monitored and {rule_text} must reverse to exit."
                                     )
                                 else:
                                     self.log(
