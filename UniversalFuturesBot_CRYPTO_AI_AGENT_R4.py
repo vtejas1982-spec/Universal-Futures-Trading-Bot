@@ -45,9 +45,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.2"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.2 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.2-DECISION-REASON-AI-FLOW-HOTFIX"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.3"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.3 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-27-R6.3-MIGRATION-PERSISTENCE-HOTFIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -61,8 +61,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 19  # R6.2 repairs AI decision-reason parameter contract and AI-Agent runtime flow diagnostics.
-RUNTIME_SCHEMA_VERSION = 19  # R6.2 runtime schema parity with repaired AI decision-reason contract.
+CONFIG_SCHEMA_VERSION = 20  # R6.3 persists successful config migrations so schema notices do not repeat.
+RUNTIME_SCHEMA_VERSION = 20  # R6.3 runtime schema parity with persisted config migration.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -138,7 +138,7 @@ AI_AGENT_LOW_VOL_ATR_PCT = 0.50
 # preset for a conservative/aggressive crypto trend-momentum profile; it is NOT
 # a profitability guarantee and it never changes API credentials, account mode,
 # symbol, or profile identity. The user must explicitly confirm before it applies.
-AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.2"
+AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.3"
 AI_AGENT_PRESET = {
     # Council / decision engine — the six AI-Agent controls.
     "ai_min_families": 3,
@@ -2452,7 +2452,7 @@ class UniversalFuturesBotGUI:
             var.set(value)
 
     def _apply_ai_agent_recommended_defaults(self):
-        """Apply the explicit R6.1 AI-Agent preset to the current profile UI.
+        """Apply the explicit R6.3 AI-Agent preset to the current profile UI.
 
         Credentials, exchange/account mode, symbol and profile identity are
         deliberately untouched. This method is called only after confirmation.
@@ -6253,9 +6253,8 @@ class UniversalFuturesBotGUI:
 
             if loaded_schema < CONFIG_SCHEMA_VERSION:
                 self.log(
-                    "CONFIG MIGRATION R3: sizing controls are initialized before load; "
-                    "saved size_mode/risk_sizing_enabled values are reconciled without changing "
-                    "the selected entry-sizing contract."
+                    "CONFIG MIGRATION: sizing compatibility controls are initialized before load; "
+                    "saved size_mode/risk_sizing_enabled values remain authoritative."
                 )
 
             # Clear every Entry-backed setting before inserting the profile.
@@ -7031,6 +7030,29 @@ class UniversalFuturesBotGUI:
             )
 
             self._refresh_runtime_gui_snapshot()
+
+            # R6.3: persist a successful schema migration so a profile does not
+            # emit the same "schema X -> Y" notice on every subsequent load.
+            # Only the schema marker and compatibility aliases are normalized;
+            # existing user values remain authoritative.
+            if loaded_schema < CONFIG_SCHEMA_VERSION:
+                migrated_cfg = dict(cfg)
+                migrated_cfg["config_schema_version"] = CONFIG_SCHEMA_VERSION
+
+                # Preserve the canonical ATR-SL key and keep the legacy alias
+                # synchronized for old readers. Never invent a new user value
+                # when neither key existed.
+                if "simple_atr_sl_enabled" not in migrated_cfg and "use_atr_sl" in migrated_cfg:
+                    migrated_cfg["simple_atr_sl_enabled"] = migrated_cfg["use_atr_sl"]
+                if "simple_atr_sl_enabled" in migrated_cfg:
+                    migrated_cfg["use_atr_sl"] = migrated_cfg["simple_atr_sl_enabled"]
+
+                self._write_json_atomic(config_path, migrated_cfg)
+                self.log(
+                    f"CONFIG MIGRATION COMPLETE: schema {loaded_schema or 'legacy'} -> "
+                    f"{CONFIG_SCHEMA_VERSION} persisted to {config_path}."
+                )
+
             self.log(
                 "Configuration loaded."
             )
