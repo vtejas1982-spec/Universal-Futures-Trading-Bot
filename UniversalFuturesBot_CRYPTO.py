@@ -44,9 +44,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R8"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-R8 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R8"
+APP_VERSION = "V8.4.2-CRYPTO-EVIDENCE-HARDENED-R9"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-R9 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-ENGINE-AUDIT-2026-09-27-R9"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -57,9 +57,11 @@ PROFILE_DIR = APP_DIR / "bot_profiles"
 MASTER_DB_FILE = str(APP_DIR / "universal_bot_master.db")
 MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 
+# R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
+# profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
 CONFIG_SCHEMA_VERSION = 10  # R8 adds explicit FIXED_QTY + RISK_% SL semantics
-RUNTIME_SCHEMA_VERSION = 7  # R8 records sizing/protection basis.
+RUNTIME_SCHEMA_VERSION = 8  # R9 adds worker identity + remote profile stop control.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "STRICT_ALL_FILTERS")
@@ -118,10 +120,12 @@ DEFAULT_NO_SAME_CANDLE = True
 DEFAULT_COOLDOWN_MIN = "15"
 DEFAULT_USE_DIVERGENCE = True
 DEFAULT_DIV_USE_ALL = True
-RISK_COST_BUFFER = 1.15
 MAX_CONSECUTIVE_CYCLE_ERRORS = 3
 MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS = 10
 MAX_STOP_WAIT_SECONDS = 20.0
+PROFILE_CONTROL_SCHEMA_VERSION = 1
+PROFILE_STATUS_HEARTBEAT_MS = 3000
+REMOTE_STOP_STALE_SECONDS = 300.0
 ACCOUNT_READ_RETRIES = 3
 ACCOUNT_READ_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 MAX_DATA_STALENESS_MULTIPLIER = 2.5
@@ -1807,6 +1811,9 @@ class UniversalFuturesBotGUI:
         self.runtime_config_hash = ""
         self.runtime_resumed = False
         self.profile_lock_fd = None
+        self.worker_pid = None
+        self.worker_started_at = 0.0
+        self._profile_status_refresh_job = None
 
         # Execution log is configured to auto-follow the newest message.
         self.log_autoscroll = True
@@ -1883,6 +1890,7 @@ class UniversalFuturesBotGUI:
         self.load_settings()
         self._refresh_runtime_gui_snapshot()
         self._refresh_profile_list(select_profile=self.bot_profile_id)
+        self._schedule_profile_status_heartbeat()
 
         # Give Tk time to finish constructing the GUI before showing a
         # recovery question.  A previous RUNNING/CRASHED checkpoint is never
@@ -1937,6 +1945,117 @@ class UniversalFuturesBotGUI:
 
     def _get_runtime_state_path(self, profile_id=None):
         return str(self._profile_paths(profile_id)[3])
+
+    def _get_profile_control_path(self, profile_id=None):
+        profile, folder, _, _ = self._profile_paths(profile_id)
+        return str(folder / "control.json")
+
+    def _write_profile_control(self, profile_id, action, reason=""):
+        profile = self._sanitize_profile_id(profile_id)
+        payload = {
+            "schema_version": PROFILE_CONTROL_SCHEMA_VERSION,
+            "profile": profile,
+            "action": str(action).upper(),
+            "request_id": str(uuid.uuid4()),
+            "requested_at_utc": datetime.now(timezone.utc).isoformat(),
+            "requested_by_pid": os.getpid(),
+            "reason": str(reason or "").strip(),
+        }
+        self._write_json_atomic(self._get_profile_control_path(profile), payload)
+        return payload
+
+    def _read_profile_control(self, profile_id=None):
+        payload = self._read_json_file(self._get_profile_control_path(profile_id))
+        return payload if isinstance(payload, dict) else None
+
+    def _clear_profile_control(self, profile_id=None, expected_request_id=None):
+        path = Path(self._get_profile_control_path(profile_id))
+        if not path.exists():
+            return
+        if expected_request_id:
+            payload = self._read_json_file(str(path)) or {}
+            if str(payload.get("request_id") or "") != str(expected_request_id):
+                return
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _schedule_profile_status_heartbeat(self):
+        try:
+            self._profile_status_refresh_job = self.root.after(
+                PROFILE_STATUS_HEARTBEAT_MS, self._profile_status_heartbeat
+            )
+        except Exception:
+            self._profile_status_refresh_job = None
+
+    def _profile_status_heartbeat(self):
+        try:
+            if getattr(self, "profile_tree", None) is not None:
+                selected = self._selected_profile_id()
+                self._refresh_profile_list(select_profile=selected)
+        except Exception:
+            pass
+        finally:
+            self._schedule_profile_status_heartbeat()
+
+    def _request_selected_profile_stop(self):
+        """Stop the selected profile, including a bot running in another GUI process."""
+        profile = self._selected_profile_id()
+        if not profile:
+            return
+        current = self._sanitize_profile_id(getattr(self, "bot_profile_id", ""))
+        same_process_worker = (
+            profile == current
+            and getattr(self, "bot_thread", None) is not None
+            and self.bot_thread.is_alive()
+        )
+        if same_process_worker:
+            self.stop_bot()
+            return
+
+        if not self._profile_lock_is_active(profile):
+            messagebox.showinfo("Profile not running", f"Profile {profile} is not currently running.")
+            return
+        if not messagebox.askyesno(
+            "Stop selected bot?",
+            f"Send a safe stop request to {profile}?
+
+"
+            "The running process will finish its current exchange operation, "
+            "preserve protection for an open normal-strategy position, and write "
+            "a final runtime checkpoint before stopping.",
+        ):
+            return
+        try:
+            request = self._write_profile_control(profile, "STOP", "Remote stop requested from Profile Manager")
+            self.log(
+                f"REMOTE STOP REQUESTED | Profile={profile} | Request={request['request_id']}"
+            )
+            self._refresh_profile_list(select_profile=profile)
+        except Exception as e:
+            messagebox.showerror("Remote stop failed", str(e))
+
+    def _consume_remote_stop_request(self):
+        """Consume a STOP control request for this worker without touching Tk widgets."""
+        profile = self._sanitize_profile_id(getattr(self, "bot_profile_id", "BOT-01"))
+        request = self._read_profile_control(profile)
+        if not isinstance(request, dict) or str(request.get("action") or "").upper() != "STOP":
+            return False
+        request_id = str(request.get("request_id") or "")
+        self.stop_requested = True
+        self.stop_started_at = time.time()
+        self.log(
+            f"REMOTE STOP ACKNOWLEDGED | Profile={profile} | Request={request_id or 'UNKNOWN'} | "
+            f"Reason={request.get('reason') or 'remote stop'}"
+        )
+        self._clear_profile_control(profile, expected_request_id=request_id or None)
+        try:
+            if self.grid_state.get("active"):
+                self._grid_stop(self.symbol, "Remote bot stop", cooldown_seconds=0)
+        except Exception as grid_stop_error:
+            self.log(f"REMOTE GRID STOP WARNING: {grid_stop_error}")
+        return True
 
     def _read_json_file(self, path):
         try:
@@ -2016,6 +2135,8 @@ class UniversalFuturesBotGUI:
             "resumed": bool(self.runtime_resumed),
             "stop_requested": bool(self.stop_requested),
             "stop_started_at": self.stop_started_at or None,
+            "worker_pid": self.worker_pid,
+            "worker_started_at": self.worker_started_at or None,
             "session_started_at": self.session_started_at,
             "session_max_trades": self.session_max_trades,
             "start_balance": self.start_balance,
@@ -2702,13 +2823,21 @@ class UniversalFuturesBotGUI:
             and getattr(self, "bot_thread", None)
             and self.bot_thread.is_alive()
         )
+        control = self._read_profile_control(profile) or {}
+        control_pending = str(control.get("action") or "").upper() == "STOP"
         if lock_active or same_profile_worker_alive:
-            status = "STOPPING" if bool(getattr(self, "stop_requested", False)) else "RUNNING"
-        elif status in {"RUNNING", "CRASHED", "STOPPING"} and not has_saved_position and not has_grid_state:
-            # A previous process may have died after writing RUNNING. With no
-            # live process lock and no saved position/Grid inventory, this is
-            # only a stale lifecycle marker, not an active trading process.
-            status = "STOPPED"
+            status = "STOPPING" if (control_pending or bool(getattr(self, "stop_requested", False))) else "RUNNING"
+        elif status in {"RUNNING", "CRASHED", "STOPPING", "PAUSED_WITH_POSITION"}:
+            # A runtime checkpoint is historical state, not proof that a worker
+            # is alive. Never display RUNNING after the process/lock is gone.
+            status = "RECOVERY_REQUIRED" if (has_saved_position or has_grid_state) else "STOPPED"
+            if control_pending:
+                try:
+                    control_ts = datetime.fromisoformat(str(control.get("requested_at_utc")).replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - control_ts).total_seconds() > REMOTE_STOP_STALE_SECONDS:
+                        self._clear_profile_control(profile, expected_request_id=control.get("request_id"))
+                except Exception:
+                    pass
         grid_mode = str(cfg.get("grid_mode") or "OFF").upper()
         signal_mode = str(cfg.get("signal_mode") or "SINGLE_SIGNAL").upper()
         strategy_mode = grid_mode if grid_mode not in ("OFF", "DIRECT_SHOT") else signal_mode
@@ -2825,7 +2954,8 @@ class UniversalFuturesBotGUI:
             f"Symbol / Pair  : {cfg.get('symbol', '')}",
             f"Timeframe      : {cfg.get('timeframe', '')}",
             f"Leverage       : {cfg.get('leverage', '')}x",
-            f"Max Trades     : {cfg.get('max_trades', '')}",
+            f"Max Trades     : {cfg.get('max_trades', '')} completed",
+            f"Max Open Pos   : {cfg.get('max_open_trades', DEFAULT_MAX_OPEN_TRADES)} (single-symbol hard cap)",
             f"Cooldown        : {cfg.get('cooldown_min', '')} min",
             f"No Same Candle : {cfg.get('no_same_candle', '')}",
             "",
@@ -2863,6 +2993,7 @@ class UniversalFuturesBotGUI:
             f"TP Quantity    : {cfg.get('tp_qty_mode', '')}",
             f"TP1 / TP2 Close: {cfg.get('tp1_close', '')} / {cfg.get('tp2_close', '')}",
             f"TP1 Break-Even : {cfg.get('tp1_be', '')}",
+            f"ATR Dynamic SL : {cfg.get('use_atr_sl', DEFAULT_ATR_SL_ENABLED)} | SL={cfg.get('atr_sl_mult', DEFAULT_ATR_SL_MULTIPLIER)}x | TP1={cfg.get('atr_tp1_mult', DEFAULT_ATR_TP1_MULTIPLIER)}x | TP2={cfg.get('atr_tp2_mult', DEFAULT_ATR_TP2_MULTIPLIER)}x",
             f"Hold-SL ROI    : {cfg.get('hold_sl_roi', '')}%",
             f"Hold-SL Wait   : {cfg.get('hold_sl_wait_reversal', '')}",
             "",
@@ -3752,6 +3883,12 @@ class UniversalFuturesBotGUI:
 
         ttk.Button(
             profile_buttons,
+            text="STOP Selected Bot",
+            command=self._request_selected_profile_stop,
+        ).pack(side="left", padx=2)
+
+        ttk.Button(
+            profile_buttons,
             text="Copy Selected Profile",
             command=self._copy_selected_profile,
         ).pack(side="left", padx=2)
@@ -3877,7 +4014,7 @@ class UniversalFuturesBotGUI:
         self.e_max_trades.insert(0, "10")
         self.e_max_trades.grid(row=1, column=1, padx=5, sticky="w")
 
-        tk.Label(f_market, text="Max Open Trades (per bot/symbol):").grid(row=1, column=2, sticky="e")
+        tk.Label(f_market, text="Max Open Trades (per bot/symbol, current engine = 1):").grid(row=1, column=2, sticky="e")
         self.e_max_open_trades = tk.Entry(f_market, width=7)
         self.e_max_open_trades.insert(0, str(DEFAULT_MAX_OPEN_TRADES))
         self.e_max_open_trades.grid(row=1, column=3, padx=5, sticky="w")
@@ -4893,6 +5030,8 @@ class UniversalFuturesBotGUI:
     def _on_worker_finished(self):
         """Finalize GUI/profile lifecycle after the execution worker exits."""
         self.bot_thread = None
+        self.worker_pid = None
+        self.worker_started_at = 0.0
         self.stop_requested = False
         self.stop_started_at = 0.0
         self._stop_completion_scheduled = False
@@ -5331,7 +5470,7 @@ class UniversalFuturesBotGUI:
             )
             self.v_no_same_candle.set(cfg.get("no_same_candle", DEFAULT_NO_SAME_CANDLE))
             self.e_cooldown_min.delete(0, tk.END)
-            self.e_cooldown_min.insert(0, cfg.get("cooldown_min", "0"))
+            self.e_cooldown_min.insert(0, cfg.get("cooldown_min", DEFAULT_COOLDOWN_MIN))
             self.v_require_opposite_after_exit.set(
             cfg.get(
                 "require_opposite_after_sl",
@@ -5642,7 +5781,7 @@ class UniversalFuturesBotGUI:
             self.e_trendline_retest.delete(0, tk.END)
             self.e_trendline_retest.insert(0, cfg.get("trendline_retest_candles", "3"))
 
-            self.v_use_divergence.set(cfg.get("use_divergence", False))
+            self.v_use_divergence.set(cfg.get("use_divergence", DEFAULT_USE_DIVERGENCE))
             for widget, key, default in (
                 (self.e_div_pivot, "div_pivot", "5"),
                 (self.e_div_min_count, "div_min_count", "1"),
@@ -8831,14 +8970,10 @@ class UniversalFuturesBotGUI:
         if max_open_trades < 0:
             raise ValueError("Max Open Trades cannot be negative.")
         if max_open_trades != 1:
-            self.log(
-                f"Max Open Trades={max_open_trades} requested, but this "
-                "single-symbol engine has a hard limit of 1 net position. "
-                "Normalizing to 1."
+            raise ValueError(
+                "Max Open Trades must be 1 in the current single-symbol/one-way futures engine. "
+                "Use Max Completed Trades for the number of trades in a session."
             )
-            self.e_max_open_trades.delete(0, tk.END)
-            self.e_max_open_trades.insert(0, "1")
-            max_open_trades = 1
         cooldown = float(str(self.e_cooldown_min.get()).strip())
         if cooldown < 0:
             raise ValueError("Cooldown cannot be negative.")
@@ -9094,6 +9229,8 @@ class UniversalFuturesBotGUI:
                 return
 
             self._acquire_profile_lock()
+            # A fresh session must not inherit an old remote STOP request.
+            self._clear_profile_control(self.bot_profile_id)
 
             exchange_id = (
                 self.v_exchange.get()
@@ -9160,13 +9297,10 @@ class UniversalFuturesBotGUI:
             if max_open_trades < 0:
                 raise ValueError("Max Open Trades cannot be negative.")
             if max_open_trades != 1:
-                self.log(
-                    f"Max Open Trades={max_open_trades} requested, but this "
-                    "single-symbol engine has a hard limit of 1 net position. "
-                    "Normalizing to 1."
+                raise ValueError(
+                    "Max Open Trades must be 1 in the current single-symbol/one-way futures engine. "
+                    "Use Max Completed Trades for the number of trades in a session."
                 )
-                max_open_trades = 1
-                max_open_trades = 1
 
             current_balance = self.fetch_balance_total()
             current_equity = self.fetch_account_equity()
@@ -9627,6 +9761,8 @@ class UniversalFuturesBotGUI:
             self.runtime_config_hash = self._config_hash()
             if not self.session_id:
                 self.session_id = str(uuid.uuid4())
+            self.worker_pid = os.getpid()
+            self.worker_started_at = time.time()
             self._db_session_start()
             self._persist_runtime_state(status="RUNNING")
 
@@ -10267,14 +10403,10 @@ class UniversalFuturesBotGUI:
             if max_open_trades < 0:
                 raise ValueError("Max Open Trades cannot be negative.")
             if max_open_trades != 1:
-                self.log(
-                    f"Max Open Trades={max_open_trades} requested, but this "
-                    "single-symbol engine has a hard limit of 1 net position. "
-                    "Normalizing to 1."
+                raise ValueError(
+                    "Max Open Trades must be 1 in the current single-symbol/one-way futures engine. "
+                    "Use Max Completed Trades for the number of trades in a session."
                 )
-                self.e_max_open_trades.delete(0, tk.END)
-                self.e_max_open_trades.insert(0, "1")
-                max_open_trades = 1
             self.log(f"MAX OPEN TRADES: {max_open_trades} net position per bot/symbol.")
             no_same_candle = self._runtime_gui_value("v_no_same_candle")
             try:
@@ -10796,6 +10928,10 @@ class UniversalFuturesBotGUI:
                 cycle_start = time.time()
 
                 try:
+                    if self._consume_remote_stop_request():
+                        self.is_running = False
+                        break
+
                     # ------------------------------------------------
                     # 1. Balance / drawdown
                     # ------------------------------------------------
@@ -12709,6 +12845,9 @@ class UniversalFuturesBotGUI:
                     self.is_running
                     and time.time() < end_time
                 ):
+                    if self._consume_remote_stop_request():
+                        self.is_running = False
+                        break
                     time.sleep(1)
 
         except Exception as fatal_error:
@@ -12719,6 +12858,10 @@ class UniversalFuturesBotGUI:
 
         finally:
             self.is_running = False
+            try:
+                self._clear_profile_control(self.bot_profile_id)
+            except Exception:
+                pass
 
             try:
                 live_position = None
