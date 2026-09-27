@@ -73,7 +73,7 @@ quantity = risk_amount / stop_distance
 
 So a configured **0.75** means **0.75%**.
 
-The backtester already used the percentage interpretation; R8 brings the live engine into parity with it.
+The backtester already used the percentage interpretation; R8 also adds the FIXED_QTY + RISK_% stop model so historical tests can represent the same risk-SL contract.
 
 ### 3. Exchange maximum quantity enforcement
 
