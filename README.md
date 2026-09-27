@@ -444,6 +444,22 @@ The Crypto AI-Agent engine was audited after a startup failure exposed a stale G
 
 See [Crypto AI Agent R6.1 release notes](docs/CRYPTO_AI_AGENT_R6_1_RELEASE_NOTES.md).
 
+## 2026-09-27 — Crypto AI Agent R6.2 decision-flow hotfix
+
+A demo run exposed a second AI-Agent integration mismatch after the R6.1 configuration hotfix: the direct `StrategyEngine.decision_reason()` call used GUI-oriented names (`ai_family_confidence`, `ai_max_conflicts`) while the StrategyEngine API expects `ai_min_family_confidence` and `ai_max_conflicting_families`.
+
+R6.2 fixes that call contract and improves AI-Agent startup/test behavior:
+- Fixed the two incorrect decision-reason keyword arguments.
+- Made the AI recommended preset explicitly show ATR-TP as ON, matching the runtime AI TP-management path.
+- Changed NEW-profile Hold-All-Reverse default to OFF so it does not suppress AI dynamic risk/ATR-SL/ATR-TP management.
+- Added a runtime notice when AI_AGENT is active without the confirmed recommended preset; current saved GUI settings remain unchanged.
+- Added a runtime diagnostic when HOLD-ALL-REVERSE is ON and therefore intentionally blocks the AI dynamic trade manager.
+- Configuration schema: 18 -> 19; runtime schema: 18 -> 19.
+
+The AI manager remains deterministic and bounded; these changes do not create a profitability guarantee.
+
+See [Crypto AI Agent R6.2 release notes](docs/CRYPTO_AI_AGENT_R6_2_RELEASE_NOTES.md).
+
 ## Release documentation
 
 - [Crypto R5 release notes](docs/CRYPTO_R5_RELEASE_NOTES.md)
