@@ -5,10 +5,12 @@
 - Live engine: `UniversalFuturesBot_CRYPTO.py`
 - Release marker: `V8.4.2-CRYPTO-EVIDENCE-HARDENED-R8`
 - Audit marker: `V8.4.2-ENGINE-AUDIT-2026-09-27-R8`
-- Config schema remains **9**: no new user-editable configuration field was introduced.
-- Runtime schema is now **6**: explicit stop-request lifecycle state was added.
+- Config schema is **10**: R8 formalizes the FIXED_QTY + RISK_% protection contract.
+- Runtime schema is now **7**: explicit stop-request lifecycle state plus sizing/protection-basis metadata.
 
 ## Why R8 was required
+
+R8 also hardens the GUI/worker boundary: Tkinter setting values are snapshotted on the GUI thread and read from that snapshot by the trading worker.
 
 The Bybit Demo validation exposed two separate production issues:
 
