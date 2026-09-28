@@ -10132,7 +10132,7 @@ def r65_save(self):
             "ai_min_tp1_r_mult":AI_AGENT_MIN_TP1_R_MULT,"ai_max_tp1_r_mult":AI_AGENT_MAX_TP1_R_MULT,
             "ai_min_tp2_r_mult":AI_AGENT_MIN_TP2_R_MULT,"ai_max_tp2_r_mult":AI_AGENT_MAX_TP2_R_MULT,
             "reverse_exit_mode":self.v_reverse_exit_mode.get(),"min_reverse_families":self.e_min_reverse_families.get(),
-            "grid_mode":self.v_grid_mode.get(),"liq_entry_mode":self.v_liq_entry_mode.get(),"div_min_count":self.e_div_min_count.get(),"div_entry_mode":self.v_div_entry_mode.get(),"max_open_trades":self.e_max_open_trades.get(),
+            "grid_mode":self.v_grid_mode.get(),"liq_entry_mode":self.v_liq_entry_mode.get(),"div_min_count":self.e_div_min_count.get(),"div_entry_mode":self.v_div_entry_mode.get(),"max_open_trades":self.e_max_open_trades.get(),"atr_tp1_mult":self.e_atr_tp1_mult.get(),"atr_tp2_mult":self.e_atr_tp2_mult.get(),
         })
         with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
     except Exception as e: self.log(f"R6.5 AI config save warning: {e}")
