@@ -1206,3 +1206,29 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 ### Existing resilience fixes retained
 - Bybit transient wallet-balance retry/backoff and recovery handling.
 - Managed-order terminal-state handling for Bybit 110001 so already-inactive orders do not repeatedly halt the bot.
+
+
+## 2026-09-29 — Crypto AI-Agent R6.7 final strategy/risk/protection audit
+
+### Fixed
+- Volume/SR live-state inconsistency: the live Volume/SR cache now excludes the newest in-progress candle for chart and HTF data.
+- Protection validation now evaluates only enabled SL/TP targets.
+- ATR TP validation requires TP2 to be greater than TP1 when both are enabled.
+- ATR SL/TP multiplier validation is feature-aware and fail-closed.
+
+### Verified / retained
+- AI-Agent configured thresholds and MTF gate diagnostics.
+- Evidence-family decision gates and regime filters.
+- Equity-risk sizing and fixed-quantity separation.
+- One full-position exchange-side SL plus independent TP1/TP2 reduce-only conditional exits.
+- TP quantity contract and actual-position quantity reconciliation.
+- TP1 break-even replacement with replacement-first safety.
+- Protection ACK/verification/reconciliation and rollback.
+- GUI callbacks, settings variables, defaults, profile save/load and schema migration.
+- Kill-switch, watchdog and fail-closed stop/recovery behavior.
+
+### Validation
+AST parse: PASS. Bytecode compile: PASS. Module import: PASS. GUI callback audit: PASS. AI decision/gate smoke tests: PASS. TP split smoke tests: PASS. Completed-candle Volume/SR smoke test: PASS.
+
+### Demo verification still required
+Confirm one full-position SL, TP1 and TP2 are visible as active Bybit conditional orders; confirm TP1 closes only its configured quantity and moves the remaining SL to break-even when enabled; confirm TP2 closes the remaining position.
