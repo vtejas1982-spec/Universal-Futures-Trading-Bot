@@ -12660,8 +12660,13 @@ class UniversalFuturesBotGUI:
                 if tp1_enabled and tp2_enabled:
                     if tp1_close_value <= 0 or tp2_close_value <= 0:
                         raise ValueError("TP1 and TP2 close values must be greater than 0.")
-                    if tp_qty_mode == "PERCENT_%" and abs((tp1_close_value + tp2_close_value) - 100.0) > 1e-9:
-                        raise ValueError("When both TP1 and TP2 are ON, their close percentages must equal 100%.")
+                    if tp_qty_mode == "PERCENT_%":
+                        if tp1_close_value >= 100.0 or tp2_close_value >= 100.0:
+                            raise ValueError("When both TP1 and TP2 are ON, each close percentage must be less than 100%.")
+                        if abs((tp1_close_value + tp2_close_value) - 100.0) > 1e-9:
+                            raise ValueError("When both TP1 and TP2 are ON, their close percentages must equal 100%.")
+                    elif tp1_close_value <= 0 or tp2_close_value <= 0:
+                        raise ValueError("TP1 and TP2 fixed quantities must be greater than 0.")
                 else:
                     enabled_value = tp1_close_value if tp1_enabled else tp2_close_value
                     if enabled_value <= 0:
