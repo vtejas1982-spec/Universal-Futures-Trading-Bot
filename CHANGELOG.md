@@ -1,3 +1,32 @@
+# V8.4.2 Forex AI Agent R6.5-HOTFIX1 — 2026-09-28
+
+## Fixed
+- Fixed the R6.5 startup exception: `UniversalFuturesBotGUI` no longer reaches `v_grid_mode` before the variable exists.
+- Added the missing R6.5 GUI/configuration contract fields: Liquidity Entry, Divergence Entry, Divergence Minimum Count, AI TP1 R and AI TP2 R.
+- Corrected the AI preset emergency scope from unsupported `BOT_SYMBOL` to MT5-supported `BOT_ONLY`.
+- Added S/R timeframe mappings to the AI preset callback.
+- Added AI TP1/TP2 persistence and validation; TP2 must remain above TP1.
+- Configuration schema advanced from 21 to 22. Runtime schema remains 22.
+
+## Modified
+- Forex Grid remains OFF-only; no grid execution path was introduced.
+- The R6.5 hotfix controls are initialized before configuration loading, preventing loader-order failures.
+- Forex backtester release marker updated to R6.5-HOTFIX1 while retaining the live engine as its strategy source of truth.
+- Expanded Forex R6.5 contract tests to cover GUI runtime variables and preset mappings.
+
+## Validation
+- AST parse: PASS.
+- Bytecode compilation: PASS.
+- Module import: PASS.
+- GUI runtime-variable declaration audit: PASS.
+- Callback binding audit: PASS.
+- AI council decision smoke test: PASS.
+- AI bounded risk/SL/TP manager smoke test: PASS.
+- Preset mapping audit: PASS.
+- Full live MT5 execution lifecycle was not claimed by this source-level hotfix audit.
+
+---
+
 # V8.4.2 Crypto repository cleanup + AI-Agent R6.5 current release — 2026-09-27
 
 ## Current production files
