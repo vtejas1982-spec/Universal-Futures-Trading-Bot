@@ -1,5 +1,5 @@
 """
-Universal Forex / MT5 AI-Agent R6.5 Backtester
+Universal Forex / MT5 AI-Agent R6.5-HOTFIX1 Backtester
 
 The production strategy source of truth is UniversalForexBot_MT5.py.
 
@@ -437,7 +437,7 @@ def main():
     losses=sum(1 for t in trades if getattr(t,"realized_net",0)<=0)
     gross_w=sum(max(0,getattr(t,"realized_net",0)) for t in trades)
     gross_l=sum(max(0,-getattr(t,"realized_net",0)) for t in trades)
-    metrics={"version":"V8.4.2-FOREX-AI-AGENT-R6.5-BT","symbol":a.symbol,"timeframe":a.timeframe,
+    metrics={"version":"V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1-BT","symbol":a.symbol,"timeframe":a.timeframe,
              "trades":len(trades),"wins":wins,"losses":losses,"win_rate_pct":wins/len(trades)*100 if trades else 0,
              "net_pnl":net,"return_pct":net/a.capital*100 if a.capital else 0,
              "max_drawdown_pct":float(abs(curve.dd_pct.min())) if not curve.empty else 0,
