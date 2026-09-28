@@ -62,8 +62,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 23  # R6.7 protection-order/reconciliation contract; existing saved profile values remain authoritative.
-RUNTIME_SCHEMA_VERSION = 24  # R6.7 runtime checkpoint adds TP split/protection reconciliation metadata.
+CONFIG_SCHEMA_VERSION = 23  # R6.7 adds the protection-order/reconciliation contract and default TP split metadata.
+RUNTIME_SCHEMA_VERSION = 24  # R6.7 runtime checkpoint adds protection reconciliation diagnostics.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -1804,7 +1804,7 @@ class StrategyEngine:
                         f"Edge={result['edge']:.2f} | Conflicts={conflicts} | "
                         f"Regime={'PASS' if (result['regime_buy'] or result['regime_sell']) else 'FAIL'}")
             # R6.7 diagnostic hardening: report the dominant evidence side and
-            # its directional MTF gate. BUY and SELL have separate MTF flags.
+            # its directional MTF gate.  BUY and SELL have separate MTF flags.
             if result["bull_total"] > result["bear_total"]:
                 dominant_side = "BUY"
                 fams = result["bull_families"]
@@ -1829,12 +1829,14 @@ class StrategyEngine:
             if not atr_pass: blocks.append("ATR_GATE")
             if not vol_pass: blocks.append("VOLUME_GATE")
             if not adx_pass: blocks.append("ADX_GATE")
+
             if dominant_side == "BUY" and not mtf_pass_bull:
                 blocks.append("MTF_GATE_BUY")
             elif dominant_side == "SELL" and not mtf_pass_bear:
                 blocks.append("MTF_GATE_SELL")
             elif dominant_side == "TIE" and not (mtf_pass_bull and mtf_pass_bear):
                 blocks.append("MTF_GATE_TIE")
+
             return "AI_AGENT_BLOCKED | "+",".join(blocks or ["CONFLICT_OR_NEUTRAL"])
 
         if mode == "ADAPTIVE_EVIDENCE":
@@ -7212,7 +7214,7 @@ class UniversalFuturesBotGUI:
             self.v_tp_qty_mode.set(
                 cfg.get(
                     "tp_qty_mode",
-                    "PERCENT_%",
+                    DEFAULT_TP_QTY_MODE,
                 )
             )
 
@@ -7224,7 +7226,7 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "tp1_close",
-                    "50",
+                    str(DEFAULT_TP1_CLOSE_PERCENT),
                 ),
             )
 
@@ -7236,7 +7238,7 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "tp2_close",
-                    "50",
+                    str(DEFAULT_TP2_CLOSE_PERCENT),
                 ),
             )
 
@@ -7884,23 +7886,46 @@ class UniversalFuturesBotGUI:
             return []
 
     def _order_is_still_open(self, symbol, order_id, unknown_is_open=True):
-        """R6.7 order verification understands Bybit conditional StopOrders."""
-        oid=str(order_id or "")
-        if not oid: return False
-        if self.exchange_id=="bybit":
-            for params in ({"orderId":oid,"orderFilter":"StopOrder"},{"orderId":oid}):
+        """Verify an order, including Bybit StopOrder/conditional orders."""
+        oid = str(order_id or "")
+        if not oid:
+            return False
+
+        if self.exchange_id == "bybit":
+            queries = (
+                {"orderId": oid, "orderFilter": "StopOrder"},
+                {"orderId": oid},
+            )
+            for params in queries:
                 try:
-                    rows=self.exchange.fetch_open_orders(symbol,limit=50,params=params)
-                    if any(str(o.get("id") or "")==oid for o in rows): return True
-                except Exception as e: self.log(f"Order-status query warning | ID={oid} | Params={params} | {e}")
+                    rows = self.exchange.fetch_open_orders(
+                        symbol,
+                        limit=50,
+                        params=params,
+                    )
+                    if any(str(order.get("id") or "") == oid for order in rows):
+                        return True
+                except Exception as e:
+                    self.log(
+                        f"Order-status query warning | ID={oid} | Params={params} | {e}"
+                    )
             try:
-                rows=self.exchange.fetch_closed_orders(symbol,limit=50,params={"orderId":oid,"orderFilter":"StopOrder"})
+                rows = self.exchange.fetch_closed_orders(
+                    symbol,
+                    limit=50,
+                    params={"orderId": oid, "orderFilter": "StopOrder"},
+                )
                 if rows:
-                    return str(rows[0].get("status") or "").lower() in ("open","new","partially_filled","pending")
-            except Exception as e: self.log(f"Closed StopOrder query warning | ID={oid} | {e}")
+                    row = rows[0]
+                    status = str(row.get("status") or "").lower()
+                    return status in ("open", "new", "partially_filled", "pending")
+            except Exception as e:
+                self.log(f"Closed StopOrder query warning | ID={oid} | {e}")
+
         try:
-            order=self.exchange.fetch_order(oid,symbol)
-            return str(order.get("status") or "").lower() in ("open","new","partially_filled","pending")
+            order = self.exchange.fetch_order(oid, symbol)
+            status = str(order.get("status") or "").lower()
+            return status in ("open", "new", "partially_filled", "pending")
         except Exception as e:
             self.log(f"Order-status verification inconclusive | ID={oid} | {e}")
             return True if unknown_is_open else None
@@ -8789,9 +8814,9 @@ class UniversalFuturesBotGUI:
     # -------------------- PROTECTION ORDERS ------------------
 
     def _log_protection_order_response(self, label, order, params=None):
-        """Log a compact, secret-free exchange acknowledgement for protection."""
+        """Log a safe, compact exchange acknowledgement for a protection order."""
         order = order or {}
-        info = order.get("info") if isinstance(order, dict) else {}
+        info = order.get("info") if isinstance(order, dict) else None
         info = info if isinstance(info, dict) else {}
         fields = {
             "ID": order.get("id") or info.get("orderId"),
@@ -8799,21 +8824,51 @@ class UniversalFuturesBotGUI:
             "Type": order.get("type") or info.get("orderType"),
             "Side": order.get("side") or info.get("side"),
             "Qty": order.get("amount") or info.get("qty"),
-            "Trigger": order.get("triggerPrice") or order.get("stopPrice") or info.get("triggerPrice") or info.get("stopPrice"),
-            "ReduceOnly": order.get("reduceOnly") if order.get("reduceOnly") is not None else info.get("reduceOnly"),
-            "CloseOnTrigger": order.get("closeOnTrigger") if order.get("closeOnTrigger") is not None else info.get("closeOnTrigger"),
+            "Trigger": (
+                order.get("triggerPrice")
+                or order.get("stopPrice")
+                or info.get("triggerPrice")
+                or info.get("stopPrice")
+            ),
+            "ReduceOnly": (
+                order.get("reduceOnly")
+                if order.get("reduceOnly") is not None
+                else info.get("reduceOnly")
+            ),
+            "CloseOnTrigger": (
+                order.get("closeOnTrigger")
+                if order.get("closeOnTrigger") is not None
+                else info.get("closeOnTrigger")
+            ),
         }
-        rendered = " | ".join(f"{k}={v}" for k,v in fields.items() if v is not None and v != "")
+        rendered = " | ".join(
+            f"{k}={v}" for k, v in fields.items() if v is not None and v != ""
+        )
         self.log(f"{label} ACK | {rendered or 'No normalized fields returned'}")
         if params:
-            self.log(f"{label} PARAMS | " + " | ".join(f"{k}={v}" for k,v in params.items()))
+            self.log(
+                f"{label} PARAMS | "
+                + " | ".join(f"{k}={v}" for k, v in params.items())
+            )
 
-    def create_bybit_trigger(self, symbol, order_type, side, qty, trigger_price, trigger_direction, label):
-        """R6.7 Bybit conditional market close order."""
+    def create_bybit_trigger(
+        self,
+        symbol,
+        order_type,
+        side,
+        qty,
+        trigger_price,
+        trigger_direction,
+        label,
+    ):
+        """Create a Bybit V5 conditional close order with explicit protection semantics."""
         trigger_price = self.safe_price(symbol, trigger_price)
         qty = self.safe_amount(symbol, qty)
-        if qty <= 0 or trigger_price <= 0:
-            raise RuntimeError(f"{label} quantity/trigger is invalid.")
+        if qty <= 0:
+            raise RuntimeError(f"{label} quantity is below the exchange minimum.")
+        if trigger_price <= 0:
+            raise RuntimeError(f"{label} trigger price is invalid: {trigger_price}")
+
         params = {
             "triggerPrice": trigger_price,
             "triggerDirection": int(trigger_direction),
@@ -8822,28 +8877,75 @@ class UniversalFuturesBotGUI:
             "closeOnTrigger": True,
             "positionIdx": 0,
         }
-        self.log(f"{label} SUBMIT | Bybit Conditional Market | Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | Direction={trigger_direction} | ReduceOnly=YES | CloseOnTrigger=YES")
+
+        self.log(
+            f"{label} SUBMIT | Bybit Conditional Market | "
+            f"Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | "
+            f"Direction={trigger_direction} | ReduceOnly=YES | CloseOnTrigger=YES"
+        )
         try:
-            order=self.exchange.create_order(symbol,"market",side,qty,None,params)
+            order = self.exchange.create_order(
+                symbol,
+                "market",
+                side,
+                qty,
+                None,
+                params,
+            )
+        except Exception as exc:
+            self.log(
+                f"{label} CREATE FAILED | Type={type(exc).__name__} | Error={exc}"
+            )
+            raise
+
+        if not order or not order.get("id"):
+            raise RuntimeError(f"{label} order returned no order ID. Raw={order!r}")
+
+        self._log_protection_order_response(label, order, params)
+        return order
+
+    def create_binance_trigger(
+        self,
+        symbol,
+        order_type,
+        side,
+        qty,
+        trigger_price,
+        label,
+    ):
+        """Create a Binance futures conditional exit with explicit reduce-only semantics."""
+        qty = self.safe_amount(symbol, qty)
+        trigger_price = self.safe_price(symbol, trigger_price)
+        if qty <= 0:
+            raise RuntimeError(f"{label} quantity is below the exchange minimum.")
+        if trigger_price <= 0:
+            raise RuntimeError(f"{label} trigger price is invalid.")
+
+        params = {
+            "stopPrice": trigger_price,
+            "reduceOnly": True,
+            "workingType": "CONTRACT_PRICE",
+        }
+        self.log(
+            f"{label} SUBMIT | Binance {order_type} | "
+            f"Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | ReduceOnly=YES"
+        )
+        try:
+            order = self.exchange.create_order(
+                symbol,
+                order_type,
+                side,
+                qty,
+                None,
+                params,
+            )
         except Exception as exc:
             self.log(f"{label} CREATE FAILED | Type={type(exc).__name__} | Error={exc}")
             raise
         if not order or not order.get("id"):
             raise RuntimeError(f"{label} order returned no order ID. Raw={order!r}")
-        self._log_protection_order_response(label,order,params)
+        self._log_protection_order_response(label, order, params)
         return order
-
-    def create_binance_trigger(self, symbol, order_type, side, qty, trigger_price, label):
-        """R6.7 Binance conditional close order."""
-        qty=self.safe_amount(symbol,qty); trigger_price=self.safe_price(symbol,trigger_price)
-        if qty<=0 or trigger_price<=0: raise RuntimeError(f"{label} quantity/trigger is invalid.")
-        params={"stopPrice":trigger_price,"reduceOnly":True,"workingType":"CONTRACT_PRICE"}
-        self.log(f"{label} SUBMIT | Binance {order_type} | Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | ReduceOnly=YES")
-        try: order=self.exchange.create_order(symbol,order_type,side,qty,None,params)
-        except Exception as exc:
-            self.log(f"{label} CREATE FAILED | Type={type(exc).__name__} | Error={exc}"); raise
-        if not order or not order.get("id"): raise RuntimeError(f"{label} order returned no order ID. Raw={order!r}")
-        self._log_protection_order_response(label,order,params); return order
 
     def calculate_tp_close_quantities(
         self,
@@ -8944,86 +9046,254 @@ class UniversalFuturesBotGUI:
 
         return tp1_qty, tp2_qty
 
-    def create_generic_trigger(self, symbol, side, qty, trigger_price, label):
-        """R6.7 generic CCXT reduce-only conditional close order."""
-        qty=self.safe_amount(symbol,qty); trigger_price=self.safe_price(symbol,trigger_price)
-        if qty<=0 or trigger_price<=0: raise RuntimeError(f"{label} quantity/trigger is invalid.")
-        params={"triggerPrice":trigger_price,"reduceOnly":True}
-        self.log(f"{label} SUBMIT | Generic Conditional Market | Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | ReduceOnly=YES")
-        try: order=self.exchange.create_order(symbol,"market",side,qty,None,params)
-        except Exception as exc:
-            self.log(f"{label} CREATE FAILED | Type={type(exc).__name__} | Error={exc}"); raise
-        if not order or not order.get("id"): raise RuntimeError(f"{label} order returned no order ID. Raw={order!r}")
-        self._log_protection_order_response(label,order,params); return order
+    def create_generic_trigger(
+        self,
+        symbol,
+        side,
+        qty,
+        trigger_price,
+        label,
+    ):
+        """Create a CCXT unified reduce-only trigger and expose the exchange acknowledgement."""
+        qty = self.safe_amount(symbol, qty)
+        trigger_price = self.safe_price(symbol, trigger_price)
+        if qty <= 0:
+            raise RuntimeError(f"{label} quantity is below the exchange minimum.")
+        if trigger_price <= 0:
+            raise RuntimeError(f"{label} trigger price is invalid.")
 
-    def create_protection_orders(self, symbol, position_side, position_qty, sl, tp1, tp2, tp_qty_mode, tp1_close_value, tp2_close_value):
-        """R6.7 complete actual-fill protection set: SL 100% + TP1/TP2 split."""
-        qty=self.safe_amount(symbol,position_qty)
-        if qty<=0: raise RuntimeError("Actual position quantity is invalid.")
-        hold=bool(self._runtime_gui_value("v_hold_until_all_reverse",False))
-        legacy=bool(self._runtime_gui_value("v_legacy_protection_enabled",False))
-        if legacy:
-            tp_engine=True; tp1_on=tp1 is not None; tp2_on=tp2 is not None
-        else:
-            tp_engine=bool(self._runtime_gui_value("v_tp_enabled",True))
-            tp1_on=bool(self._runtime_gui_value("v_tp1_enabled",True))
-            tp2_on=bool(self._runtime_gui_value("v_tp2_enabled",True))
-        tp1_qty=tp2_qty=0.0
-        if not hold and tp_engine and (tp1_on or tp2_on):
-            if tp1_on and tp2_on:
-                tp1_qty,tp2_qty=self.calculate_tp_close_quantities(symbol,qty,tp_qty_mode,tp1_close_value,tp2_close_value)
-            elif tp1_on: tp1_qty=qty
-            else: tp2_qty=qty
-            self.log(f"TP CLOSE CONTRACT | Mode={tp_qty_mode} | TP1={tp1_qty:g} ({tp1_close_value:g}) | TP2={tp2_qty:g} ({tp2_close_value:g}) | Total={qty:g}")
-            if tp1_on and tp2_on and abs((tp1_qty+tp2_qty)-qty)>1e-12:
-                raise RuntimeError(f"TP split precision validation failed: TP1={tp1_qty:g} + TP2={tp2_qty:g} != Position={qty:g}")
-        close_side="sell" if position_side=="LONG" else "buy"
-        created=[]
-        if self.exchange_id=="bybit":
-            sl_dir=2 if position_side=="LONG" else 1; tp_dir=1 if position_side=="LONG" else 2
-        else: sl_dir=tp_dir=None
-        def submit(label,q,p,is_sl=False):
-            if q<=0 or p is None: raise RuntimeError(f"{label} resolved quantity/price is invalid.")
-            if self.exchange_id=="bybit":
-                o=self.create_bybit_trigger(symbol,"STOP_MARKET" if is_sl else "TAKE_PROFIT_MARKET",close_side,q,p,sl_dir if is_sl else tp_dir,label)
-            elif self.exchange_id=="binance":
-                o=self.create_binance_trigger(symbol,"STOP_MARKET" if is_sl else "TAKE_PROFIT_MARKET",close_side,q,p,label)
-            else: o=self.create_generic_trigger(symbol,close_side,q,p,label)
-            created.append((label,o)); return o
         try:
-            submit("SL",qty,sl,True)
-            if not hold and tp_engine:
-                if tp1_on and tp1 is not None: submit("TP1",tp1_qty,tp1)
-                if tp2_on and tp2 is not None: submit("TP2",tp2_qty,tp2)
-        except Exception as exc:
-            self.log(f"PROTECTION SET CREATE FAILED | Created={','.join(x for x,_ in created) or 'NONE'} | Error={exc}")
-            for label,o in list(created):
-                try: self.exchange.cancel_order(o["id"],symbol); self.log(f"{label} ROLLBACK CANCEL SENT | ID={o['id']}")
-                except Exception as ce: self.log(f"{label} ROLLBACK CANCEL FAILED | ID={o.get('id')} | {ce}")
+            if hasattr(self.exchange, "featureValue"):
+                trigger_supported = self.exchange.featureValue(
+                    symbol, "createOrder", "triggerPrice"
+                )
+                reduce_only_supported = self.exchange.featureValue(
+                    symbol, "createOrder", "reduceOnly"
+                )
+                if trigger_supported is False:
+                    raise RuntimeError(
+                        f"{self.exchange_id.upper()} does not report triggerPrice support for {symbol}."
+                    )
+                if reduce_only_supported is False:
+                    raise RuntimeError(
+                        f"{self.exchange_id.upper()} does not report reduceOnly support for {symbol}."
+                    )
+        except RuntimeError:
             raise
-        expected=["SL"]
-        if not hold and tp_engine:
-            if tp1_on and tp1 is not None: expected.append("TP1")
-            if tp2_on and tp2 is not None: expected.append("TP2")
-        actual=[x for x,_ in created]
-        if actual!=expected: raise RuntimeError(f"Protection set incomplete: expected={expected} actual={actual}")
-        self.log(f"PROTECTION SET CREATED | {symbol} | {' + '.join(actual)} | PositionQty={qty:g}")
+        except Exception as capability_error:
+            self.log(
+                f"TRIGGER CAPABILITY CHECK NOTICE | {self.exchange_id.upper()} "
+                f"{symbol} | {capability_error}"
+            )
+
+        params = {"triggerPrice": trigger_price, "reduceOnly": True}
+        self.log(
+            f"{label} SUBMIT | Generic Conditional Market | "
+            f"Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | ReduceOnly=YES"
+        )
+        try:
+            order = self.exchange.create_order(
+                symbol,
+                "market",
+                side,
+                qty,
+                None,
+                params,
+            )
+        except Exception as exc:
+            self.log(f"{label} CREATE FAILED | Type={type(exc).__name__} | Error={exc}")
+            raise
+        if not order or not order.get("id"):
+            raise RuntimeError(f"{label} order returned no order ID. Raw={order!r}")
+        self._log_protection_order_response(label, order, params)
+        return order
+
+    def create_protection_orders(
+        self,
+        symbol,
+        position_side,
+        position_qty,
+        sl,
+        tp1,
+        tp2,
+        tp_qty_mode,
+        tp1_close_value,
+        tp2_close_value,
+    ):
+        """Create the complete exchange-side protection set from the actual fill.
+
+        SL always protects 100% of the live position. TP1/TP2 are independent
+        reduce-only conditional exits. In PERCENT_% mode, 50 + 50 produces a
+        50/50 quantity split after exchange precision.
+        """
+        qty = self.safe_amount(symbol, position_qty)
+        if qty <= 0:
+            raise RuntimeError("Actual position quantity is invalid.")
+
+        hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+        legacy_mode = bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+        if legacy_mode:
+            tp_engine_enabled = True
+            tp1_enabled = tp1 is not None
+            tp2_enabled = tp2 is not None
+        else:
+            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
+            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
+            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
+
+        tp1_qty = 0.0
+        tp2_qty = 0.0
+        if not hold_all_reverse and tp_engine_enabled and (tp1_enabled or tp2_enabled):
+            if tp1_enabled and tp2_enabled:
+                tp1_qty, tp2_qty = self.calculate_tp_close_quantities(
+                    symbol, qty, tp_qty_mode, tp1_close_value, tp2_close_value
+                )
+            elif tp1_enabled:
+                tp1_qty = qty
+            elif tp2_enabled:
+                tp2_qty = qty
+
+            self.log(
+                f"TP CLOSE CONTRACT | Mode={tp_qty_mode} | "
+                f"TP1={tp1_qty:g} ({tp1_close_value:g}) | "
+                f"TP2={tp2_qty:g} ({tp2_close_value:g}) | Total={qty:g}"
+            )
+            if tp1_enabled and tp2_enabled:
+                if abs((tp1_qty + tp2_qty) - qty) > 1e-12:
+                    raise RuntimeError(
+                        f"TP split precision validation failed: "
+                        f"TP1={tp1_qty:g} + TP2={tp2_qty:g} != Position={qty:g}"
+                    )
+        elif not hold_all_reverse:
+            self.log("TP ENGINE: OFF | No TP exchange orders will be created.")
+        else:
+            self.log(
+                "REVERSAL HOLD ON: Only the hard SL will be placed. "
+                "TP1/TP2 exchange orders are disabled; strategy reversal is the exit."
+            )
+
+        close_side = "sell" if position_side == "LONG" else "buy"
+        created = []
+
+        if self.exchange_id == "bybit":
+            sl_direction = 2 if position_side == "LONG" else 1
+            tp_direction = 1 if position_side == "LONG" else 2
+        else:
+            sl_direction = tp_direction = None
+
+        def submit(label, qty_to_close, price, is_sl=False):
+            if price is None:
+                return None
+            if qty_to_close <= 0:
+                raise RuntimeError(f"{label} resolved quantity is invalid: {qty_to_close}")
+            if self.exchange_id == "bybit":
+                order = self.create_bybit_trigger(
+                    symbol,
+                    "STOP_MARKET" if is_sl else "TAKE_PROFIT_MARKET",
+                    close_side,
+                    qty_to_close,
+                    price,
+                    sl_direction if is_sl else tp_direction,
+                    label,
+                )
+            elif self.exchange_id == "binance":
+                order = self.create_binance_trigger(
+                    symbol,
+                    "STOP_MARKET" if is_sl else "TAKE_PROFIT_MARKET",
+                    close_side,
+                    qty_to_close,
+                    price,
+                    label,
+                )
+            else:
+                order = self.create_generic_trigger(
+                    symbol, close_side, qty_to_close, price, label
+                )
+            created.append((label, order))
+            return order
+
+        try:
+            submit("SL", qty, sl, is_sl=True)
+            if not hold_all_reverse and tp_engine_enabled:
+                if tp1_enabled and tp1 is not None:
+                    submit("TP1", tp1_qty, tp1, is_sl=False)
+                if tp2_enabled and tp2 is not None:
+                    submit("TP2", tp2_qty, tp2, is_sl=False)
+        except Exception as exc:
+            self.log(
+                f"PROTECTION SET CREATE FAILED | "
+                f"Created={','.join(label for label, _ in created) or 'NONE'} | Error={exc}"
+            )
+            for label, order in list(created):
+                oid = str(order.get("id") or "")
+                if not oid:
+                    continue
+                try:
+                    self.exchange.cancel_order(oid, symbol)
+                    self.log(f"{label} ROLLBACK CANCEL SENT | ID={oid}")
+                except Exception as cancel_error:
+                    self.log(
+                        f"{label} ROLLBACK CANCEL FAILED | ID={oid} | {cancel_error}"
+                    )
+            raise
+
+        expected_labels = ["SL"]
+        if not hold_all_reverse and tp_engine_enabled:
+            if tp1_enabled and tp1 is not None:
+                expected_labels.append("TP1")
+            if tp2_enabled and tp2 is not None:
+                expected_labels.append("TP2")
+        actual_labels = [label for label, _ in created]
+        if actual_labels != expected_labels:
+            raise RuntimeError(
+                f"Protection set incomplete: expected={expected_labels} actual={actual_labels}"
+            )
+        self.log(
+            f"PROTECTION SET CREATED | {symbol} | "
+            f"{' + '.join(actual_labels)} | PositionQty={qty:g}"
+        )
         return created
 
-    def verify_protection_orders(self, symbol, created_orders):
-        """R6.7 verify every expected protection order by exchange state."""
-        time.sleep(0.8); results=[]
-        for label,order in created_orders:
-            oid=str(order.get("id") or "")
-            state=self._order_is_still_open(symbol,oid,unknown_is_open=False) if oid else False
-            active=bool(state) if state is not None else False
-            self.log(f"{label} VERIFIED ACTIVE ✓ | ID={oid}" if active else f"{label} NOT VERIFIED ACTIVE ✗ | ID={oid or 'MISSING_ID'}")
-            results.append((label,active))
-        missing=[label for label,active in results if not active]
+    def verify_protection_orders(
+        self,
+        symbol,
+        created_orders,
+    ):
+        """Verify every required protection order against the exchange."""
+        time.sleep(0.8)
+        results = []
+        for label, order in created_orders:
+            oid = str(order.get("id") or "")
+            if not oid:
+                active = False
+            else:
+                state = self._order_is_still_open(
+                    symbol,
+                    oid,
+                    unknown_is_open=False,
+                )
+                active = bool(state) if state is not None else False
+
+            if active:
+                self.log(f"{label} VERIFIED ACTIVE ✓ | ID={oid}")
+            else:
+                self.log(
+                    f"{label} NOT VERIFIED ACTIVE ✗ | ID={oid or 'MISSING_ID'}"
+                )
+            results.append((label, active))
+
+        missing = [label for label, active in results if not active]
         if missing:
-            self.log(f"PROTECTION VERIFY FAILED | Missing={','.join(missing)} | Expected={','.join(label for label,_ in created_orders)}")
+            self.log(
+                f"PROTECTION VERIFY FAILED | Missing={','.join(missing)} | "
+                f"Expected={','.join(label for label, _ in created_orders)}"
+            )
             return False
-        self.log(f"PROTECTION VERIFY PASSED ✓ | Required={','.join(label for label,_ in created_orders)} | Symbol={symbol}")
+
+        self.log(
+            f"PROTECTION VERIFY PASSED ✓ | "
+            f"Required={','.join(label for label, _ in created_orders)} | Symbol={symbol}"
+        )
         return True
 
     def _reconcile_protection_orders(self, position):
@@ -14034,7 +14304,12 @@ class UniversalFuturesBotGUI:
                         # Validate before sending the market order so a bad
                         # TP split can never create an unprotected position.
                         if not self._runtime_gui_value("v_hold_until_all_reverse"):
-                            if tp_engine_enabled and tp1_enabled and tp2_enabled and tp_qty_mode == "FIXED_QTY":
+                            if (
+                                tp_engine_enabled
+                                and tp1_enabled
+                                and tp2_enabled
+                                and tp_qty_mode == "FIXED_QTY"
+                            ):
                                 requested_tp1 = self.safe_amount(
                                     self.symbol,
                                     tp1_close_value,
@@ -14214,9 +14489,9 @@ class UniversalFuturesBotGUI:
                             # Create protection.
                             # ------------------------------------------------
                             self.log(
-                                f"PROTECTION TARGETS | Side={desired_side} | Entry={actual_entry:.12g} | "
-                                f"PositionQty={actual_qty:g} | SL={sl:.12g} | "
-                                f"TP1={(f"{tp1:.12g}" if tp1 is not None else "OFF")} | "
+                                f"PROTECTION TARGETS | Side={desired_side} | "
+                                f"Entry={actual_entry:.12g} | PositionQty={actual_qty:g} | "
+                                f"SL={sl:.12g} | TP1={(f"{tp1:.12g}" if tp1 is not None else "OFF")} | "
                                 f"TP2={(f"{tp2:.12g}" if tp2 is not None else "OFF")} | "
                                 f"TPQtyMode={tp_qty_mode} | TP1Close={tp1_close_value:g} | TP2Close={tp2_close_value:g}"
                             )
