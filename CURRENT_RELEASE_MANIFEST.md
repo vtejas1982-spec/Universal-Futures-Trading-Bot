@@ -12,6 +12,9 @@
 - AI manager: actual ATR/Volume/ADX/MTF gate state propagated.
 - Local validation: AST, bytecode compile, GUI callback/variable audits and synthetic protection smoke tests PASS.
 - Demo/Testnet validation is still required before Live.
+- Audit marker: `V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT`.
+- R6.7 AI diagnostics explicitly report dominant side and directional MTF blockers; TP preflight validates quantity mode, percentage split and ATR TP ordering.
+
 
 ---
 
