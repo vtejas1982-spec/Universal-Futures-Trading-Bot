@@ -204,3 +204,16 @@ The complete R6.7 review covered:
 - GUI callback/static contract checks: PASS
 
 This remains an engineering/Demo hardening release; these checks do not establish profitability or guarantee live-exchange execution.
+
+
+## R6.7 Final Full-Contract Audit Extension — 2026-09-29
+
+### Newly fixed
+1. Volume/SR completed-candle contract: the live cache no longer uses the newest still-forming chart/HTF candle, preventing intrabar changes from becoming a directional Volume/SR vote.
+2. Feature-aware protection validation: disabled targets are not treated as active requirements; enabled targets must be finite and positive; ATR TP2 must be greater than TP1 when both are enabled.
+
+### Full-system checks
+The audit rechecked strategy/evidence-family logic, AI-Agent gates, MTF/ADX/Volume/ATR regime filters, entry sizing, daily/emergency risk controls, SL/TP resolution, TP split accounting, break-even replacement, order verification/reconciliation, GUI callbacks, configuration persistence, grid isolation and kill-switch lifecycle.
+
+### Current status
+The source passes local parse/compile/import and targeted strategy/protection smoke tests. Bybit Demo remains the required exchange-side verification environment for actual conditional-order behavior.
