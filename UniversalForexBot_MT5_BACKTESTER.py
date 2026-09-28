@@ -1,5 +1,5 @@
 """
-Universal Forex / MT5 AI-Agent R6.5-HOTFIX1 Backtester
+Universal Forex / MT5 AI-Agent R6.6 Backtester
 
 The production strategy source of truth is UniversalForexBot_MT5.py.
 
@@ -151,7 +151,7 @@ def read_csv(path):
     out = out.drop_duplicates("datetime").reset_index(drop=True)
     out["time"] = (out["datetime"].astype("int64") // 10**6).astype("int64")
     if len(out) < 500:
-        raise ValueError("At least 500 candles are required for R6.5 warm-up.")
+        raise ValueError("At least 500 candles are required for R6.6 warm-up.")
     return out
 
 def fetch_mt5(symbol, timeframe, start, end):
@@ -392,7 +392,7 @@ def run(df,c,args):
     return trades,eq,curve_df
 
 def main():
-    p=argparse.ArgumentParser(description="Universal Forex MT5 AI-Agent R6.5 backtester")
+    p=argparse.ArgumentParser(description="Universal Forex MT5 AI-Agent R6.6 backtester")
     p.add_argument("--source",choices=("csv","mt5"),default="csv")
     p.add_argument("--input",type=Path)
     p.add_argument("--symbol",default="EURUSD")
@@ -413,7 +413,7 @@ def main():
     p.add_argument("--max-dd-pct",type=float,default=5.0)
     p.add_argument("--emergency-loss-pct",type=float,default=10.0)
     a=p.parse_args()
-    if str(DEFAULT["grid_mode"]).upper()!="OFF": raise ValueError("Forex R6.5 Grid Mode must be OFF.")
+    if str(DEFAULT["grid_mode"]).upper()!="OFF": raise ValueError("Forex R6.6 Grid Mode must be OFF.")
     c=dict(DEFAULT)
     if a.source=="csv":
         if not a.input: raise ValueError("--input is required with --source=csv")
@@ -437,7 +437,7 @@ def main():
     losses=sum(1 for t in trades if getattr(t,"realized_net",0)<=0)
     gross_w=sum(max(0,getattr(t,"realized_net",0)) for t in trades)
     gross_l=sum(max(0,-getattr(t,"realized_net",0)) for t in trades)
-    metrics={"version":"V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1-BT","symbol":a.symbol,"timeframe":a.timeframe,
+    metrics={"version":"V8.4.2-FOREX-AI-AGENT-R6.6-BT","symbol":a.symbol,"timeframe":a.timeframe,
              "trades":len(trades),"wins":wins,"losses":losses,"win_rate_pct":wins/len(trades)*100 if trades else 0,
              "net_pnl":net,"return_pct":net/a.capital*100 if a.capital else 0,
              "max_drawdown_pct":float(abs(curve.dd_pct.min())) if not curve.empty else 0,
@@ -447,7 +447,7 @@ def main():
                             "risk_envelope":[AI_MIN_RISK,AI_MAX_RISK],"sl_envelope":[AI_MIN_SL,AI_MAX_SL],
                             "tp1_envelope":[AI_MIN_TP1,AI_MAX_TP1],"tp2_envelope":[AI_MIN_TP2,AI_MAX_TP2]}}
     (RESULT_DIR/f"summary_{stem}.json").write_text(json.dumps(metrics,indent=2),encoding="utf-8")
-    print("V8.4.2-FOREX-AI-AGENT-R6.5-BT")
+    print("V8.4.2-FOREX-AI-AGENT-R6.6-BT")
     print(json.dumps(metrics,indent=2))
     print("Results:",RESULT_DIR)
 
