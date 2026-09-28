@@ -12054,14 +12054,14 @@ class UniversalFuturesBotGUI:
         now = time.time()
         wanted = [str(x).strip() for x in tf_names if str(x).strip() != "Disable"]
         if not wanted:
-            return {"Chart": base_df.copy()}
+            return {"Chart": base_df.iloc[:-1].copy() if len(base_df) > 1 else base_df.iloc[0:0].copy()}
         # Refresh at most every 60 seconds. HTF candles themselves are
         # confirmed by the numerical module before becoming active.
         if self.volume_sr_cache and now - self.volume_sr_cache_time < 60:
             out = dict(self.volume_sr_cache)
-            out["Chart"] = base_df.copy()
+            out["Chart"] = base_df.iloc[:-1].copy() if len(base_df) > 1 else base_df.iloc[0:0].copy()
             return out
-        frames = {"Chart": base_df.copy()}
+        frames = {"Chart": base_df.iloc[:-1].copy() if len(base_df) > 1 else base_df.iloc[0:0].copy()}
         tf_ccxt={"15m":"15m","30m":"30m","1h":"1h","4h":"4h","D":"1d","W":"1w"}
         for tf in wanted:
             if tf == "Chart":
@@ -12072,7 +12072,11 @@ class UniversalFuturesBotGUI:
                 f = pd.DataFrame(raw, columns=["time","open","high","low","close","vol"])
                 if not f.empty:
                     f["datetime"] = pd.to_datetime(f["time"], unit="ms", utc=True)
-                    frames[tf] = f
+                    # Live strategy signals use completed candles only; exclude the current HTF candle.
+                    if len(f) > 1:
+                        f = f.iloc[:-1].copy()
+                    if not f.empty:
+                        frames[tf] = f
             except Exception as e:
                 self.log(f"VOLUME S/R DATA WARNING {tf}: {e}")
         self.volume_sr_cache = frames
@@ -12707,14 +12711,25 @@ class UniversalFuturesBotGUI:
             legacy_atr_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED))
             if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
                 raise ValueError(f"Unknown legacy SL/TP mode: SL={sl_mode} TP={tp_mode}")
-            if min(roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct, sl_target_pct, tp1_target_pct, tp2_target_pct) <= 0:
-                raise ValueError("All enabled SL/TP targets must be greater than 0.")
-            if not all(np.isfinite(x) for x in (roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct)):
-                raise ValueError("SL/TP targets must be finite numbers.")
-            if atr_sl_mult <= 0 or atr_tp1_mult <= 0 or atr_tp2_mult <= 0:
-                raise ValueError("ATR multipliers must be greater than 0.")
+            active_targets = []
+            if simple_sl_enabled and simple_roi_sl_enabled: active_targets.append(roi_sl_target)
+            if simple_sl_enabled and fallback_sl_enabled: active_targets.append(fallback_sl_roi)
+            if simple_tp_enabled and tp1_enabled: active_targets.append(tp1_roi)
+            if simple_tp_enabled and tp2_enabled: active_targets.append(tp2_roi)
+            if hold_all_reverse: active_targets.append(hold_sl_roi_pct)
+            if use_legacy_protection: active_targets.extend((sl_target_pct, tp1_target_pct, tp2_target_pct))
+            if any((not np.isfinite(x) or x <= 0) for x in active_targets):
+                raise ValueError("Every enabled SL/TP target must be finite and greater than 0.")
+            if simple_atr_sl_enabled and (not np.isfinite(atr_sl_mult) or atr_sl_mult <= 0):
+                raise ValueError("ATR SL multiplier must be greater than 0 when ATR SL is enabled.")
+            if atr_tp_enabled and tp1_enabled and (not np.isfinite(atr_tp1_mult) or atr_tp1_mult <= 0):
+                raise ValueError("ATR TP1 multiplier must be greater than 0 when TP1 is enabled.")
+            if atr_tp_enabled and tp2_enabled and (not np.isfinite(atr_tp2_mult) or atr_tp2_mult <= 0):
+                raise ValueError("ATR TP2 multiplier must be greater than 0 when TP2 is enabled.")
             if atr_sl_mult > 10 or atr_tp1_mult > 20 or atr_tp2_mult > 50:
                 raise ValueError("ATR Dynamic multipliers are outside the safety range.")
+            if atr_tp_enabled and tp1_enabled and tp2_enabled and atr_tp2_mult <= atr_tp1_mult:
+                raise ValueError("ATR TP2 multiplier must be greater than ATR TP1 when both TP levels are enabled.")
 
             # Only one resolver is allowed to own normal protection.
             # Pre-entry sizing distance is derived from the exact resolver priority.
