@@ -1,3 +1,20 @@
+## R6.7 Crypto AI-Agent manifest update — 2026-09-29
+
+- Crypto live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py`
+- Crypto AI-Agent release: `V8.4.2-CRYPTO-AI-AGENT-R6.7`
+- Crypto config schema: **23**
+- Crypto runtime schema: **24**
+- AI preset: `AI_AGENT_RECOMMENDED_R6.7`
+- Protection contract: actual-fill SL 100% + independent TP1/TP2 reduce-only conditional exits.
+- Default TP split: **50% / 50%**.
+- Bybit protection parameters: `triggerPrice`, `triggerDirection`, `triggerBy=LastPrice`, `reduceOnly=true`, `closeOnTrigger=true`, `positionIdx=0`.
+- Protection verification: Bybit StopOrder-aware.
+- AI manager: actual ATR/Volume/ADX/MTF gate state propagated.
+- Local validation: AST, bytecode compile, GUI callback/variable audits and synthetic protection smoke tests PASS.
+- Demo/Testnet validation is still required before Live.
+
+---
+
 # Current Release Manifest — 2026-09-28
 
 This main branch contains the current active production code only. Superseded root-level bot copies have been removed; their history remains available in Git history.
