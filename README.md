@@ -66,10 +66,12 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `tests/test_crypto_gui.py`
 - `tests/test_forex_engine.py`
 - `tests/test_forex_ai_agent_r6_5_contract.py`
+- `tests/test_crypto_ai_agent_r6_7_protection_contract.py`
 
 ### Build scripts
 
 - `BUILD_CRYPTO_EXE.bat`
+- `BUILD_CRYPTO_AI_AGENT_R6.7_EXE.bat`
 - `BUILD_CRYPTO_AI_AGENT_R6.5_EXE.bat`
 - `BUILD_FOREX_EXE.bat`
 
