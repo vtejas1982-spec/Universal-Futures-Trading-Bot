@@ -33,16 +33,17 @@ This main branch contains the current active production code only. Superseded ro
 - docs/FOREX_R5_RELEASE_NOTES.md
 - docs/FOREX_AI_AGENT_R6_5_RELEASE_NOTES.md
 - docs/FOREX_AI_AGENT_R6_5_FULL_AUDIT_2026-09-28.md
+- docs/FOREX_AI_AGENT_R6_5_HOTFIX1_FULL_AUDIT_2026-09-28.md
 - docs/CRYPTO_FX_PARITY_AUDIT_2026-09-28.md
 
 ## Current versions
 - Crypto: V8.4.2-R9.6
 - Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R6.5
-- Forex/MT5: V8.4.2-FOREX-AI-AGENT-R6.5
+- Forex/MT5: V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1
 - Crypto AI config schema: 21
 - Crypto AI runtime schema: 22
 - Crypto R9.6 config/runtime schema: 12
-- Forex AI Agent config/runtime schema: 21 / 22
+- Forex AI Agent config/runtime schema: 22 / 22
 
 ## Naming policy
 Active production root files use the release-identifying filename. New experimental revisions should be kept in Git branches/tags or a dedicated development directory rather than accumulating duplicate root files.
