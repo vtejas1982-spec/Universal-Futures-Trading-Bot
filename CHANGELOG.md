@@ -1,3 +1,33 @@
+## 2026-09-29 — Crypto AI-Agent R6.7 Full-Contract Audit Hotfix
+
+### Fixed
+- Added explicit dominant-side and directional MTF gate diagnostics to AI-Agent blocked decisions.
+- Replaced hard-coded AI-Agent startup threshold display with the actual configured values.
+- Added TP quantity-mode preflight validation.
+- Added TP1/TP2 percentage range validation and retained the exact 100% split requirement.
+- Added fixed-quantity TP positivity validation.
+- Added ATR TP1/TP2 ordering validation before exchange mutation.
+
+### Added
+- Full-contract R6.7 audit marker: V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT.
+- Expanded R6.7 protection/AI contract regression tests.
+
+### Retained
+- Actual-fill SL/TP protection.
+- 50%/50% TP1/TP2 default split.
+- Bybit conditional StopOrder-aware verification.
+- Protection rollback and reconciliation.
+- Actual ATR/Volume/ADX/MTF gate propagation into AI trade management.
+- Profile/configuration migration compatibility and fail-closed lifecycle safety.
+
+### Validation
+- AST parse: PASS.
+- Python bytecode compilation: PASS.
+- Module import: PASS.
+- TP 50/50 and invalid-split smoke tests: PASS.
+- AI MTF gate smoke test: PASS.
+- GUI callback/runtime/config contract audit: PASS.
+
 ## V8.4.2-CRYPTO-AI-AGENT-R6.7 — Protection engine + full runtime audit — 2026-09-29
 
 ### Fixed
