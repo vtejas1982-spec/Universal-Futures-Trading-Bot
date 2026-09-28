@@ -93,3 +93,24 @@ def test_r67_runtime_schema_and_full_contract_audit_marker():
     assert 'CONFIG_SCHEMA_VERSION = 23' in source
     assert 'RUNTIME_SCHEMA_VERSION = 24' in source
     assert 'R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT' in source
+
+
+def test_r67_volume_sr_uses_completed_candles_in_live_cache():
+    source = _source()
+    assert 'base_df.iloc[:-1].copy() if len(base_df) > 1 else base_df.iloc[0:0].copy()' in source
+    assert '# Live strategy signals use completed candles only; exclude the current HTF candle.' in source
+
+
+def test_r67_conditional_protection_validation_is_feature_aware():
+    source = _source()
+    assert 'Every enabled SL/TP target must be finite and greater than 0.' in source
+    assert 'ATR SL multiplier must be greater than 0 when ATR SL is enabled.' in source
+    assert 'ATR TP2 multiplier must be greater than ATR TP1 when both TP levels are enabled.' in source
+
+
+def test_r67_ai_runtime_log_uses_configured_values():
+    source = _source()
+    assert 'f"AI MinFamilies={ai_min_families}' in source
+    assert 'f"AI Edge>={ai_min_edge:.2f}' in source
+    assert 'f"AI FamilyConfidence>={ai_family_confidence:.2f}' in source
+    assert 'f"AI MaxConflicts={ai_max_conflicts}' in source
