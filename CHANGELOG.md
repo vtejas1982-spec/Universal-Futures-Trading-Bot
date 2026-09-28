@@ -1,3 +1,28 @@
+# V8.4.2 Crypto AI-Agent R6.6 — parser-integrity and release-contract repair — 2026-09-28
+
+## Fixed
+- Fixed the startup SyntaxError in the R6.5 Crypto AI-Agent source at the Nadaraya-Watson Envelope function.
+- Fixed additional malformed statement concatenations discovered by full AST parsing: profile sanitization, Supertrend GUI setup, grid-state initialization, RSI validation and VWAP Delta state assignment.
+- The downloaded R6.5 file was treated as a corrupted release artifact rather than applying only the first visible parser fix.
+
+## Modified
+- Crypto AI-Agent version: R6.5 -> R6.6.
+- AI preset: AI_AGENT_RECOMMENDED_R6.5 -> AI_AGENT_RECOMMENDED_R6.6.
+- Crypto config schema: 21 -> 22.
+- Crypto runtime schema: 22 -> 23.
+- Added dedicated R6.6 live engine and R6.6 backtester files.
+- Added dedicated Crypto and Forex R6.6 user manuals.
+
+## Validation
+- Local AST parse: PASS.
+- Local Python bytecode compilation: PASS.
+- Manual source audit of the reported R6.5 parser failures: PASS.
+- Demo/Testnet/live exchange lifecycle is not claimed by syntax validation.
+
+See docs/USER_MANUAL_V8_4_2_R6_6_CRYPTO.md and docs/USER_MANUAL_V8_4_2_R6_6_FOREX_MT5.md.
+
+---
+
 # V8.4.2 Forex AI Agent R6.5-HOTFIX1 — 2026-09-28
 
 ## Fixed
