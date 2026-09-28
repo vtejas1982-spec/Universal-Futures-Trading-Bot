@@ -1,3 +1,39 @@
+## V8.4.2-CRYPTO-AI-AGENT-R6.7 — Protection engine + full runtime audit — 2026-09-29
+
+### Fixed
+- Hardened Bybit conditional SL/TP submission with explicit `triggerDirection`, `triggerBy=LastPrice`, `reduceOnly`, `closeOnTrigger` and `positionIdx=0`.
+- Fixed the protection verification path so Bybit conditional StopOrders are checked explicitly instead of relying only on a generic order endpoint.
+- Added atomic protection-set rollback when SL/TP creation is incomplete.
+- Preserved the actual-fill TP1/TP2 split contract: default 50% / 50%.
+- Single-TP mode now closes the full remaining position and no longer requires an artificial 50+50 split.
+- Passed real ATR/Volume/ADX/MTF regime state into the bounded AI trade manager instead of hard-coded TRUE gates.
+
+### Added
+- Protection ACK diagnostics with order ID, status, type, side, quantity, trigger and reduce-only/close-on-trigger state.
+- Explicit protection target diagnostics before exchange submission.
+- R6.7 protection contract metadata in runtime state.
+- Release-specific audit notes and Demo validation checklist.
+
+### Modified
+- Config schema 22 -> 23.
+- Runtime schema 23 -> 24.
+- AI preset `AI_AGENT_RECOMMENDED_R6.6` -> `AI_AGENT_RECOMMENDED_R6.7`.
+- New-profile ATR TP default ON.
+- New-profile ATR SL default 1.8x.
+- Default TP quantity mode remains `PERCENT_%`, with TP1 50% and TP2 50%.
+
+### Audit / validation
+- AST parse: PASS.
+- Python bytecode compilation: PASS.
+- GUI callback binding: PASS.
+- GUI runtime-variable contract: PASS.
+- Save/load active configuration audit: PASS.
+- Synthetic 50/50 protection smoke test: PASS.
+- Single-TP smoke test: PASS.
+- AI gate-forwarding smoke test: PASS.
+
+See `docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md`.
+
 # V8.4.2 Forex/MT5 AI Agent R6.6 metadata alignment — 2026-09-28
 
 ## Modified
