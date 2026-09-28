@@ -62,8 +62,8 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 23  # R6.4 makes GUI shutdown non-blocking and preserves persisted migration behavior.
-RUNTIME_SCHEMA_VERSION = 24  # R6.5 runtime checkpoint adds TP split/protection metadata.
+CONFIG_SCHEMA_VERSION = 23  # R6.7 protection-order/reconciliation contract; existing saved profile values remain authoritative.
+RUNTIME_SCHEMA_VERSION = 24  # R6.7 runtime checkpoint adds TP split/protection reconciliation metadata.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
@@ -100,7 +100,7 @@ EVIDENCE_DEFAULT_REQUIRE_TREND = True
 EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT = True
 
 # ---------------------------------------------------------------------------
-# AI AGENT R6.5 — deterministic market-intelligence council.
+# AI AGENT R6.7 — deterministic market-intelligence council.
 # Inspired by the attached research-desk guide: specialists -> leads ->
 # adversarial review -> chief decision. This is NOT an LLM; it uses only
 # verified completed-candle/module evidence and explicit rules.
@@ -135,7 +135,7 @@ AI_AGENT_MAX_TP2_R_MULT = 3.00
 AI_AGENT_HIGH_VOL_ATR_PCT = 1.50
 AI_AGENT_LOW_VOL_ATR_PCT = 0.50
 
-# R6.5 AI-Agent recommended trading preset + bounded trade manager + thread/protection contract hardening. This is a deterministic configuration
+# R6.7 AI-Agent recommended trading preset + bounded trade manager + thread/protection contract hardening. This is a deterministic configuration
 # preset for a conservative/aggressive crypto trend-momentum profile; it is NOT
 # a profitability guarantee and it never changes API credentials, account mode,
 # symbol, or profile identity. The user must explicitly confirm before it applies.
