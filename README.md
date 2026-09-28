@@ -16,7 +16,7 @@ R6.6 remains a deterministic rule-based AI-Agent council, not an external LLM. S
 
 **Current production release: V8.4.2-R9.6**  
 **Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.5**  
-**Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1**
+**Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.6**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
