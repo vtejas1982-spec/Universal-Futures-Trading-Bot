@@ -46,8 +46,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1"
-APP_TITLE = "Universal Forex Trading Bot V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1 - MT5"
+APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.6"
+APP_TITLE = "Universal Forex Trading Bot V8.4.2-FOREX-AI-AGENT-R6.6 - MT5"
 AUDIT_BUILD = "V8.4.2-FOREX-AI-AGENT-AUDIT-2026-09-28-R6.5"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
