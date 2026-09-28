@@ -63,3 +63,33 @@ def test_r67_ai_manager_forwards_real_regime_gates():
     assert "adx_pass=bool(adx_pass)" in source
     assert "mtf_pass_bull=bool(mtf_pass_bull)" in source
     assert "mtf_pass_bear=bool(mtf_pass_bear)" in source
+
+
+def test_r67_ai_block_diagnostics_include_dominant_and_mtf_gate():
+    source = _source()
+    assert 'blocks=[f"DOMINANT={dominant_side}"]' in source
+    assert 'blocks.append("MTF_GATE_BUY")' in source
+    assert 'blocks.append("MTF_GATE_SELL")' in source
+    assert 'blocks.append("MTF_GATE_TIE")' in source
+
+
+def test_r67_ai_startup_log_uses_configured_thresholds():
+    source = _source()
+    assert 'f"AI MinFamilies={ai_min_families}"' in source
+    assert 'f"AI Edge>={ai_min_edge:.2f}"' in source
+    assert 'f"AI FamilyConfidence>={ai_family_confidence:.2f}"' in source
+    assert 'f"AI MaxConflicts={ai_max_conflicts}"' in source
+
+
+def test_r67_tp_preflight_rejects_invalid_split_and_ordering():
+    source = _source()
+    assert 'TP Quantity Mode must be PERCENT_% or FIXED_QTY.' in source
+    assert 'TP1/TP2 close percentages must each be greater than 0 and less than 100%.' in source
+    assert 'ATR TP2 multiplier must be greater than ATR TP1 multiplier.' in source
+
+
+def test_r67_runtime_schema_and_full_contract_audit_marker():
+    source = _source()
+    assert 'CONFIG_SCHEMA_VERSION = 23' in source
+    assert 'RUNTIME_SCHEMA_VERSION = 24' in source
+    assert 'R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT' in source
