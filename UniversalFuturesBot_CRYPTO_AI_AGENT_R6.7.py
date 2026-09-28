@@ -48,7 +48,7 @@ from pathlib import Path
 
 APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.7"
 APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.7 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-DIAGNOSTIC-HOTFIX"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -1803,8 +1803,19 @@ class StrategyEngine:
                 return (f"AI_AGENT_CHIEF_{result['side']} | BullFamilies={bulls} | BearFamilies={bears} | "
                         f"Edge={result['edge']:.2f} | Conflicts={conflicts} | "
                         f"Regime={'PASS' if (result['regime_buy'] or result['regime_sell']) else 'FAIL'}")
-            blocks=[]
-            fams=result["bull_families"] if result["bull_total"]>=result["bear_total"] else result["bear_families"]
+            # R6.7 diagnostic hardening: report the dominant evidence side and
+            # its directional MTF gate. BUY and SELL have separate MTF flags.
+            if result["bull_total"] > result["bear_total"]:
+                dominant_side = "BUY"
+                fams = result["bull_families"]
+            elif result["bear_total"] > result["bull_total"]:
+                dominant_side = "SELL"
+                fams = result["bear_families"]
+            else:
+                dominant_side = "TIE"
+                fams = result["bull_families"] if result["bull_families"] else result["bear_families"]
+
+            blocks=[f"DOMINANT={dominant_side}"]
             effective_min_families = AI_AGENT_MIN_FAMILIES if ai_min_families is None else int(ai_min_families)
             effective_min_edge = AI_AGENT_MIN_EDGE if ai_min_edge is None else float(ai_min_edge)
             effective_max_conflicts = AI_AGENT_MAX_CONFLICTING_FAMILIES if ai_max_conflicting_families is None else int(ai_max_conflicting_families)
@@ -1818,6 +1829,12 @@ class StrategyEngine:
             if not atr_pass: blocks.append("ATR_GATE")
             if not vol_pass: blocks.append("VOLUME_GATE")
             if not adx_pass: blocks.append("ADX_GATE")
+            if dominant_side == "BUY" and not mtf_pass_bull:
+                blocks.append("MTF_GATE_BUY")
+            elif dominant_side == "SELL" and not mtf_pass_bear:
+                blocks.append("MTF_GATE_SELL")
+            elif dominant_side == "TIE" and not (mtf_pass_bull and mtf_pass_bear):
+                blocks.append("MTF_GATE_TIE")
             return "AI_AGENT_BLOCKED | "+",".join(blocks or ["CONFLICT_OR_NEUTRAL"])
 
         if mode == "ADAPTIVE_EVIDENCE":
@@ -11034,10 +11051,17 @@ class UniversalFuturesBotGUI:
                 f"EMA CROSS ENTRY MODE: {self.v_ema_cross_entry_mode.get().strip().upper()}"
             )
 
-            self.log(
-                f"SIGNAL MODE: {signal_mode} | "
-                f"Minimum Score={min_score}"
-            )
+            if signal_mode == "AI_AGENT":
+                self.log(
+                    "SIGNAL MODE: AI_AGENT | "
+                    "AI MinFamilies=3 | AI Edge>=0.20 | "
+                    "AI FamilyConfidence>=0.55 | Generic MinScore=1 (validation only)"
+                )
+            else:
+                self.log(
+                    f"SIGNAL MODE: {signal_mode} | "
+                    f"Minimum Score={min_score}"
+                )
             self.log(
                 f"SIZING: {'EQUITY_RISK_%' if self.v_risk_sizing_enabled.get() else 'FIXED_QTY'} | "
                 + (f"Risk Per Trade={self.e_risk_pct.get().strip()}%" if self.v_risk_sizing_enabled.get() else f"Fixed Qty={self.e_fixed_qty.get().strip()} | Risk % not used for entry size")
