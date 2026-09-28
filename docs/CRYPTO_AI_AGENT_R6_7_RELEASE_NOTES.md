@@ -156,3 +156,51 @@ Before Live:
 ## Important
 
 R6.7 is an engineering hardening release. It does not claim maximum profit, profitability, or guaranteed execution. Futures trading remains high risk.
+
+
+## R6.7 Full-Contract Audit Hotfix — 2026-09-29
+
+After the first R6.7 Demo run, the source was re-audited across the complete engine contract rather than only the reported AI diagnostic.
+
+### Fixed / hardened
+
+- AI-Agent blocked diagnostics now identify the dominant side (BUY, SELL, or TIE).
+- AI-Agent blocked diagnostics now explicitly report the directional MTF failure as MTF_GATE_BUY, MTF_GATE_SELL, or MTF_GATE_TIE.
+- AI-Agent startup logging now reports the actual configured Minimum Families, Edge, Family Confidence, Max Conflicts, Trend requirement and Structure requirement instead of hard-coded display values.
+- TP preflight now validates the TP quantity mode before exchange mutation.
+- TP1/TP2 percentage mode now rejects zero/negative or 100%+ individual values when both targets are enabled and requires the combined split to equal 100%.
+- Fixed-quantity TP mode now rejects non-positive TP quantities before exchange mutation.
+- ATR TP preflight now requires TP2's multiplier to be greater than TP1's multiplier when both targets are enabled.
+- Existing actual-fill protection, rollback, verification and reconciliation logic was retained.
+
+### Contract audit
+
+The complete R6.7 review covered:
+
+- Strategy indicator modules and completed-candle semantics.
+- Evidence-family construction and AI-Agent decision gates.
+- ATR, ADX, Volume and directional MTF regime gates.
+- Dynamic AI trade-management gate propagation.
+- Entry sizing and risk-mode compatibility.
+- SL/TP calculation and actual-position quantity handling.
+- TP1/TP2 50/50 split and single-TP full-close behavior.
+- Break-even replacement protection.
+- Exchange order acknowledgement, verification and reconciliation.
+- GUI settings variables, callbacks and runtime snapshots.
+- Profile save/load and schema migration compatibility.
+- Grid isolation and single-symbol Max Open Trades contract.
+- Kill-switch, stop/cleanup and recovery lifecycle.
+- NWE causal/non-repainting contract.
+- Divergence and Volume/SR configuration persistence.
+
+### Additional validation
+
+- AST parse: PASS
+- Python bytecode compile: PASS
+- Module import: PASS
+- TP 50/50 quantity smoke test: PASS
+- Invalid TP split rejection: PASS
+- AI MTF gate forwarding: PASS
+- GUI callback/static contract checks: PASS
+
+This remains an engineering/Demo hardening release; these checks do not establish profitability or guarantee live-exchange execution.
