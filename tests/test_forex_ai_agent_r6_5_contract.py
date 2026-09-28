@@ -30,7 +30,7 @@ def test_strategy_engine_parity():
 def test_forex_r65_contract():
     s=FOREX.read_text(encoding="utf-8")
     required=(
-      'APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.5"',
+      'APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1"',
       'AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.5"',
       "AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED = True",
       "AI_AGENT_MIN_RISK_PCT = 0.20","AI_AGENT_MAX_RISK_PCT = 0.50",
@@ -38,8 +38,8 @@ def test_forex_r65_contract():
       "AI_AGENT_MIN_TP1_R_MULT = 1.00","AI_AGENT_MAX_TP1_R_MULT = 1.50",
       "AI_AGENT_MIN_TP2_R_MULT = 2.00","AI_AGENT_MAX_TP2_R_MULT = 3.00",
       "command=self._on_signal_mode_selected",
-      "self.v_grid_mode","self.v_liq_entry_mode","self.e_div_min_count","self.v_div_entry_mode",
-      "Dynamic AI SL preserved","ForexGuiCloseWorker")
+      "self.v_grid_mode","self.v_liq_entry_mode","self.e_div_min_count","self.v_div_entry_mode","self.e_atr_tp1_mult","self.e_atr_tp2_mult",
+      "Dynamic AI SL preserved","ForexGuiCloseWorker","CONFIG_SCHEMA_VERSION = 22","\"emergency_scope\": \"BOT_ONLY\"","sr_tf1\":\"v_sr_tf1\"")
     for marker in required: assert marker in s, marker
 
 def test_runtime_bindings():
@@ -57,7 +57,28 @@ def test_backtester_uses_live_engine():
         assert marker in s, marker
 
 if __name__=="__main__":
-    for f in (test_compile,test_strategy_engine_parity,test_forex_r65_contract,test_runtime_bindings,test_backtester_uses_live_engine):
+    for f in (test_compile,test_strategy_engine_parity,test_forex_r65_contract,test_runtime_bindings,test_backtester_uses_live_engine,test_r65_gui_contract_defines_all_runtime_controls,test_r65_preset_has_expected_defaults_and_sr_mapping):
         f()
         print(f.__name__+": PASS")
     print("ALL FOREX R6.5 CONTRACT TESTS: PASS")
+
+def test_r65_gui_contract_defines_all_runtime_controls():
+    s=FOREX.read_text(encoding="utf-8")
+    required=(
+        "self.v_grid_mode=tk.StringVar",
+        "self.v_liq_entry_mode=tk.StringVar",
+        "self.v_div_entry_mode=tk.StringVar",
+        "self.e_div_min_count=tk.Entry",
+        "self.e_atr_tp1_mult=tk.Entry",
+        "self.e_atr_tp2_mult=tk.Entry",
+    )
+    for marker in required: assert marker in s, marker
+
+def test_r65_preset_has_expected_defaults_and_sr_mapping():
+    s=FOREX.read_text(encoding="utf-8")
+    assert '"emergency_scope": "BOT_ONLY"' in s
+    assert '"sr_tf1":"v_sr_tf1"' in s
+    assert '"sr_tf2":"v_sr_tf2"' in s
+    assert '"sr_tf3":"v_sr_tf3"' in s
+    assert '"sr_tf4":"v_sr_tf4"' in s
+
