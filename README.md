@@ -28,7 +28,7 @@ The current deterministic Crypto AI-Agent maintenance release is **V8.4.2-CRYPTO
 - AI gate-forwarding smoke test: PASS.
 - This audit does **not** establish profitability or live-exchange safety; validate the exact R6.7 file on Bybit Demo/Testnet before Live.
 
-See `docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md`.
+See `docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md` and `docs/USER_MANUAL_V8_4_2_R6_7_CRYPTO.md`.
 
 
 ## Historical Crypto AI-Agent R6.6 release — 2026-09-28
