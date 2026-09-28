@@ -2,34 +2,39 @@
 
 The current deterministic Crypto AI-Agent maintenance release is **V8.4.2-CRYPTO-AI-AGENT-R6.7**.
 
-- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py`
-- Previous R6.6 source remains in Git history and is not overwritten.
-- Crypto config/runtime schema: **23 / 24**
+### R6.7 engine status
+
+- Live/Demo engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py`
+- Config schema: **23**
+- Runtime schema: **24**
 - AI preset: `AI_AGENT_RECOMMENDED_R6.7`
-- R6.7 is a protection/execution hardening release. It specifically addresses the observed case where the GUI showed TP1/TP2 enabled but Bybit displayed only the SL conditional order.
-- TP1/TP2 retain the intended **50% / 50%** actual-position split by default, with TP1 break-even support.
-- Bybit conditional exits now submit with explicit `triggerDirection`, `triggerBy=LastPrice`, `reduceOnly=true`, `closeOnTrigger=true` and one-way `positionIdx=0`.
-- Protection acknowledgements now log exchange-returned order ID/status/type/quantity/trigger/reduce-only fields without logging API secrets.
-- Protection verification now checks Bybit's conditional **StopOrder** view before falling back to generic order lookup.
-- A protection-set failure rolls back known created orders and the existing safety recovery remains responsible for cancelling/flattening any exchange residue.
-- AI trade-management now receives the actual ATR/Volume/ADX/MTF gate state instead of hard-coding those gates to `True`.
-- Single-TP configurations no longer require a meaningless 50+50 split; the enabled TP closes the full remaining position.
-- New-profile defaults align ATR TP with the recommended AI-Agent protection path; saved profiles remain authoritative.
+- Protection contract: actual filled entry + actual filled position quantity.
+- Default TP split: **TP1 50% / TP2 50%**.
+- Bybit protection uses explicit trigger direction, LastPrice trigger source, reduce-only and close-on-trigger semantics.
+- Protection creation is acknowledged, logged, verified and reconciled; a failed protection set is rolled back and the existing fail-closed recovery path handles the position.
+- AI trade-management receives the real ATR, Volume, ADX and directional MTF gate state.
+- AI-Agent blocked diagnostics identify the dominant side and the directional MTF gate when it is the blocker.
+- Startup logging reports the actual configured AI-Agent thresholds rather than hard-coded display values.
+- TP preflight rejects invalid quantity modes, invalid percentage splits, non-positive fixed TP quantities, and reversed ATR TP1/TP2 multipliers before exchange mutation.
+- Single-TP mode closes the full remaining position; TP1 break-even protection remains supported.
+- Existing saved profiles remain authoritative during migration; new fields use current R6.7 defaults.
 
-### R6.7 audit status
+### R6.7 full contract audit
 
-- Local AST parse: PASS.
-- Local Python bytecode compilation: PASS.
-- GUI callback binding audit: PASS.
-- GUI runtime variable contract audit: PASS.
-- Save/load configuration coverage audit: PASS for active persisted fields; `nwe_repaint` remains an intentional compatibility key because R6.6/R6.7 NWE execution is always non-repainting.
-- 50/50 Bybit protection smoke test: PASS (synthetic exchange).
-- Single-TP protection smoke test: PASS.
-- AI gate-forwarding smoke test: PASS.
-- This audit does **not** establish profitability or live-exchange safety; validate the exact R6.7 file on Bybit Demo/Testnet before Live.
+The review covered strategy modules, Evidence Families, AI-Agent gates, completed-candle semantics, dynamic trade management, sizing/risk, SL/TP calculation, TP quantity persistence, break-even handling, exchange order acknowledgement/verification/reconciliation, GUI variables and callbacks, profile configuration save/load/migration, Grid isolation, Max Open Trades, kill-switch lifecycle, recovery, NWE non-repainting behavior, and advanced divergence/Volume-SR configuration.
+
+Validation completed:
+- AST parse: PASS
+- Python bytecode compilation: PASS
+- Module import: PASS
+- TP 50/50 quantity smoke test: PASS
+- Invalid TP split rejection: PASS
+- AI MTF gate smoke test: PASS
+- GUI/runtime/config contract checks: PASS
+
+This is an engineering/Demo hardening release. It does **not** establish profitability or guarantee live-exchange execution. Validate the exact R6.7 engine on Bybit Demo/Testnet before Live.
 
 See `docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md` and `docs/USER_MANUAL_V8_4_2_R6_7_CRYPTO.md`.
-
 
 ## Historical Crypto AI-Agent R6.6 release — 2026-09-28
 
