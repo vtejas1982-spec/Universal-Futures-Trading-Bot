@@ -4,11 +4,11 @@ This main branch contains the current active production code only. Superseded ro
 
 ## Live engines
 - UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py — Crypto Futures production engine
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py — Crypto AI-Agent production/Demo engine
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6.py — Crypto AI-Agent production/Demo engine
 - UniversalForexBot_MT5.py — Forex/MT5 AI-Agent R6.5 production engine
 
 ## Backtesters
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py — AI-Agent strategy/risk/SL/TP backtester
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py — AI-Agent strategy/risk/SL/TP backtester
 - UniversalForexBot_MT5_BACKTESTER.py — Forex/MT5 AI-Agent R6.5 strategy/risk/SL/TP backtester
 
 ## Tests
@@ -38,10 +38,10 @@ This main branch contains the current active production code only. Superseded ro
 
 ## Current versions
 - Crypto: V8.4.2-R9.6
-- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R6.5
+- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R6.6
 - Forex/MT5: V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1
-- Crypto AI config schema: 21
-- Crypto AI runtime schema: 22
+- Crypto AI config schema: 22
+- Crypto AI runtime schema: 23
 - Crypto R9.6 config/runtime schema: 12
 - Forex AI Agent config/runtime schema: 22 / 22
 
