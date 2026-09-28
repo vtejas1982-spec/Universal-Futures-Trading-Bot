@@ -1,3 +1,13 @@
+# V8.4.2 Forex/MT5 AI Agent R6.6 metadata alignment — 2026-09-28
+
+## Modified
+- Forex/MT5 live engine release marker advanced from R6.5-HOTFIX1 to R6.6.
+- Forex/MT5 backtester release marker advanced to R6.6.
+- Forex R6.6 manual now matches the current configuration contract.
+- No new Forex Grid execution was introduced; MT5 remains single-position and Grid is OFF-only.
+
+---
+
 # V8.4.2 Crypto AI-Agent R6.6 — parser-integrity and release-contract repair — 2026-09-28
 
 ## Fixed
