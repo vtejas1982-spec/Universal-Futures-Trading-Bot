@@ -7037,8 +7037,8 @@ class UniversalFuturesBotGUI:
                 cfg["signal_mode_v2_migrated"] = True
 
             if saved_signal_mode not in SUPPORTED_SIGNAL_MODES:
-                self.log(f"Unknown saved Signal Mode {saved_signal_mode}; falling back to SINGLE_SIGNAL.")
-                saved_signal_mode = "SINGLE_SIGNAL"
+                self.log(f"Unknown saved Signal Mode {saved_signal_mode}; falling back to {DEFAULT_SIGNAL_MODE}.")
+                saved_signal_mode = DEFAULT_SIGNAL_MODE
             self.v_signal_mode.set(saved_signal_mode)
             self.v_hold_until_all_reverse.set(cfg.get("hold_until_all_reverse", DEFAULT_SIMPLE_HOLD_ENABLED))
             self.v_reverse_exit_mode.set(str(cfg.get("reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() if str(cfg.get("reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() in REVERSAL_EXIT_MODES else DEFAULT_REVERSAL_EXIT_MODE)
@@ -7204,10 +7204,11 @@ class UniversalFuturesBotGUI:
                 )
             )
 
+            # Canonical R6.7 key wins; legacy tp1_be is only a fallback.
             self.v_tp1_be.set(
                 cfg.get(
                     "tp1_be",
-                    True,
+                    cfg.get("simple_tp1_be_enabled", DEFAULT_SIMPLE_TP1_BE_ENABLED),
                 )
             )
 
@@ -9360,7 +9361,8 @@ class UniversalFuturesBotGUI:
         expected = []
         if sl_id:
             expected.append(("SL/BE", sl_id))
-        if not self.tp1_be_done and tp1_id:
+        tp1_be_enabled = bool(self._runtime_gui_value("v_tp1_be", True))
+        if tp1_id and not self.tp1_be_done and tp1_be_enabled:
             expected.append(("TP1", tp1_id))
         if tp2_id:
             expected.append(("TP2", tp2_id))
