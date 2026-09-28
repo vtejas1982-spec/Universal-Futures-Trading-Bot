@@ -129,3 +129,32 @@ Before Live, open a small Bybit Demo/Testnet position and verify:
 - break-even SL replaces the original SL after TP1 when enabled;
 - TP2 closes the remaining position.
 
+
+
+## Final Extension — 2026-09-29
+
+### Newly identified and fixed issue
+Volume/SR live candle mismatch: the live cache could include the newest still-forming chart/HTF candle while the rest of the strategy used the last completed candle. This could make VOL_SR change intrabar and disagree with the completed-candle strategy state.
+
+Fix: the live Volume/SR cache now excludes the newest candle from chart and HTF frames before calculating Volume/SR states.
+
+### Protection validation hardening
+- Disabled protection targets are not required to contain positive values.
+- Enabled SL/TP targets must be finite and positive.
+- ATR SL/TP multipliers are validated according to enabled features.
+- TP2 ATR multiplier must be greater than TP1 when both ATR targets are enabled.
+
+### Local validation after final fixes
+AST parse: PASS
+Python bytecode compile: PASS
+Module import: PASS
+GUI callback audit: PASS (15 callback references, no undefined callback methods)
+AI-Agent decision smoke tests: PASS
+AI MTF gate blocking smoke test: PASS
+TP 50/50 split smoke test: PASS
+Invalid TP split rejection: PASS
+Completed-candle Volume/SR cache smoke test: PASS
+AI preset configuration keys present in save contract: PASS (134/134)
+No duplicate class method definitions found
+
+The source-level audit is complete for this R6.7 engine. Exchange-side Bybit Demo verification remains the final operational test.
