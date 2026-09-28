@@ -72,3 +72,20 @@ This main branch contains the current active production code only. Superseded ro
 
 ## Naming policy
 Active production root files use the release-identifying filename. New experimental revisions should be kept in Git branches/tags or a dedicated development directory rather than accumulating duplicate root files.
+
+
+## R6.7 Final Audit Update — 2026-09-29
+
+- Engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py
+- Version: V8.4.2-CRYPTO-AI-AGENT-R6.7
+- Config schema: 23
+- Runtime schema: 24
+- Audit marker: V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT
+
+### Final audit scope
+Strategy and evidence-family decision logic; completed-candle consistency including Volume/SR; AI-Agent risk/SL/TP management; position sizing and risk controls; SL/TP overlap/priority and TP quantity accounting; GUI callbacks/settings/defaults; save/load/migration; protection verification/reconciliation; kill-switch and recovery lifecycle.
+
+### Final audit result
+No unresolved missing GUI callback, undefined runtime protection setting, or broken AI gate was found in the audited engine. One live-strategy timing inconsistency was fixed: Volume/SR now uses confirmed candles only.
+
+Exchange-side Bybit Demo validation remains mandatory before Live.
