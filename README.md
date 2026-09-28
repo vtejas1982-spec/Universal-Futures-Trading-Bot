@@ -751,3 +751,22 @@ After the overnight SL event, Bybit returned terminal order state 110001 (order 
 
 ## Latest Crypto R8
 See `docs/CRYPTO_R8_RELEASE_NOTES.md` and `CHANGELOG.md` for the 2026-09-27 lifecycle, risk-sizing and exchange-quantity hardening. The stable production filename remains `current Crypto R9.6 engine`.
+
+
+## Crypto AI-Agent R6.7 — Full Strategy / Risk / Protection Audit (2026-09-29)
+
+The Crypto AI-Agent R6.7 engine received a final source audit focused on strategy correctness, completed-candle consistency, settings/defaults, GUI callbacks, configuration persistence, position sizing, risk controls, and SL/TP interaction.
+
+### Latest fixes
+- Fixed Volume/SR live-candle inconsistency: live Volume/SR now excludes the newest still-forming chart and higher-timeframe candle, keeping VOL_SR aligned with the completed-candle entry contract.
+- Hardened protection validation: disabled SL/TP fields are no longer rejected merely because an unused target is zero.
+- Hardened ATR TP ordering: when both ATR TP levels are enabled, TP2 must be farther from entry than TP1.
+- Hardened ATR multiplier validation according to the protection features actually enabled.
+- Retained actual-fill SL/TP protection, TP split validation, exchange ACK/verification, rollback, reconciliation, break-even replacement, AI gate diagnostics, and fail-closed safety controls.
+
+### Audit coverage
+Strategy modules, evidence families, AI-Agent gates, MTF/ADX/Volume/ATR regime filters, completed-candle semantics, entry sizing, daily/emergency risk controls, SL/TP priority, TP1/TP2 quantity accounting, break-even replacement, exchange protection verification, GUI callbacks, defaults, save/load migration, grid isolation, kill-switch and recovery lifecycle.
+
+Validation: AST parse, bytecode compile, module import, GUI callback audit, configuration-contract audit, AI decision smoke tests, TP split smoke tests, and completed-candle Volume/SR smoke test all pass locally.
+
+The remaining operational validation is Bybit Demo: open a small position and verify the actual SL + TP1 + TP2 conditional orders remain active and behave as configured.
