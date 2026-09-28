@@ -46,8 +46,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.5"
-APP_TITLE = "Universal Forex Trading Bot V8.4.2-FOREX-AI-AGENT-R6.5 - MT5"
+APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1"
+APP_TITLE = "Universal Forex Trading Bot V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1 - MT5"
 AUDIT_BUILD = "V8.4.2-FOREX-AI-AGENT-AUDIT-2026-09-28-R6.5"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
@@ -1232,7 +1232,7 @@ AI_AGENT_PRESET = {
     "fixed_qty": "0.001",
     "max_dd": "5.0",
     "emergency_capital_pct": "10.0",
-    "emergency_scope": "BOT_SYMBOL",
+    "emergency_scope": "BOT_ONLY",
     # Protection: actual-fill based, simple ROI + ATR SL fallback chain.
     "legacy_protection_enabled": False,
     "simple_sl_enabled": True,
@@ -3109,7 +3109,7 @@ class UniversalFuturesBotGUI:
             "bb_len":"e_bb_len","bb_std":"e_bb_std","div_pivot":"e_div_pivot","div_min_count":"e_div_min_count","div_max_pivots":"e_div_max_pivots","div_max_bars":"e_div_max_bars","div_cci_len":"e_div_cci","div_mom_len":"e_div_mom","div_vwmacd_fast":"e_div_vwfast","div_vwmacd_slow":"e_div_vwslow","div_cmf_len":"e_div_cmf","div_mfi_len":"e_div_mfi","sr_volume_ma":"e_sr_vol_ma","min_reverse_families":"e_min_reverse_families",
         }
         vm={
-            "signal_mode":"v_signal_mode","timeframe":"v_tf","no_same_candle":"v_no_same_candle","require_opposite_after_sl":"v_require_opposite_after_exit","use_st":"v_use_st","use_ema":"v_use_ema","use_ema_cross":"v_use_ema_cross","use_macd":"v_use_macd","use_rsi":"v_use_rsi","use_stoch":"v_use_stoch","use_vwap":"v_use_vwap","use_vwap_delta":"v_use_vwap_delta","use_vidya":"v_use_vidya","use_nwe":"v_use_nwe","use_liq_swings":"v_use_liq_swing","use_trendline":"v_use_trendline","use_divergence":"v_use_divergence","div_use_all":"v_div_use_all","use_vol_sr":"v_use_vol_sr","use_vol":"v_use_vol","use_adx":"v_use_adx","use_atr":"v_use_atr","use_mtf":"v_use_mtf","use_bb":"v_use_bb","evidence_require_trend":"v_evidence_require_trend","evidence_require_independent":"v_evidence_require_independent","size_mode":"v_size_mode","emergency_scope":"v_emergency_scope","sl_mode":"v_sl_mode","tp_mode":"v_tp_mode","tp1_be":"v_tp1_be","tp_qty_mode":"v_tp_qty_mode","hold_until_all_reverse":"v_hold_until_all_reverse","reverse_exit_mode":"v_reverse_exit_mode","hold_sl_wait_reversal":"v_hold_sl_wait_reversal","grid_mode":"v_grid_mode","st_source":"v_st_source","st_entry_mode":"v_st_entry_mode","st_change_atr":"v_st_change_atr","ema_cross_entry_mode":"v_ema_cross_entry_mode","rsi_logic":"v_rsi_logic","rsi_ma_type":"v_rsi_ma_type","vwap_delta_smooth":"v_vwap_delta_smooth","vwap_delta_logic":"v_vwap_delta_logic","vidya_entry_mode":"v_vidya_entry_mode","nwe_entry_mode":"v_nwe_entry_mode","nwe_repaint":"v_nwe_repaint","liq_area":"v_liq_area","liq_filter":"v_liq_filter","liq_entry_mode":"v_liq_entry_mode","trendline_entry_mode":"v_trend_entry","div_type":"v_div_type","div_source":"v_div_source","div_entry_mode":"v_div_entry_mode","sr_vote_mode":"v_sr_vote","sr_entry_mode":"v_sr_entry","ai_require_trend":"v_ai_require_trend","ai_require_structure":"v_ai_require_structure",
+            "signal_mode":"v_signal_mode","timeframe":"v_tf","no_same_candle":"v_no_same_candle","require_opposite_after_sl":"v_require_opposite_after_exit","use_st":"v_use_st","use_ema":"v_use_ema","use_ema_cross":"v_use_ema_cross","use_macd":"v_use_macd","use_rsi":"v_use_rsi","use_stoch":"v_use_stoch","use_vwap":"v_use_vwap","use_vwap_delta":"v_use_vwap_delta","use_vidya":"v_use_vidya","use_nwe":"v_use_nwe","use_liq_swings":"v_use_liq_swing","use_trendline":"v_use_trendline","use_divergence":"v_use_divergence","div_use_all":"v_div_use_all","use_vol_sr":"v_use_vol_sr","use_vol":"v_use_vol","use_adx":"v_use_adx","use_atr":"v_use_atr","use_mtf":"v_use_mtf","use_bb":"v_use_bb","evidence_require_trend":"v_evidence_require_trend","evidence_require_independent":"v_evidence_require_independent","size_mode":"v_size_mode","emergency_scope":"v_emergency_scope","sl_mode":"v_sl_mode","tp_mode":"v_tp_mode","tp1_be":"v_tp1_be","tp_qty_mode":"v_tp_qty_mode","hold_until_all_reverse":"v_hold_until_all_reverse","reverse_exit_mode":"v_reverse_exit_mode","hold_sl_wait_reversal":"v_hold_sl_wait_reversal","grid_mode":"v_grid_mode","st_source":"v_st_source","st_entry_mode":"v_st_entry_mode","st_change_atr":"v_st_change_atr","ema_cross_entry_mode":"v_ema_cross_entry_mode","rsi_logic":"v_rsi_logic","rsi_ma_type":"v_rsi_ma_type","vwap_delta_smooth":"v_vwap_delta_smooth","vwap_delta_logic":"v_vwap_delta_logic","vidya_entry_mode":"v_vidya_entry_mode","nwe_entry_mode":"v_nwe_entry_mode","nwe_repaint":"v_nwe_repaint","liq_area":"v_liq_area","liq_filter":"v_liq_filter","liq_entry_mode":"v_liq_entry_mode","trendline_entry_mode":"v_trend_entry","div_type":"v_div_type","div_source":"v_div_source","div_entry_mode":"v_div_entry_mode","sr_vote_mode":"v_sr_vote","sr_entry_mode":"v_sr_entry","sr_tf1":"v_sr_tf1","sr_tf2":"v_sr_tf2","sr_tf3":"v_sr_tf3","sr_tf4":"v_sr_tf4","ai_require_trend":"v_ai_require_trend","ai_require_structure":"v_ai_require_structure",
         }
         for k,a in em.items():
             if k in p and hasattr(self,a): self._set_entry_value(a,p[k])
@@ -5517,6 +5517,8 @@ class UniversalFuturesBotGUI:
         _i(self.e_vidya_len, "VIDYA Length"); _i(self.e_vidya_momentum, "VIDYA Momentum"); _f(self.e_vidya_band, "VIDYA Band", positive=True)
         _f(self.e_nwe_bandwidth, "NWE Bandwidth", positive=True); _f(self.e_nwe_mult, "NWE Multiplier", positive=True)
         _f(self.e_atr_min_pct, "Minimum ATR %", 0, 100); _i(self.e_vol_len, "Volume MA Period"); _f(self.e_adx_thresh, "ADX Threshold", 0, 100)
+        _f(self.e_atr_tp1_mult, "ATR TP1 Multiplier", positive=True); _f(self.e_atr_tp2_mult, "ATR TP2 Multiplier", positive=True)
+        if float(self.e_atr_tp2_mult.get()) <= float(self.e_atr_tp1_mult.get()): raise ValueError("ATR TP2 Multiplier must be greater than ATR TP1 Multiplier.")
         _i(self.e_liq_len, "Liquidity Swing Pivot"); _f(self.e_liq_filter_value, "Liquidity Filter Value", 0)
         _i(self.e_trend_len, "Trendline Pivot"); _i(self.e_trend_min_dist, "Trendline Min Distance"); _f(self.e_trend_buffer, "Trendline Buffer %", 0); _i(self.e_trend_retest, "Trendline Retest Candles")
         _i(self.e_div_pivot, "Divergence Pivot"); _i(self.e_div_max_pivots, "Divergence Max Pivots"); _i(self.e_div_max_bars, "Divergence Max Bars", 30)
@@ -10079,6 +10081,8 @@ def _r65_load_ai(self, cfg):
     self.v_liq_entry_mode.set(cfg.get("liq_entry_mode","FRESH_BREAK"))
     self.e_div_min_count.delete(0,tk.END); self.e_div_min_count.insert(0,cfg.get("div_min_count","1"))
     self.v_div_entry_mode.set(cfg.get("div_entry_mode","FRESH"))
+    self.e_atr_tp1_mult.delete(0,tk.END); self.e_atr_tp1_mult.insert(0,cfg.get("atr_tp1_mult","1.2"))
+    self.e_atr_tp2_mult.delete(0,tk.END); self.e_atr_tp2_mult.insert(0,cfg.get("atr_tp2_mult","2.2"))
     self.ai_agent_preset_name=cfg.get("ai_agent_preset_name","CURRENT_SETTINGS")
     self.ai_agent_preset_applied=bool(cfg.get("ai_agent_preset_applied",False))
 
@@ -10178,13 +10182,37 @@ def r65_start(self):
     self._r65_validate_ai()
     _prev_start(self)
     if self.is_running and self.v_signal_mode.get().strip().upper()=="AI_AGENT":
-        self.log(f"V8.4.2 FOREX AI-AGENT R6.5 | Preset={self.ai_agent_preset_name} | Risk=0.20–0.50% | SL=1.50–2.40 ATR | TP1=1.00–1.50R | TP2=2.00–3.00R")
+        self.log(f"V8.4.2 FOREX AI-AGENT R6.5-HOTFIX1 | Preset={self.ai_agent_preset_name} | Risk=0.20–0.50% | SL=1.50–2.40 ATR | TP1=1.00–1.50R | TP2=2.00–3.00R")
 
 
 def r65_finalize(self,reason="UNKNOWN",balance=None):
     out=_prev_finalize(self,reason=reason,balance=balance); self._ai_active_management=None; return out
 
 def r65_init(self,root):
+    # R6.5-HOTFIX1: initialize every R6.5 contract variable BEFORE _prev_init().
+    # _prev_init() calls self.load_settings(), which resolves to r65_load.
+    self.v_grid_mode=tk.StringVar(root,value="OFF")
+    self.v_liq_entry_mode=tk.StringVar(root,value="FRESH_BREAK")
+    self.v_div_entry_mode=tk.StringVar(root,value="FRESH")
+    self.e_div_min_count=tk.Entry(root); self.e_div_min_count.insert(0,"1")
+    self.e_atr_tp1_mult=tk.Entry(root); self.e_atr_tp1_mult.insert(0,"1.2")
+    self.e_atr_tp2_mult=tk.Entry(root); self.e_atr_tp2_mult.insert(0,"2.2")
+
+    self._r65_extra_frame=tk.LabelFrame(root,text=" R6.5 AI-Agent Controls — Forex / MT5 ")
+    self._r65_extra_frame.pack(side="bottom",fill="x",padx=8,pady=4)
+    fr=self._r65_extra_frame
+    tk.Label(fr,text="Liquidity Entry:").grid(row=0,column=0,sticky="e")
+    ttk.OptionMenu(fr,self.v_liq_entry_mode,"FRESH_BREAK","FRESH_BREAK","CURRENT_TREND").grid(row=0,column=1,padx=4,sticky="w")
+    tk.Label(fr,text="Divergence Entry:").grid(row=0,column=2,sticky="e")
+    ttk.OptionMenu(fr,self.v_div_entry_mode,"FRESH","FRESH","CURRENT_STATE").grid(row=0,column=3,padx=4,sticky="w")
+    tk.Label(fr,text="Min Div:").grid(row=0,column=4,sticky="e")
+    self.e_div_min_count.grid(row=0,column=5,padx=4,sticky="w")
+    tk.Label(fr,text="AI TP1 R:").grid(row=0,column=6,sticky="e")
+    self.e_atr_tp1_mult.grid(row=0,column=7,padx=4,sticky="w")
+    tk.Label(fr,text="AI TP2 R:").grid(row=0,column=8,sticky="e")
+    self.e_atr_tp2_mult.grid(row=0,column=9,padx=4,sticky="w")
+    tk.Label(fr,text="Grid: OFF (Forex execution disabled)",fg="#555555").grid(row=1,column=0,columnspan=10,sticky="w")
+
     _prev_init(self,root)
     self._ai_active_management=None
 GUI.__init__=r65_init
