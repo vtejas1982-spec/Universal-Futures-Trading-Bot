@@ -1,0 +1,65 @@
+from pathlib import Path
+import ast
+import re
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py"
+
+
+def _source():
+    return SOURCE.read_text(encoding="utf-8")
+
+
+def test_r67_parses_and_contains_expected_class_contract():
+    source = _source()
+    tree = ast.parse(source)
+    gui = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "UniversalFuturesBotGUI"
+    )
+    methods = {
+        node.name for node in gui.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    required = {
+        "_log_protection_order_response",
+        "_order_is_still_open",
+        "create_bybit_trigger",
+        "create_protection_orders",
+        "verify_protection_orders",
+    }
+    assert required <= methods
+
+
+def test_r67_bybit_protection_parameters_are_explicit():
+    source = _source()
+    for token in (
+        '"triggerPrice"',
+        '"triggerDirection"',
+        '"triggerBy": "LastPrice"',
+        '"reduceOnly": True',
+        '"closeOnTrigger": True',
+        '"positionIdx": 0',
+    ):
+        assert token in source
+
+
+def test_r67_tp_split_defaults_and_fail_closed_contract():
+    source = _source()
+    assert 'DEFAULT_TP_QTY_MODE = "PERCENT_%"' in source
+    assert "DEFAULT_TP1_CLOSE_PERCENT = 50.0" in source
+    assert "DEFAULT_TP2_CLOSE_PERCENT = 50.0" in source
+    assert "PROTECTION SET CREATE FAILED" in source
+    assert "PROTECTION VERIFY FAILED" in source
+    assert "Protection set incomplete" in source
+
+
+def test_r67_ai_manager_forwards_real_regime_gates():
+    source = _source()
+    assert "atr_pass=bool(atr_pass)" in source
+    assert "vol_pass=bool(vol_pass)" in source
+    assert "adx_pass=bool(adx_pass)" in source
+    assert "mtf_pass_bull=bool(mtf_pass_bull)" in source
+    assert "mtf_pass_bear=bool(mtf_pass_bear)" in source
