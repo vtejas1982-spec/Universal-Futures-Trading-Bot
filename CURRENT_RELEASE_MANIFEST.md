@@ -21,11 +21,11 @@ This main branch contains the current active production code only. Superseded ro
 
 ## Live engines
 - UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py — Crypto Futures production engine
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6.py — Crypto AI-Agent production/Demo engine
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py — Crypto AI-Agent production/Demo engine
 - UniversalForexBot_MT5.py — Forex/MT5 AI-Agent R6.6 production engine
 
 ## Backtesters
-- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py — AI-Agent strategy/risk/SL/TP backtester
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py — AI-Agent strategy/risk/SL/TP backtester (R6.7 live engine contract remains backward-compatible)
 - UniversalForexBot_MT5_BACKTESTER.py — Forex/MT5 AI-Agent R6.6 strategy/risk/SL/TP backtester
 
 ## Tests
@@ -34,16 +34,20 @@ This main branch contains the current active production code only. Superseded ro
 - tests/test_forex_engine.py
 - tests/test_forex_ai_agent_r6_5_contract.py
 - tests/test_crypto_ai_agent_r6_5_contract.py
+- tests/test_crypto_ai_agent_r6_7_protection_contract.py
 
 ## Build
 - BUILD_CRYPTO_EXE.bat
 - BUILD_CRYPTO_AI_AGENT_R6.5_EXE.bat
+- BUILD_CRYPTO_AI_AGENT_R6.7_EXE.bat
 - BUILD_FOREX_EXE.bat
 
 ## Documentation
 - README.md
 - CHANGELOG.md
 - docs/CRYPTO_AI_AGENT_R6_5_RELEASE_NOTES.md
+- docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md
+- docs/USER_MANUAL_V8_4_2_R6_7_CRYPTO.md
 - docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md
 - docs/CRYPTO_AI_AGENT_R6_5_BACKTESTER_RELEASE_NOTES.md
 - docs/CRYPTO_R9_6_RELEASE_NOTES.md
@@ -55,10 +59,10 @@ This main branch contains the current active production code only. Superseded ro
 
 ## Current versions
 - Crypto: V8.4.2-R9.6
-- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R6.6
+- Crypto AI Agent: V8.4.2-CRYPTO-AI-AGENT-R6.7
 - Forex/MT5: V8.4.2-FOREX-AI-AGENT-R6.6
-- Crypto AI config schema: 22
-- Crypto AI runtime schema: 23
+- Crypto AI config schema: 23
+- Crypto AI runtime schema: 24
 - Crypto R9.6 config/runtime schema: 12
 - Forex AI Agent config/runtime schema: 22 / 22
 
