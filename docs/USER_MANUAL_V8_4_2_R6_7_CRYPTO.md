@@ -277,3 +277,18 @@ For a two-target position, confirm Bybit Conditional orders contain:
 
 The R6.7 log should show SUBMIT, ACK and VERIFIED ACTIVE for each required protection order. If any required order is rejected or disappears while the position remains open, the protection reconciliation path reports it and attempts restoration; an inconclusive protection-state check pauses new entries rather than guessing.
 
+
+
+## Final audit notes — 2026-09-29
+
+### Volume/SR signal timing
+Volume/SR is now explicitly completed-candle only in the live worker. The newest chart/HTF candle is excluded before Volume/SR state calculation, keeping VOL_SR consistent with the other entry modules.
+
+### Protection settings
+- If a protection feature is OFF, its unused numeric target is not treated as an active validation requirement.
+- ATR SL multiplier is validated when ATR SL is enabled.
+- ATR TP1/TP2 multipliers are validated when their corresponding TP levels are enabled.
+- With both ATR TP levels ON, TP2 must be farther from entry than TP1.
+- The normal protection resolver still owns exactly one SL basis at a time: Hold-SL/WAIT, then ATR, then ROI, then Fallback.
+- TP uses ATR multipliers only when ATR TP is enabled; otherwise it uses the configured ROI targets.
+- The exchange-side SL protects the full live position; TP1/TP2 are separate reduce-only exits whose quantities account for the actual filled position.
