@@ -1,12 +1,44 @@
+## Current Crypto AI-Agent R6.7 release — 2026-09-29
 
-## Current AI-Agent R6.6 release — 2026-09-28
+The current deterministic Crypto AI-Agent maintenance release is **V8.4.2-CRYPTO-AI-AGENT-R6.7**.
+
+- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py`
+- Previous R6.6 source remains in Git history and is not overwritten.
+- Crypto config/runtime schema: **23 / 24**
+- AI preset: `AI_AGENT_RECOMMENDED_R6.7`
+- R6.7 is a protection/execution hardening release. It specifically addresses the observed case where the GUI showed TP1/TP2 enabled but Bybit displayed only the SL conditional order.
+- TP1/TP2 retain the intended **50% / 50%** actual-position split by default, with TP1 break-even support.
+- Bybit conditional exits now submit with explicit `triggerDirection`, `triggerBy=LastPrice`, `reduceOnly=true`, `closeOnTrigger=true` and one-way `positionIdx=0`.
+- Protection acknowledgements now log exchange-returned order ID/status/type/quantity/trigger/reduce-only fields without logging API secrets.
+- Protection verification now checks Bybit's conditional **StopOrder** view before falling back to generic order lookup.
+- A protection-set failure rolls back known created orders and the existing safety recovery remains responsible for cancelling/flattening any exchange residue.
+- AI trade-management now receives the actual ATR/Volume/ADX/MTF gate state instead of hard-coding those gates to `True`.
+- Single-TP configurations no longer require a meaningless 50+50 split; the enabled TP closes the full remaining position.
+- New-profile defaults align ATR TP with the recommended AI-Agent protection path; saved profiles remain authoritative.
+
+### R6.7 audit status
+
+- Local AST parse: PASS.
+- Local Python bytecode compilation: PASS.
+- GUI callback binding audit: PASS.
+- GUI runtime variable contract audit: PASS.
+- Save/load configuration coverage audit: PASS for active persisted fields; `nwe_repaint` remains an intentional compatibility key because R6.6/R6.7 NWE execution is always non-repainting.
+- 50/50 Bybit protection smoke test: PASS (synthetic exchange).
+- Single-TP protection smoke test: PASS.
+- AI gate-forwarding smoke test: PASS.
+- This audit does **not** establish profitability or live-exchange safety; validate the exact R6.7 file on Bybit Demo/Testnet before Live.
+
+See `docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md`.
+
+
+## Historical Crypto AI-Agent R6.6 release — 2026-09-28
 
 The current deterministic Crypto AI-Agent release is **V8.4.2-CRYPTO-AI-AGENT-R6.6**.
 
-- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6.py`
-- Backtester: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py`
-- Crypto config/runtime schema: **22 / 23**
-- AI preset: `AI_AGENT_RECOMMENDED_R6.6`
+- Historical live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6.py`
+- Historical backtester: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py`
+- Historical Crypto config/runtime schema: **22 / 23**
+- Historical AI preset: `AI_AGENT_RECOMMENDED_R6.6`
 - R6.6 specifically repairs multiple parser-level defects found in the downloadable R6.5 artifact and is validated locally with AST parsing and Python bytecode compilation.
 - Forex/MT5 documentation is synchronized in `docs/USER_MANUAL_V8_4_2_R6_6_FOREX_MT5.md`.
 
@@ -15,7 +47,7 @@ R6.6 remains a deterministic rule-based AI-Agent council, not an external LLM. S
 # Universal Futures & Forex Trading Bot
 
 **Current production release: V8.4.2-R9.6**  
-**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.5**  
+**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.7**  
 **Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.6**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
@@ -25,7 +57,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 | Area | Live engine | Backtester |
 |---|---|---|
 | Crypto / Futures | `UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py` | — |
-| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5.py` | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.5_BACKTESTER.py` |
+| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py` | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py` |
 | Forex / MT5 | `UniversalForexBot_MT5.py` | `UniversalForexBot_MT5_BACKTESTER.py` |
 
 ### Tests
