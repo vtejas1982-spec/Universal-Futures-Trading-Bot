@@ -48,7 +48,7 @@ from pathlib import Path
 
 APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.7"
 APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.7 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-DIAGNOSTIC-HOTFIX"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -10476,8 +10476,13 @@ class UniversalFuturesBotGUI:
 
         if self.v_simple_atr_sl_enabled.get() and float(self.e_atr_sl_mult.get()) <= 0:
             raise ValueError("ATR SL multiplier must be greater than 0.")
-        if self.v_simple_atr_tp_enabled.get() and (float(self.e_atr_tp1_mult.get()) <= 0 or float(self.e_atr_tp2_mult.get()) <= 0):
-            raise ValueError("ATR TP multipliers must be greater than 0.")
+        if self.v_simple_atr_tp_enabled.get():
+            atr_tp1_mult = float(self.e_atr_tp1_mult.get())
+            atr_tp2_mult = float(self.e_atr_tp2_mult.get())
+            if atr_tp1_mult <= 0 or atr_tp2_mult <= 0:
+                raise ValueError("ATR TP multipliers must be greater than 0.")
+            if self.v_tp_enabled.get() and self.v_tp1_enabled.get() and self.v_tp2_enabled.get() and atr_tp2_mult <= atr_tp1_mult:
+                raise ValueError("ATR TP2 multiplier must be greater than ATR TP1 multiplier.")
 
         if self.v_tp_enabled.get():
             tp1_on = self.v_tp1_enabled.get(); tp2_on = self.v_tp2_enabled.get()
@@ -10489,9 +10494,18 @@ class UniversalFuturesBotGUI:
                 raise ValueError("TP2 ROI must be greater than 0.")
             if tp1_on and tp2_on and float(self.e_roi_tp2.get()) <= float(self.e_roi_tp1.get()):
                 raise ValueError("TP2 ROI must be greater than TP1 ROI.")
+            tp_qty_mode = self.v_tp_qty_mode.get().strip().upper()
+            if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
+                raise ValueError("TP Quantity Mode must be PERCENT_% or FIXED_QTY.")
             tp1_close = float(self.e_tp1_close.get()); tp2_close = float(self.e_tp2_close.get())
-            if tp1_on and tp2_on and self.v_tp_qty_mode.get().strip().upper() == "PERCENT_%" and abs(tp1_close+tp2_close-100.0)>1e-9:
-                raise ValueError("TP1 + TP2 close percentages must equal 100%.")
+            if tp1_on and tp2_on and tp_qty_mode == "PERCENT_%":
+                if not 0.0 < tp1_close < 100.0 or not 0.0 < tp2_close < 100.0:
+                    raise ValueError("TP1/TP2 close percentages must each be greater than 0 and less than 100%.")
+                if abs(tp1_close + tp2_close - 100.0) > 1e-9:
+                    raise ValueError("TP1 + TP2 close percentages must equal 100%.")
+            elif tp1_on and tp2_on and tp_qty_mode == "FIXED_QTY":
+                if tp1_close <= 0 or tp2_close <= 0:
+                    raise ValueError("TP1/TP2 fixed quantities must each be greater than 0.")
 
         hold_sl_roi = float(self.e_hold_sl_roi.get())
         if self.v_hold_until_all_reverse.get() and hold_sl_roi <= 0:
@@ -11054,8 +11068,13 @@ class UniversalFuturesBotGUI:
             if signal_mode == "AI_AGENT":
                 self.log(
                     "SIGNAL MODE: AI_AGENT | "
-                    "AI MinFamilies=3 | AI Edge>=0.20 | "
-                    "AI FamilyConfidence>=0.55 | Generic MinScore=1 (validation only)"
+                    f"AI MinFamilies={ai_min_families} | "
+                    f"AI Edge>={ai_min_edge:.2f} | "
+                    f"AI FamilyConfidence>={ai_family_confidence:.2f} | "
+                    f"AI MaxConflicts={ai_max_conflicts} | "
+                    f"AI TrendReq={'ON' if ai_require_trend else 'OFF'} | "
+                    f"AI StructureReq={'ON' if ai_require_structure else 'OFF'} | "
+                    f"Generic MinScore={min_score} (validation only)"
                 )
             else:
                 self.log(
