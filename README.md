@@ -2,7 +2,7 @@
 
 **Current production release: V8.4.2-R9.6**  
 **Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.5**  
-**Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.5**
+**Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
 
@@ -59,6 +59,29 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - AI risk/SL/TP hard-envelope tests: PASS.
 
 See `docs/CRYPTO_AI_AGENT_R6_5_FULL_AUDIT_2026-09-27.md`.
+
+## V8.4.2-FOREX-AI-AGENT-R6.5-HOTFIX1 — Runtime contract repair + configuration parity — 2026-09-28
+
+### Fixed
+- Fixed the startup crash caused by R6.5 loading `v_grid_mode` before that GUI variable existed.
+- Added the missing R6.5 runtime controls for Liquidity Entry, Divergence Entry, Divergence Minimum Count, AI TP1 R and AI TP2 R.
+- Fixed the AI preset emergency scope default from the invalid `BOT_SYMBOL` value to the supported MT5 value `BOT_ONLY`.
+- Added S/R timeframe fields to the AI preset-application callback so the saved preset is fully reproducible.
+- Added deterministic validation that AI TP2 R is greater than AI TP1 R.
+- Bumped Forex configuration schema 21 -> 22; runtime schema remains 22.
+
+### Modified
+- Forex Grid remains explicitly **OFF-only**; no Forex grid execution path is enabled.
+- Forex R6.5 hotfix controls are visible in the GUI and persisted through the R6.5 save/load path.
+- The dedicated Forex backtester now identifies itself as the R6.5-HOTFIX1 backtester while continuing to use `UniversalForexBot_MT5.py` as the strategy source of truth.
+
+### Validation
+- Uploaded local R6.5-HOTFIX1 source: AST parse and bytecode compile PASS.
+- GUI attribute contract audit: PASS; no missing `e_*` / `v_*` runtime controls.
+- Callback binding audit: PASS.
+- AI council + bounded risk/SL/TP smoke test: PASS.
+- Preset coverage audit: PASS; all 119 active preset fields are mapped.
+- GitHub Forex contract tests expanded for the missing GUI controls, schema and preset mappings.
 
 ## V8.4.2-FOREX-AI-AGENT-R6.5 — Crypto R6.5 strategy parity + MT5-native execution — 2026-09-28
 
