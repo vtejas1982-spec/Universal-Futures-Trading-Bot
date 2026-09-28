@@ -1,3 +1,17 @@
+
+## Current AI-Agent R6.6 release — 2026-09-28
+
+The current deterministic Crypto AI-Agent release is **V8.4.2-CRYPTO-AI-AGENT-R6.6**.
+
+- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6.py`
+- Backtester: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py`
+- Crypto config/runtime schema: **22 / 23**
+- AI preset: `AI_AGENT_RECOMMENDED_R6.6`
+- R6.6 specifically repairs multiple parser-level defects found in the downloadable R6.5 artifact and is validated locally with AST parsing and Python bytecode compilation.
+- Forex/MT5 documentation is synchronized in `docs/USER_MANUAL_V8_4_2_R6_6_FOREX_MT5.md`.
+
+R6.6 remains a deterministic rule-based AI-Agent council, not an external LLM. Syntax validation does not establish profitability or live-exchange execution.
+
 # Universal Futures & Forex Trading Bot
 
 **Current production release: V8.4.2-R9.6**  
