@@ -11213,7 +11213,8 @@ class UniversalFuturesBotGUI:
 
             # Read signal settings here as well as in the worker thread.
             # This prevents the GUI START path from referencing undefined
-            # variables before _run_bot_logic() begins.            signal_mode = self.v_signal_mode.get().strip().upper()
+            # variables before _run_bot_logic() begins.
+            signal_mode = self.v_signal_mode.get().strip().upper()
             preset_scores = {
                 "SINGLE_SIGNAL": 1,
                 "ANY_NON_CONFLICTING": 1,
