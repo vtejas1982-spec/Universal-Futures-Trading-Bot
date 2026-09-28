@@ -243,3 +243,37 @@ Use Demo/Testnet validation before Live.
 - `docs/CRYPTO_AI_AGENT_R6_7_RELEASE_NOTES.md`
 - `CHANGELOG.md`
 - `CURRENT_RELEASE_MANIFEST.md`
+
+
+## R6.7 Full-Contract Audit Hotfix — 2026-09-29
+
+The R6.7 engine was re-audited after Demo execution.
+
+### AI-Agent diagnostics
+
+When an entry is rejected, the log now identifies:
+- dominant side: BUY / SELL / TIE
+- family count and edge
+- Trend/Structure requirements
+- ATR / Volume / ADX gates
+- directional MTF gate, for example MTF_GATE_SELL
+
+Do not interpret the generic Minimum Score field as the AI-Agent entry threshold. In AI_AGENT mode the effective controls are Minimum Families, Edge, Family Confidence, Max Conflicts, Trend requirement and Structure requirement.
+
+### TP configuration validation
+
+Before any new exchange-side position is opened, R6.7 validates:
+- TP Quantity Mode = PERCENT_% or FIXED_QTY.
+- Two-TP percentage mode uses positive percentages below 100% and totals exactly 100%.
+- Fixed TP quantities are positive.
+- When ATR TP is enabled with both TP levels active, TP2 ATR multiplier must be greater than TP1.
+
+### Demo verification
+
+For a two-target position, confirm Bybit Conditional orders contain:
+1. one full-position SL;
+2. one TP1 close order for the configured first split;
+3. one TP2 close order for the configured second split.
+
+The R6.7 log should show SUBMIT, ACK and VERIFIED ACTIVE for each required protection order. If any required order is rejected or disappears while the position remains open, the protection reconciliation path reports it and attempts restoration; an inconclusive protection-state check pauses new entries rather than guessing.
+
