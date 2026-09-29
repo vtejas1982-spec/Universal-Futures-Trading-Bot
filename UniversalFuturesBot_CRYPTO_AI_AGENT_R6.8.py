@@ -9404,8 +9404,20 @@ class UniversalFuturesBotGUI:
         expected = []
         if sl_id:
             expected.append(("SL/BE", sl_id))
+        tp1_probably_filled = False
+        try:
+            orig_qty = float(protected.get("qty") or 0.0)
+            tp1_qty = float(protected.get("tp1_qty") or 0.0)
+            current_qty = float(position.get("qty") or 0.0)
+            tp1_probably_filled = (
+                tp1_qty > 0 and orig_qty > 0
+                and current_qty <= orig_qty - 0.5 * tp1_qty
+            )
+        except Exception:
+            tp1_probably_filled = False
+
         tp1_be_enabled = bool(self._runtime_gui_value("v_tp1_be", True))
-        if tp1_id and not self.tp1_be_done and tp1_be_enabled:
+        if tp1_id and not self.tp1_be_done and tp1_be_enabled and not tp1_probably_filled:
             expected.append(("TP1", tp1_id))
         if tp2_id:
             expected.append(("TP2", tp2_id))
@@ -14881,8 +14893,7 @@ class UniversalFuturesBotGUI:
                     )
 
                     try:
-                        self.root.after(
-                            0,
+                        self._post_ui(
                             lambda pnl=self.net_pnl,
                             start=self.start_balance,
                             curr=curr_balance,
@@ -14959,7 +14970,7 @@ class UniversalFuturesBotGUI:
                     try:
                         # Save the current GUI configuration from Tk's main
                         # thread, then checkpoint the in-memory runtime state.
-                        self.root.after(0, self._checkpoint_gui_config)
+                        self._post_ui(self._checkpoint_gui_config)
                     except Exception:
                         self._persist_runtime_state(status="RUNNING")
 
@@ -15050,8 +15061,7 @@ class UniversalFuturesBotGUI:
                 self.log(f"FINAL RUNTIME STATE WARNING: {state_error}")
 
             try:
-                self.root.after(
-                    0,
+                self._post_ui(
                     self._on_worker_finished,
                 )
             except Exception:
