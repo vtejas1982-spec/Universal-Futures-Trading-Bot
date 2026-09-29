@@ -8452,6 +8452,16 @@ class UniversalFuturesBotGUI:
             if tp1_enabled and tp2_enabled and tp2_move <= tp1_move:
                 raise RuntimeError("TP2 must be farther from entry than TP1.")
 
+        # Every SL path, including Hold-SL, must remain inside the conservative
+        # pre-liquidation distance envelope for the configured leverage.
+        if not np.isfinite(sl_move) or sl_move <= 0 or sl_move >= 0.95:
+            raise RuntimeError(f"Resolved SL distance is invalid: {sl_move}")
+        if sl_move >= SL_LIQUIDATION_SAFETY_FRACTION / float(leverage):
+            raise RuntimeError(
+                f"Resolved SL distance {sl_move * 100:.3f}% is not inside the liquidation-safe limit "
+                f"{SL_LIQUIDATION_SAFETY_FRACTION / float(leverage) * 100:.3f}% at {leverage:g}x leverage."
+            )
+
         if side == "LONG":
             sl = actual_entry * (1 - sl_move)
             tp1 = actual_entry * (1 + tp1_move) if tp1_move > 0 else None
@@ -8597,11 +8607,11 @@ class UniversalFuturesBotGUI:
         # while weaker accepted setups stay near the lower end.
         conviction_factor = 0.75 + 0.50 * conviction
         effective_risk = float(base_risk_pct) * conviction_factor * volatility_factor
-        effective_risk = float(np.clip(
-            effective_risk,
-            AI_AGENT_MIN_RISK_PCT,
-            AI_AGENT_MAX_RISK_PCT,
-        ))
+        # User Risk Per Trade is a hard ceiling. AI management may only scale
+        # risk down from the configured baseline.
+        risk_ceiling = min(float(AI_AGENT_MAX_RISK_PCT), float(base_risk_pct))
+        risk_floor = min(float(AI_AGENT_MIN_RISK_PCT), risk_ceiling)
+        effective_risk = float(np.clip(effective_risk, risk_floor, risk_ceiling))
 
         # Volatility controls the stop width. Because position sizing uses this
         # exact stop distance, a wider AI stop automatically reduces quantity.
@@ -10158,7 +10168,10 @@ class UniversalFuturesBotGUI:
         close_succeeded = True
         if pos:
             try:
-                self.close_position_market(symbol, pos["side"], pos["qty"])
+                self.close_position_market(
+                    symbol, pos["side"], pos["qty"],
+                    reason="GRID STOP: closing Grid inventory before removing protection.",
+                )
                 time.sleep(0.5)
                 if self.fetch_position(symbol):
                     close_succeeded = False
@@ -10255,7 +10268,8 @@ class UniversalFuturesBotGUI:
             )
             try:
                 self.close_position_market(
-                    symbol, position["side"], position["qty"]
+                    symbol, position["side"], position["qty"],
+                    reason="NEUTRAL GRID REVERSAL: closing old-side inventory.",
                 )
                 time.sleep(0.5)
                 position = self.fetch_position(symbol)
@@ -10815,6 +10829,19 @@ class UniversalFuturesBotGUI:
         hold_sl_roi = float(self.e_hold_sl_roi.get())
         if self.v_hold_until_all_reverse.get() and hold_sl_roi <= 0:
             raise ValueError("Hold-All-Reverse SL ROI must be greater than 0.")
+
+        if not self.v_legacy_protection_enabled.get():
+            liq_roi_limit = SL_LIQUIDATION_SAFETY_FRACTION * 100.0
+            for _lbl, _on, _val in (
+                ("Normal ROI SL", self.v_sl_enabled.get() and self.v_roi_sl_enabled.get(), float(self.e_roi_sl.get())),
+                ("Fallback SL ROI", self.v_sl_enabled.get() and self.v_fallback_sl_enabled.get(), float(self.e_fallback_sl_roi.get())),
+                ("Hold-SL ROI", self.v_hold_until_all_reverse.get(), hold_sl_roi),
+            ):
+                if _on and _val >= liq_roi_limit:
+                    raise ValueError(
+                        f"{_lbl} ({_val:g}% ROI) is at/beyond the liquidation-safe limit "
+                        f"({liq_roi_limit:g}% ROI). The stop could never fire before liquidation."
+                    )
 
         # Legacy preflight remains valid when explicitly selected.
         if self.v_legacy_protection_enabled.get():
@@ -14158,6 +14185,7 @@ class UniversalFuturesBotGUI:
                                 self.symbol,
                                 pos_type,
                                 pos_qty,
+                                reason="STRATEGY REVERSAL: closing position before opposite entry.",
                             )
 
                             # Never place the opposite entry on top of a residual
@@ -14328,18 +14356,30 @@ class UniversalFuturesBotGUI:
                         if (use_legacy_protection and legacy_atr_enabled and not hold_all_reverse and sl_mode != "RISK_%") or (not use_legacy_protection and effective_simple_atr_sl_enabled and not hold_all_reverse):
                             atr_entry_value = float(df["atr"].iloc[-2])
                             if not np.isfinite(atr_entry_value) or atr_entry_value <= 0:
-                                if not use_legacy_protection and fallback_sl_enabled:
-                                    entry_sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
-                                    self.log("ATR SL unavailable: using configured fallback ROI SL for entry sizing.")
-                                elif not use_legacy_protection and simple_roi_sl_enabled:
+                                # Mirror protection resolution: ATR -> normal ROI -> fallback ROI.
+                                if not use_legacy_protection and simple_roi_sl_enabled:
                                     entry_sl_price_fraction = self.target_to_price_fraction(roi_sl_target, "ROI_%", leverage)
                                     self.log("ATR SL unavailable: using configured normal ROI SL for entry sizing.")
+                                elif not use_legacy_protection and fallback_sl_enabled:
+                                    entry_sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
+                                    self.log("ATR SL unavailable: using configured fallback ROI SL for entry sizing.")
                                 else:
                                     raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
                             else:
                                 entry_sl_price_fraction = (atr_entry_value * (ai_effective_atr_sl_mult if ai_management_active else atr_sl_mult) / close)
                                 if entry_sl_price_fraction <= 0:
                                     raise RuntimeError("ATR_DYNAMIC_SL_DISTANCE_INVALID")
+
+                        liq_safe_limit = SL_LIQUIDATION_SAFETY_FRACTION / float(leverage)
+                        if entry_sl_price_fraction >= liq_safe_limit and entry_sl_price_fraction > 1e-6:
+                            self.log(
+                                f"ENTRY BLOCKED: resolved SL distance {entry_sl_price_fraction * 100:.3f}% "
+                                f"is not inside the liquidation-safe limit {liq_safe_limit * 100:.3f}% "
+                                f"for {leverage}x leverage. Lower leverage, tighten SL, or reduce ATR multiplier."
+                            )
+                            cycle_elapsed = time.time() - cycle_start
+                            time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                            continue
 
                         entry_qty = (
                             self.calculate_entry_qty(
@@ -14394,6 +14434,26 @@ class UniversalFuturesBotGUI:
                                         "for a 50/50 split, or set FIXED_QTY values "
                                         "whose sum equals the entry quantity."
                                     )
+
+                        if (
+                            not self._runtime_gui_value("v_hold_until_all_reverse")
+                            and tp_engine_enabled and tp1_enabled and tp2_enabled
+                            and tp_qty_mode == "PERCENT_%"
+                        ):
+                            try:
+                                self.calculate_tp_close_quantities(
+                                    self.symbol, entry_qty, tp_qty_mode,
+                                    tp1_close_value, tp2_close_value,
+                                )
+                            except RuntimeError as split_error:
+                                self.log(
+                                    f"ENTRY BLOCKED: position of {entry_qty:g} is too small to split "
+                                    f"into TP1/TP2 at the exchange lot size ({split_error}). "
+                                    "Increase equity/risk, or turn TP2 OFF."
+                                )
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
 
                         try:
                             new_position, actual_entry = (
@@ -14506,6 +14566,10 @@ class UniversalFuturesBotGUI:
 
                             resolved_sl_roi = _roi_from_move(sl_move)
                             resolved_tp1_roi = _roi_from_move(tp1_move)
+                            tp1_txt = f"{tp1:.12g}" if tp1 is not None else "OFF"
+                            tp2_txt = f"{tp2:.12g}" if tp2 is not None else "OFF"
+                            tp1_move_txt = f"{tp1_move * 100:.6g}%" if tp1 is not None else "OFF"
+                            tp2_move_txt = f"{tp2_move * 100:.6g}%" if tp2 is not None else "OFF"
                             resolved_tp2_roi = _roi_from_move(tp2_move)
                             self.log(
                                 f"PROTECTION RESOLVED: Source={protection_source} | "
@@ -14541,8 +14605,8 @@ class UniversalFuturesBotGUI:
                             else:
                                 self.log(
                                     f"PRICE MOVE EQUIVALENTS: SL={sl_move * 100:.6g}% | "
-                                    f"TP1={(f'{tp1_move * 100:.6g}%' if tp1 is not None else 'OFF')} | "
-                                    f"TP2={(f'{tp2_move * 100:.6g}%' if tp2 is not None else 'OFF')}"
+                                    f"TP1 PriceMove={tp1_move_txt} | "
+                                    f"TP2 PriceMove={tp2_move_txt}"
                                 )
 
                             # ------------------------------------------------
@@ -14551,8 +14615,8 @@ class UniversalFuturesBotGUI:
                             self.log(
                                 f"PROTECTION TARGETS | Side={desired_side} | "
                                 f"Entry={actual_entry:.12g} | PositionQty={actual_qty:g} | "
-                                f"SL={sl:.12g} | TP1={(f"{tp1:.12g}" if tp1 is not None else "OFF")} | "
-                                f"TP2={(f"{tp2:.12g}" if tp2 is not None else "OFF")} | "
+                                f"SL={sl:.12g} | TP1={tp1_txt} | "
+                                f"TP2={tp2_txt} | "
                                 f"TPQtyMode={tp_qty_mode} | TP1Close={tp1_close_value:g} | TP2Close={tp2_close_value:g}"
                             )
                             hold_wait_reversal = (
@@ -14695,17 +14759,16 @@ class UniversalFuturesBotGUI:
                                         "TP1/TP2 = DISABLED | Hold-All-Reverse uses strategy reversal as the exit."
                                     )
                             else:
-                                self.log(
-                                    f"TP1 = {tp1:.12g}"
-                                )
-                                self.log(
-                                    f"TP2 = {tp2:.12g}"
-                                )
-                                self.log(
-                                    f"TP CLOSE = {tp_qty_mode} | "
-                                    f"TP1={tp1_close_value:g} | "
-                                    f"TP2={tp2_close_value:g}"
-                                )
+                                self.log(f"TP1 = {tp1_txt}")
+                                self.log(f"TP2 = {tp2_txt}")
+                                if tp1 is not None or tp2 is not None:
+                                    self.log(
+                                        f"TP CLOSE = {tp_qty_mode} | "
+                                        f"TP1={tp1_close_value:g} | "
+                                        f"TP2={tp2_close_value:g}"
+                                    )
+                                else:
+                                    self.log("TP CLOSE = n/a | TP engine OFF: exchange SL only.")
                             self.log(
                                 f"Qty = {actual_qty}"
                             )
