@@ -11986,4 +11986,4773 @@ class UniversalFuturesBotGUI:
 
             account_mode = (
                 self.v_account_mode.get()
-                .strip()
+                .strip()                .upper()
+            )
+
+            self.exchange_id = exchange_id
+
+            self.exchange = self.build_exchange(
+                exchange_id,
+                api_key,
+                api_secret,
+                account_mode,
+            )
+
+            self.log(
+                f"{APP_VERSION} MODULAR ENGINE: "
+                f"{exchange_id.upper()} | "
+                "CCXT unified futures/swap API"
+            )
+            self.log(
+                f"KILL SWITCH: MANDATORY/ARMED | Stop/Crash => flatten bot symbol {self.e_symbol.get().strip().upper()} + cancel all open orders."
+            )
+
+            self.symbol = (
+                self.normalize_symbol(
+                    self.exchange,
+                    exchange_id,
+                    self.e_symbol.get(),
+                )
+            )
+
+            self._acquire_symbol_lock(exchange_id, account_mode, self.symbol)
+            self._verify_one_way_position_mode(self.symbol)
+            self.log(
+                f"EXECUTION SAFETY: Spread<={self._safe_runtime_float('e_max_entry_spread_pct', float(DEFAULT_MAX_ENTRY_SPREAD_PCT)):g}% | "
+                f"Slippage<={self._safe_runtime_float('e_max_entry_slippage_pct', float(DEFAULT_MAX_ENTRY_SLIPPAGE_PCT)):g}% | "
+                f"Depth>={self._safe_runtime_float('e_min_orderbook_depth_mult', float(DEFAULT_MIN_ORDERBOOK_DEPTH_MULT)):g}x | "
+                f"CandleDrift<={self._safe_runtime_float('e_max_entry_candle_drift_pct', float(DEFAULT_MAX_ENTRY_CANDLE_DRIFT_PCT)):g}% | "
+                "Actual liqPrice/markPrice check=ON | Protection qty coverage=ON | Persistent kill latch=ON"
+            )
+
+            leverage = int(
+                self.e_lev.get().strip()
+            )
+
+            # Validate Grid controls before touching exchange leverage.
+            # Recovery is deliberately a separate path: it restores the saved
+            # local state and then verifies the live exchange state instead of
+            # rejecting an otherwise recoverable bot position.
+            self._grid_validate_settings()
+            resume_mode = bool(self.resume_requested and self.resume_candidate)
+
+            try:
+                max_trades = int(self.e_max_trades.get().strip())
+            except Exception:
+                raise ValueError("Max Completed Trades must be a whole number. Use 1 for this single-symbol engine.")
+            if max_trades < 0:
+                raise ValueError("Max Trades cannot be negative.")
+
+            # Keep the startup-local value authoritative. _validate_v83_preflight()
+            # normalizes the GUI field to 1 for this single-symbol/net-position
+            # engine, so read it again here before using it in startup logs and
+            # before handing control to the worker. Never rely on a variable that
+            # only exists inside _validate_strategy_preflight().
+            try:
+                max_open_trades = int(self.e_max_open_trades.get().strip())
+            except Exception:
+                raise ValueError("Max Open Trades must be a whole number. Use 1 for this single-symbol engine.")
+            if max_open_trades < 0:
+                raise ValueError("Max Open Trades cannot be negative.")
+            if max_open_trades != 1:
+                raise ValueError(
+                    "Max Open Trades must be 1 in the current single-symbol/one-way futures engine. "
+                    "Use Max Completed Trades for the number of trades in a session."
+                )
+
+            current_balance = self.fetch_balance_total()
+            current_equity = self.fetch_account_equity()
+
+            if resume_mode:
+                self._restore_runtime_state(self.resume_candidate)
+                # The saved session balance is authoritative for resumed
+                # drawdown/PnL accounting. If an old checkpoint has no balance,
+                # use the current exchange balance as a safe baseline.
+                if self.start_balance <= 0:
+                    self.start_balance = current_balance
+                if self.daily_start_balance <= 0:
+                    self.daily_start_balance = current_balance
+                self.daily_peak_equity = max(self.daily_peak_equity, current_equity)
+                self.session_peak_equity = max(self.session_peak_equity, current_equity, self.start_balance)
+                max_trades = int(self.session_max_trades)
+                grid_cfg = self._grid_validate_settings()
+                self._verify_resume_exchange_state()
+            else:
+                self.start_balance = current_balance
+                self.daily_start_balance = self.start_balance
+                self.daily_start_date = datetime.now().date()
+                self.daily_peak_equity = current_equity
+                self.session_peak_equity = current_equity
+                self.consecutive_cycle_errors = 0
+                self.last_market_data_ts = 0
+
+                self.total_trades = 0
+                self.opened_trades = 0
+                self.winning_trades = 0
+                self.losing_trades = 0
+                self.trade_pnls = []
+                self.active_trade = None
+                self.last_protected_position = None
+                self.tp1_be_done = False
+                self.reentry_direction_lock = None
+                self.reentry_lock_reason = ""
+                self.session_started_at = time.time()
+                self.session_max_trades = max_trades
+                self.session_id = str(uuid.uuid4())
+                self.runtime_resumed = False
+                self.runtime_last_error = ""
+                self.grid_state = {
+                    "active": False, "mode": "OFF", "center": 0.0,
+                    "entry_orders": {}, "filled_levels": set(),
+                    "tp_order_id": None, "sl_order_id": None,
+                    "last_position_qty": 0.0, "last_position_entry": 0.0,
+                    "last_grid_reset": 0.0, "session_start_balance": 0.0,
+                    "peak_equity": 0.0, "paused_until": 0.0,
+                    "auto_direction": None,
+                }
+
+                grid_cfg = self._grid_initialize(
+                    self.symbol,
+                    self.start_balance,
+                    current_equity,
+                )
+
+                # A genuinely new session must never silently adopt an existing
+                # position or unknown/manual orders. However, if the account is
+                # flat and the only open orders are exact IDs persisted by this
+                # bot's previous checkpoint (typically stale reduce-only SL/TP
+                # orders left behind after a crash/forced close), they are
+                # provably bot-managed and can be cancelled safely before the
+                # new session starts.
+                if grid_cfg["mode"] in ("OFF", "DIRECT_SHOT"):
+                    existing_position = self.fetch_position(self.symbol)
+                    existing_orders = self.fetch_open_orders_safe(self.symbol, strict=True)
+                    if existing_position:
+                        raise RuntimeError(
+                            "START BLOCKED: existing position found on this symbol. "
+                            "Choose Resume if this inventory belongs to this bot, or "
+                            "close/clean the position before starting a new session."
+                        )
+
+                    if existing_orders:
+                        checkpoint_ids = self._checkpoint_managed_order_ids(
+                            self.resume_candidate
+                        )
+                        open_ids = {
+                            str(order.get("id"))
+                            for order in existing_orders
+                            if order.get("id")
+                        }
+                        orphan_bot_orders = open_ids & checkpoint_ids
+                        unknown_orders = open_ids - checkpoint_ids
+
+                        if orphan_bot_orders and not unknown_orders:
+                            self.log(
+                                "START CLEANUP: account is flat and all existing "
+                                f"open orders are verified as previous bot-managed "
+                                f"orders ({len(orphan_bot_orders)}). Cancelling them "
+                                "before starting the new session."
+                            )
+                            self._cancel_known_managed_orders_from_ids(
+                                self.symbol,
+                                orphan_bot_orders,
+                            )
+                            existing_orders = self.fetch_open_orders_safe(
+                                self.symbol,
+                                strict=True,
+                            )
+                            if existing_orders:
+                                raise RuntimeError(
+                                    "START BLOCKED: previous bot-managed orders "
+                                    "could not be fully cancelled."
+                                )
+                            self.log(
+                                "START CLEANUP VERIFIED: previous bot-managed "
+                                "orders removed; account is flat."
+                            )
+                        else:
+                            raise RuntimeError(
+                                "START BLOCKED: existing position/open orders found "
+                                "on this symbol. Unknown/manual orders will never "
+                                "be adopted automatically. Cancel/clean them "
+                                "before starting a new session."
+                            )
+
+            # Never change leverage on a resumed live position. Use the exchange
+            # position's actual leverage for recovery; configure leverage normally
+            # when starting flat.
+            resume_position = self.fetch_position(self.symbol)
+            if resume_mode and resume_position:
+                actual_lev = float(resume_position.get("leverage") or 0.0)
+                if actual_lev > 0:
+                    self.log(
+                        f"RECOVERY: exchange position leverage={actual_lev:g}x; "
+                        "leverage change skipped while position is open."
+                    )
+            else:
+                self.configure_leverage(self.symbol, leverage)
+
+            if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT"):
+                self.log(
+                    f"GRID MODE ACTIVE: {grid_cfg['mode']} | "
+                    f"Levels={grid_cfg['levels']} | "
+                    f"Spacing={grid_cfg['spacing']*100:g}% | "
+                    f"TP={grid_cfg['tp_pct']*100:g}% | "
+                    f"GlobalSL={grid_cfg['sl_pct']*100:g}% | "
+                    f"MaxExposure={grid_cfg['max_exposure']:g} USDT | "
+                    f"MaxGridDD={grid_cfg['max_dd']*100:g}% | "
+                    f"TrendFilter={grid_cfg['trend_filter']} | "
+                    f"GridScoreMin={grid_cfg['score_min']}"
+                )
+                self.log(
+                    "GRID RISK SCOPE: Grid uses its own Order Size/TP/SL/Max Exposure/Max DD. "
+                    "Section 5 Daily DD + Emergency Capital Loss Stop remain GLOBAL."
+                )
+                if grid_cfg["mode"] == "NEUTRAL_GRID":
+                    self.log(
+                        f"NEUTRAL GRID AUTO-DIRECTION: {grid_cfg['trend_filter']} | "
+                        "SUPERTREND=ST direction | SCORE/OFF=all enabled Section 3 votes | "
+                        "direction changes cancel old entries and safely reverse Grid inventory."
+                    )
+
+            # Capture/display the exact account balance at BOT START.
+            try:
+                self.root.after(
+                    0,
+                    lambda start=self.start_balance,
+                    curr=current_balance,
+                    pnl=self.net_pnl,
+                    trades=self.total_trades,
+                    wins=self.winning_trades,
+                    losses=self.losing_trades: self.lbl_pnl.config(
+                        text=(
+                            f"Start Balance: ${start:.4f} | "
+                            f"Current Balance: ${curr:.4f} | "
+                            f"Net PnL: ${pnl:.2f} | "
+                            f"Trades: {trades} | Wins: {wins} | "
+                            f"Losses: {losses} | Win Rate: "
+                            f"{(wins/(wins+losses)*100 if wins+losses else 0.0):.1f}%"
+                        )
+                    ),
+                )
+            except Exception:
+                pass
+
+            self.log(
+                f"CONNECTED: {exchange_id.upper()} | "
+                f"{self.symbol} | "
+                f"Balance={self.start_balance:.4f} USDT"
+            )
+
+            self.log(
+                "SL/TP engine: ACTUAL ENTRY PRICE + ACTUAL POSITION QTY"
+            )
+            self.log(
+                f"SL mode: {self.v_sl_mode.get()} | TP mode: {self.v_tp_mode.get()}"            )
+            self.log(
+                f"TRADE SESSION: Max Completed Trades={max_trades if max_trades > 0 else 'UNLIMITED'} | "
+                f"Max Open Trades={max_open_trades} | "
+                f"Estimated Window={self.lbl_est_time.cget('text')} | "
+                f"Actual duration may be longer if signals do not occur every candle."
+            )
+
+            enabled_modules = []
+            if self.v_use_st.get():
+                enabled_modules.append("Supertrend")
+            if self.v_use_ema.get():
+                enabled_modules.append(f"EMA{self.e_ema_len.get().strip()}")
+            if self.v_use_ema_cross.get():
+                enabled_modules.append(
+                    f"EMA Cross {self.e_ema_fast.get().strip()}/{self.e_ema_slow.get().strip()} "
+                    f"({self.v_ema_cross_entry_mode.get().strip().upper()})"
+                )
+            if self.v_use_macd.get():
+                enabled_modules.append(
+                    f"MACD {self.e_macd_fast.get().strip()}/{self.e_macd_slow.get().strip()}/{self.e_macd_signal.get().strip()}"
+                )
+            if self.v_use_rsi.get():
+                enabled_modules.append(
+                    f"RSI {self.e_rsi_len.get().strip()} "
+                    f"({self.v_rsi_logic.get()} | {self.v_rsi_ma_type.get()} {self.e_rsi_ma_len.get().strip()} | "
+                    f"OS {self.e_rsi_os.get().strip()} / OB {self.e_rsi_ob.get().strip()})"
+                )
+            if self.v_use_bb.get():
+                enabled_modules.append(
+                    f"BB {self.e_bb_len.get().strip()}x{self.e_bb_std.get().strip()}"
+                )
+            if self.v_use_stoch.get():
+                enabled_modules.append(
+                    f"Stoch {self.e_stoch_k.get().strip()}/{self.e_stoch_smooth.get().strip()}/{self.e_stoch_d.get().strip()}"
+                )
+            if self.v_use_vwap.get():
+                enabled_modules.append(
+                    f"VWAP {self.e_vwap_len.get().strip()}"
+                )
+            if self.v_use_vwap_delta.get():
+                enabled_modules.append(
+                    f"VWAP Delta "
+                    f"({self.v_vwap_delta_logic.get().strip().upper()} | "
+                    f"Baseline {self.e_vwap_delta_baseline.get().strip()} | "
+                    f"HMA {'ON' if self.v_vwap_delta_smooth.get() else 'OFF'} "
+                    f"{self.e_vwap_delta_smooth_len.get().strip()})"
+                )
+            if self.v_use_vidya.get():
+                enabled_modules.append(
+                    f"Volumatic VIDYA "
+                    f"({self.v_vidya_entry_mode.get().strip().upper()} | "
+                    f"Length {self.e_vidya_len.get().strip()} | "
+                    f"Momentum {self.e_vidya_momentum.get().strip()} | "
+                    f"Band {self.e_vidya_band.get().strip()})"
+                )
+            if self.v_use_liq_swings.get():
+                enabled_modules.append(
+                    f"Liquidity Swings "
+                    f"(P{self.e_liq_length.get().strip()} | "
+                    f"{self.v_liq_area.get().strip()} | "
+                    f"{self.v_liq_filter.get().strip()} {self.e_liq_filter_value.get().strip()} | "
+                    f"{self.v_liq_entry_mode.get().strip().upper()})"
+                )
+            if self.v_use_trendline.get():
+                enabled_modules.append(
+                    f"Trendline Breakout "
+                    f"(P{self.e_trendline_length.get().strip()} | "
+                    f"MinDist {self.e_trendline_min_distance.get().strip()} | "
+                    f"{self.v_trendline_entry_mode.get().strip().upper()} | "
+                    f"Buffer {self.e_trendline_buffer.get().strip()}% | "
+                    f"Retest {self.e_trendline_retest.get().strip()})"
+                )
+            if self.v_use_nwe.get():
+                enabled_modules.append(
+                    f"NWE "
+                    f"({self.v_nwe_entry_mode.get().strip().upper()} | "
+                    f"Bandwidth {self.e_nwe_bandwidth.get().strip()} | "
+                    f"Mult {self.e_nwe_mult.get().strip()} | "
+                    f"Non-Repainting FIXED)"
+                )
+            if self.v_use_atr.get():
+                enabled_modules.append(
+                    f"ATR >= {self.e_atr_min_pct.get().strip()}%"
+                )
+            if self.v_use_vol.get():
+                enabled_modules.append(f"Volume {self.e_vol_len.get().strip()}")
+            if self.v_use_adx.get():
+                enabled_modules.append(f"ADX >= {self.e_adx_thresh.get().strip()}")
+            if self.v_use_mtf.get():
+                enabled_modules.append("4H MTF")
+            if self.v_use_divergence.get():
+                enabled_modules.append(
+                    f"Divergence {self.v_div_type.get()} | Pivot {self.e_div_pivot.get().strip()} | "
+                    f"Min {self.e_div_min_count.get().strip()} | {self.v_div_entry_mode.get().upper()}"
+                )
+            if self.v_use_vol_sr.get():
+                enabled_modules.append(
+                    f"Volume S/R Zones {self.v_sr_tf1.get()}/{self.v_sr_tf2.get()}/{self.v_sr_tf3.get()}/{self.v_sr_tf4.get()} | "
+                    f"{self.v_sr_entry_mode.get().upper()} | Vote {self.v_sr_vote_mode.get().upper()}"
+                )
+
+            self.log(
+                "STRATEGY MODULES: "
+                + (
+                    " | ".join(enabled_modules)
+                    if enabled_modules
+                    else "None"
+                )
+            )
+            self.log(
+                f"RSI ENGINE: {'ON' if self.v_use_rsi.get() else 'OFF'}"
+                + (
+                    f" | Logic={self.v_rsi_logic.get().strip().upper()}"
+                    f" | MA={self.v_rsi_ma_type.get().strip().upper()}"
+                    f" {self.e_rsi_ma_len.get().strip()}"
+                    if self.v_use_rsi.get()
+                    else " | RSI columns not required"
+                )
+            )
+
+            # Read signal settings here as well as in the worker thread.
+            # This prevents the GUI START path from referencing undefined
+            # variables before _run_bot_logic() begins.
+            signal_mode = self.v_signal_mode.get().strip().upper()
+            preset_scores = {
+                "SINGLE_SIGNAL": 1,
+                "ANY_NON_CONFLICTING": 1,
+                "2_SIGNALS": 2,
+                "3_SIGNALS": 3,
+                "4_SIGNALS": 4,
+            }
+            if signal_mode in preset_scores:
+                min_score = preset_scores[signal_mode]
+            elif signal_mode in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE"):
+                min_score = 1
+            else:
+                min_score = int(self.e_min_score.get().strip())
+
+            allowed_signal_modes = SUPPORTED_SIGNAL_MODES
+            if signal_mode not in allowed_signal_modes:
+                raise ValueError(f"Unknown signal mode: {signal_mode}")
+            if min_score <= 0:
+                raise ValueError("Minimum score must be greater than 0.")
+
+            # V8.3.1 FIX: start_bot() logs Adaptive Score before the worker
+            # thread starts. Read/validate these values in this scope so the
+            # startup path cannot reference _run_bot_logic() locals.
+            adaptive_edge = float(self.e_adaptive_edge.get().strip())
+            adaptive_min_weight = float(self.e_adaptive_min_weight.get().strip())
+            if not 0.0 < adaptive_edge < 1.0:
+                raise ValueError("Adaptive Edge must be between 0 and 1.")
+            if adaptive_min_weight <= 0:
+                raise ValueError("Adaptive Min Weight must be greater than 0.")
+            evidence_min_families = int(self.e_evidence_min_families.get().strip())
+            evidence_family_min_score = float(self.e_evidence_family_min_score.get().strip())
+            if evidence_min_families < 1 or evidence_min_families > 4:
+                raise ValueError("Evidence Minimum Families must be between 1 and 4.")
+            if not 0.0 < evidence_family_min_score <= 1.0:
+                raise ValueError("Family Minimum Score must be greater than 0 and at most 1.")
+
+            # Startup/configuration logging must not depend on _run_bot_logic()
+            # locals, because those are parsed later in the worker thread.
+            # Read the GUI values directly here; _run_bot_logic() performs the
+            # authoritative numeric validation before calculating indicators.
+            startup_st_len = self.e_st_len.get().strip()
+            startup_st_mult = self.e_st_mult.get().strip()
+            startup_st_source = self.v_st_source.get().strip().upper()
+            startup_st_change_atr = bool(self.v_st_change_atr.get())
+            startup_st_entry_mode = self.v_st_entry_mode.get().strip().upper()
+            self.log(
+                f"SUPERTREND: ATR={startup_st_len} | Mult={startup_st_mult} | "
+                f"Source={startup_st_source} | "
+                f"ATR Method={'RMA' if startup_st_change_atr else 'SMA(TR)'} | "
+                f"Entry={startup_st_entry_mode}"
+            )
+            self.log(
+                f"EMA CROSS ENTRY MODE: {self.v_ema_cross_entry_mode.get().strip().upper()}"
+            )
+
+            if signal_mode == "AI_AGENT":
+                self.log(
+                    "SIGNAL MODE: AI_AGENT | "
+                    "AI MinFamilies=3 | AI Edge>=0.20 | "
+                    "AI FamilyConfidence>=0.55 | Generic MinScore=1 (validation only)"
+                )
+            else:
+                self.log(
+                    f"SIGNAL MODE: {signal_mode} | "
+                    f"Minimum Score={min_score}"
+                )
+            self.log(
+                f"SIZING: {'EQUITY_RISK_%' if self.v_risk_sizing_enabled.get() else 'FIXED_QTY'} | "
+                + (f"Risk Per Trade={self.e_risk_pct.get().strip()}%" if self.v_risk_sizing_enabled.get() else f"Fixed Qty={self.e_fixed_qty.get().strip()} | Risk % not used for entry size")
+            )
+            self.log(
+                f"GLOBAL SAFETY: DailyDD={'ON' if self.v_max_dd_enabled.get() else 'OFF'}({self.e_max_dd.get().strip()}%) | "
+                f"EmergencyStop={'ON' if self.v_emergency_enabled.get() else 'OFF'}({self.e_emergency_capital_pct.get().strip()}%) | "
+                f"Scope={self.v_emergency_scope.get().strip().upper()}"
+            )
+            self.log(
+                "DEFAULT PROFILE CONTRACT: "
+                f"Adaptive Edge={adaptive_edge:.2f} | MinWeight={adaptive_min_weight:.2f} | "
+                f"Evidence Families={evidence_min_families} | FamilyScore={evidence_family_min_score:.2f} | "
+                f"TrendReq={'ON' if self.v_evidence_require_trend.get() else 'OFF'} | "
+                f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
+                f"MTF={'ON' if self.v_use_mtf.get() else 'OFF'} | "
+                f"ADX={'ON' if self.v_use_adx.get() else 'OFF'} | "
+                f"Volume={'ON' if self.v_use_vol.get() else 'OFF'} | "
+                f"ATR={'ON' if self.v_use_atr.get() else 'OFF'} | "
+                f"Grid={self.v_grid_mode.get().strip().upper()} | "
+                f"Post-SL Lock={'ON' if self.v_require_opposite_after_exit.get() else 'OFF'} | "
+                f"No-Same-Candle={'ON' if self.v_no_same_candle.get() else 'OFF'}"
+            )
+            if signal_mode == "SINGLE_SIGNAL":
+                self.log(
+                    "SINGLE SIGNAL MODE: ONE enabled signal is enough; "
+                    "Volume/ADX/ATR/MTF are NOT required."
+                )
+            elif signal_mode == "ADAPTIVE_SCORE":
+                self.log(
+                    f"ADAPTIVE SCORE: correlation-aware weights | Edge>={adaptive_edge:.2f} | "
+                    f"MinWeight>={adaptive_min_weight:.2f} | VOL/ATR/ADX/MTF act as regime gates."
+                )
+            elif signal_mode == "ADAPTIVE_EVIDENCE":
+                self.log(
+                    f"ADAPTIVE EVIDENCE: MinFamilies={evidence_min_families} | "
+                    f"FamilyScore>={evidence_family_min_score:.2f} | "
+                    f"TrendReq={'ON' if self.v_evidence_require_trend.get() else 'OFF'} | "
+                    f"IndependentReq={'ON' if self.v_evidence_require_independent.get() else 'OFF'} | "
+                    "ATR/ADX are regime gates only."
+                )
+            if self.v_hold_until_all_reverse.get():
+                self.log(
+                    "REVERSAL HOLD: ON | "
+                    + (
+                        "ALL active directional signals must reverse."
+                        if self.v_reverse_exit_mode.get().strip().upper() == "ALL_ACTIVE"
+                        else f"At least {int(self.e_min_reverse_families.get().strip())} evidence families must reverse."
+                    )
+                )
+            else:
+                self.log("REVERSAL HOLD: OFF | Opposite signal can execute normal reversal.")
+            self.log(
+                "POST-SL OPPOSITE LOCK: "
+                + (
+                    "ON | After SL/BE stop, same-direction re-entry is blocked until a valid opposite signal appears."
+                    if self.v_require_opposite_after_exit.get()
+                    else "OFF | Same-direction re-entry is allowed after SL/exit (subject to other safety gates)."
+                )
+            )
+            self.log(
+                "POST-SL LOCK RULE: If SL/BE closes a trade, the bot waits for a valid opposite signal "
+                "using the selected signal mode; TP1/TP2 exits do not create this lock."
+            )
+            if signal_mode == "AI_AGENT":
+                self.log(
+                    "AI AGENT COUNCIL: Regime Analyst -> Trend Lead -> Momentum Lead -> Flow Lead -> "
+                    "Structure Lead -> Adversarial Review -> Chief Decision | "
+                    f"MinFamilies={AI_AGENT_MIN_FAMILIES} | Edge>={AI_AGENT_MIN_EDGE:.2f} | "
+                    f"FamilyConfidence>={AI_AGENT_MIN_FAMILY_CONFIDENCE:.2f} | "
+                    f"TrendReq={'ON' if AI_AGENT_REQUIRE_TREND else 'OFF'} | "
+                    f"StructureReq={'ON' if AI_AGENT_REQUIRE_STRUCTURE else 'OFF'} | "
+                    f"MaxConflicts={AI_AGENT_MAX_CONFLICTING_FAMILIES}"
+                )
+            self.log(
+                "PROTECTION CONFIG: Engine="
+                + ("LEGACY_R9.3" if self.v_legacy_protection_enabled.get() else "SIMPLE_ROI")
+                + f" | SL={'ON' if self.v_sl_enabled.get() else 'OFF'}"
+                + f" | ROI_SL={'ON' if self.v_roi_sl_enabled.get() else 'OFF'}({self.e_roi_sl.get().strip()}% ROI)"
+                + f" | ATR_SL={'ON' if self.v_simple_atr_sl_enabled.get() else 'OFF'}({self.e_atr_sl_mult.get().strip()}x)"
+                + f" | Fallback_SL={'ON' if self.v_fallback_sl_enabled.get() else 'OFF'}({self.e_fallback_sl_roi.get().strip()}% ROI)"
+                + f" | TP={'ON' if self.v_tp_enabled.get() else 'OFF'}"
+                + f" | TP1={'ON' if self.v_tp1_enabled.get() else 'OFF'}({self.e_roi_tp1.get().strip()}% ROI)"
+                + f" | TP2={'ON' if self.v_tp2_enabled.get() else 'OFF'}({self.e_roi_tp2.get().strip()}% ROI)"
+                + f" | ATR_TP={'ON' if self.v_simple_atr_tp_enabled.get() else 'OFF'}"
+                + f" | TP1_BE={'ON' if self.v_tp1_be.get() else 'OFF'}"
+            )
+
+            self.log(
+                f"SUPERTREND ENTRY MODE: "
+                f"{self.v_st_entry_mode.get().strip().upper()}"
+            )
+            if self.v_hold_until_all_reverse.get():
+                self.log(
+                    "TP1 BREAK-EVEN: DISABLED BY REVERSAL HOLD | "
+                    "No TP1 order is placed while Hold-All-Reverse is ON."
+                )
+            else:
+                self.log(
+                    "TP1 BREAK-EVEN: "
+                    + (
+                        "ON | Remaining SL moves to actual entry after TP1."
+                        if self.v_tp1_be.get()
+                        else "OFF"
+                    )
+                )
+
+            # Finalize the session metadata only after every GUI setting has
+            # passed startup validation.  This metadata is also persisted so a
+            # crash/restart can restore the exact execution context.
+            self.runtime_timeframe = self.v_tf.get().strip().lower()
+            self.runtime_account_mode = account_mode
+            self.runtime_strategy_mode = (
+                grid_cfg["mode"]
+                if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT")
+                else signal_mode
+            )
+            self.runtime_strategy_modules = " | ".join(enabled_modules) if enabled_modules else "None"
+            self.runtime_sizing_mode = ("EQUITY_RISK_%" if bool(self.v_risk_sizing_enabled.get()) else "FIXED_QTY")
+            self.runtime_protection_basis = (
+                "AI_DYNAMIC"
+                if (
+                    signal_mode == "AI_AGENT"
+                    and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED
+                    and not bool(self.v_legacy_protection_enabled.get())
+                    and not bool(self.v_hold_until_all_reverse.get())
+                )
+                else (
+                    "LEGACY_R9.3"
+                    if bool(self.v_legacy_protection_enabled.get())
+                    else (
+                        "HOLD_ALL_REVERSE"
+                        if bool(self.v_hold_until_all_reverse.get())
+                        else "SIMPLE_ROI"
+                    )
+                )
+            )
+            self.runtime_config_hash = self._config_hash()
+            if not self.session_id:
+                self.session_id = str(uuid.uuid4())
+            self.worker_pid = os.getpid()
+            self.worker_started_at = time.time()
+            self._db_session_start()
+            self._persist_runtime_state(status="RUNNING")
+            self._write_kill_switch_heartbeat(status="RUNNING")
+            self._start_kill_switch_watchdog()
+
+            self.is_running = True
+
+            self._set_bot_button_states(running=True)
+
+            self._write_kill_switch_heartbeat(status="RUNNING")
+            self.bot_thread = threading.Thread(
+                target=self._run_bot_logic,
+                daemon=True,
+            )
+            self.bot_thread.start()
+
+        except Exception as e:
+            self.log(
+                f"START FAILED: {e}"
+            )
+            self.is_running = False
+            self.stop_requested = False
+            self.stop_started_at = 0.0
+            self._release_symbol_lock()
+            self._release_profile_lock()
+            self._set_bot_button_states(running=False)
+
+            messagebox.showerror(
+                "Bot start failed",
+                str(e),
+            )
+
+    def stop_bot(self):
+        """Request a graceful stop and finalize the profile only after the worker exits."""
+        if not self.is_running:
+            if self.bot_thread is not None and self.bot_thread.is_alive():
+                self.stop_requested = True
+                if not self.stop_started_at:
+                    self.stop_started_at = time.time()
+                self._set_bot_button_states(running=False, stopping=True)
+                if not self._stop_completion_scheduled:
+                    self._stop_completion_scheduled = True
+                    try:
+                        self.root.after(250, self._poll_stop_completion)
+                    except Exception:
+                        self._stop_completion_scheduled = False
+                return
+
+            # Already stopped: make the lifecycle state deterministic and
+            # clean any stale same-process lock that is no longer owned by a
+            # live worker.
+            self.stop_requested = False
+            self.stop_started_at = 0.0
+            self._release_symbol_lock()
+            self._release_profile_lock()
+            self._set_bot_button_states(running=False, stopping=False)
+            try:
+                self._refresh_profile_list(select_profile=self.bot_profile_id)
+            except Exception:
+                pass
+            return
+
+        try:
+            if self._settings_dirty:
+                self.save_settings()
+            else:
+                self._refresh_runtime_gui_snapshot()
+        except Exception as e:
+            self.log(f"STOP CONFIG SAVE WARNING: {e}")
+
+        self.stop_requested = True
+        self.stop_started_at = time.time()
+
+        # Flip the run flag first so the worker cannot begin another execution
+        # cycle while shutdown is cleaning up exchange orders/positions.
+        self.is_running = False
+        self._set_bot_button_states(running=False, stopping=True)
+
+        # R9.2 mandatory fail-closed action: stopping the bot also stops the
+        # bot-owned exchange inventory. No open position/order is intentionally
+        # left behind for a stopped bot.
+        try:
+            self._persist_runtime_state(status="STOPPING")
+            self._write_kill_switch_heartbeat(status="STOPPING")
+            self._start_stop_cleanup_worker("MANUAL BOT STOP")
+        except Exception as e:
+            self.log(f"KILL SWITCH stop scheduling warning: {e}")
+
+        self.log("STOP REQUESTED: waiting for execution worker to terminate...")
+
+        thread = self.bot_thread
+        if thread is None or not thread.is_alive():
+            self._on_worker_finished()
+            return
+
+        if not self._stop_completion_scheduled:
+            self._stop_completion_scheduled = True
+            try:
+                self.root.after(100, self._poll_stop_completion)
+            except Exception:
+                self._stop_completion_scheduled = False
+
+    def on_close(self):
+        """Perform a responsive, fail-closed GUI shutdown."""
+        worker_alive = bool(self.bot_thread is not None and self.bot_thread.is_alive())
+        if self.is_running or worker_alive:
+            if not messagebox.askyesno(
+                "Stop bot?",
+                "Bot is running. Stop it and close?",
+            ):
+                return
+
+        active_runtime = False
+        try:
+            state = self._load_runtime_state()
+            status = str((state or {}).get("status") or "").upper()
+            position_state = (state or {}).get("position_state") or {}
+            active_runtime = status in (
+                "RUNNING", "STOPPING", "CRASHED",
+                "PAUSED_WITH_POSITION", "RECOVERY_REQUIRED",
+            ) or bool(
+                position_state.get("last_protected_position")
+                or position_state.get("active_trade")
+            )
+        except Exception:
+            active_runtime = False
+
+        requires_exchange_cleanup = bool(
+            self.is_running or worker_alive or active_runtime
+        )
+        if not requires_exchange_cleanup:
+            try:
+                if self._settings_dirty:
+                    self.save_settings()
+                else:
+                    self._refresh_runtime_gui_snapshot()
+            except Exception:
+                pass
+            self._ui_queue_shutdown = True
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+            return
+
+        self._close_requested = True
+        self.stop_requested = bool(self.is_running or worker_alive)
+        self.stop_started_at = time.time()
+
+        try:
+            if self._settings_dirty:
+                self.save_settings()
+            else:
+                self._refresh_runtime_gui_snapshot()
+        except Exception as e:
+            self.log(f"GUI CLOSE CONFIG SAVE WARNING: {e}")
+
+        self.is_running = False
+        self._set_bot_button_states(running=False, stopping=True)
+
+        try:
+            self._persist_runtime_state(status="STOPPING")
+            self._write_kill_switch_heartbeat(status="STOPPING")
+            self._start_stop_cleanup_worker("GUI SHUTDOWN")
+        except Exception as e:
+            self.log(f"GUI shutdown cleanup scheduling warning: {e}")
+
+        self.log(
+            "GUI CLOSE REQUESTED: exchange cleanup is running in background; "
+            "waiting for verified FLAT + NO OPEN ORDERS before closing."
+        )
+
+        if not self._stop_completion_scheduled:
+            self._stop_completion_scheduled = True
+            try:
+                self.root.after(100, self._poll_stop_completion)
+            except Exception as e:
+                self._stop_completion_scheduled = False
+                self.log(f"GUI CLOSE POLL SCHEDULING WARNING: {e}")
+
+    # -------------------- PERFORMANCE / TRADE ACCOUNTING ----
+
+    def _begin_performance_trade(self, side, entry, qty, balance):
+        trade_id = str(uuid.uuid4())
+        protected = self.last_protected_position or {}
+        try:
+            leverage_value = float(str(self._runtime_gui_value("e_lev", "0")).strip())
+        except Exception:
+            leverage_value = 0.0
+
+        self.active_trade = {
+            "trade_id": trade_id,
+            "entry_order_id": self.current_entry_order_id,
+            "side": side,
+            "entry": float(entry),
+            "qty": float(qty),
+            "balance_start": float(balance),
+            "started_at": time.time(),
+            "tp1_hit": False,
+            "leverage": leverage_value,
+            "sl": protected.get("sl"),
+            "tp1": protected.get("tp1"),
+            "tp2": protected.get("tp2"),
+            "exit_price": None,
+        }
+        self.opened_trades += 1
+        self._db_trade_open(self.active_trade)
+        self._persist_runtime_state(status="RUNNING")
+
+    def _finalize_performance_trade(self, reason="CLOSED", balance=None):
+        trade = self.active_trade
+        if not trade:
+            return
+        try:
+            if balance is None:
+                balance = self.fetch_balance_total()
+            pnl = float(balance) - float(trade["balance_start"])
+
+            try:
+                trade["exit_price"] = float(
+                    self._current_market_price(self.symbol)
+                )
+            except Exception:
+                trade["exit_price"] = None
+
+            self.trade_pnls.append(pnl)
+            self.total_trades += 1
+            if pnl > 0:
+                self.winning_trades += 1
+                result = "WIN"
+            elif pnl < 0:
+                self.losing_trades += 1
+                result = "LOSS"
+            else:
+                result = "BREAKEVEN"
+
+            self._db_trade_close(
+                trade,
+                pnl,
+                reason,
+                "ACCOUNT_BALANCE_DELTA",
+            )
+
+            self.log(
+                f"TRADE CLOSED ✓ | Result={result} | PnL=${pnl:.4f} | "
+                f"Reason={reason} | Completed={self.total_trades}"
+            )
+        except Exception as e:
+            self.log(f"Trade result accounting notice: {e}")
+        finally:
+            self.active_trade = None
+            self._persist_runtime_state(status="RUNNING")
+
+    def _mark_tp1_hit_for_stats(self):
+        if self.active_trade is not None:
+            self.active_trade["tp1_hit"] = True
+
+    # -------------------- SESSION WINDOW ---------------------
+
+    def update_estimated_window(self):
+        """Update the estimated candle window for the selected max trades.
+
+        This is only a time estimate based on one potential trade per
+        timeframe candle. It does not guarantee that a signal/trade will
+        occur on every candle.
+        """
+        try:
+            raw_trades = self.e_max_trades.get().strip()
+        except Exception:
+            raw_trades = "10"
+
+        try:
+            max_trades = int(raw_trades)
+        except Exception:
+            max_trades = 0
+
+        if max_trades <= 0:
+            text_value = "Unlimited"
+        else:
+            tf = str(self.v_tf.get()).strip().lower()
+            tf_minutes = {
+                "1m": 1,
+                "3m": 3,
+                "5m": 5,
+                "10m": 10,
+                "15m": 15,
+                "30m": 30,
+                "1h": 60,
+                "2h": 120,
+                "4h": 240,
+                "6h": 360,
+                "12h": 720,
+                "1d": 1440,
+                "45m": 45,
+            }.get(tf)
+
+            if tf_minutes is None:
+                text_value = "N/A"
+            else:
+                total_minutes = max_trades * tf_minutes
+                if total_minutes < 60:
+                    text_value = f"{total_minutes} min"
+                elif total_minutes % 60 == 0:
+                    hours = total_minutes // 60
+                    text_value = (
+                        f"{hours} hr" if hours == 1
+                        else f"{hours} hrs"
+                    )
+                else:
+                    hours = total_minutes / 60.0
+                    text_value = f"{total_minutes} min ({hours:.2f} hrs)"
+
+        try:
+            self.lbl_est_time.config(text=text_value)
+        except Exception:
+            pass
+
+    # -------------------- TP1 -> BREAK-EVEN ------------------
+
+    def _manage_tp1_break_even(self, position):
+        """After TP1 actually fills, move the remaining SL to actual entry.
+
+        TP1 completion is confirmed from the exchange order status. The
+        existing SL is cancelled and replaced with a reduce-only trigger at
+        the actual filled entry price. TP2 is left untouched.
+        """
+        if bool(self._runtime_gui_value("v_hold_until_all_reverse", False)):
+            return
+        if not bool(self._runtime_gui_value("v_tp1_be", True)):
+            return
+        if self.tp1_be_done:
+            return
+        if not position:
+            return
+
+        protected = self.last_protected_position
+        if not protected:
+            return
+
+        if protected.get("side") != position.get("side"):
+            return
+
+        tp1_id = protected.get("tp1_id")
+        old_sl_id = protected.get("sl_id")
+        if not tp1_id:
+            return
+
+        # Query the specific TP1 ID instead of trusting a partial first page.
+        # An inconclusive API response must never move the SL.
+        tp1_order = None
+
+        try:
+            if self._order_is_still_open(self.symbol, tp1_id):
+                return
+        except Exception as e:
+            self.log(f"TP1 open-order status notice: {e}")
+
+        if tp1_order is None:
+            tp1_order = self._fetch_specific_order(self.symbol, tp1_id)
+
+        if tp1_order is None:
+            return
+
+        status = str(tp1_order.get("status") or "").lower()
+        filled = float(tp1_order.get("filled") or 0.0)
+
+        if status not in ("closed", "filled") or filled <= 0:
+            return
+
+        remaining_qty = float(position.get("qty") or 0.0)
+        entry_price = float(position.get("entry") or 0.0)
+
+        if remaining_qty <= 0 or entry_price <= 0:
+            return
+
+        try:
+            self.log(
+                f"TP1 ACHIEVED ✓ | Filled Qty={filled:g} | "
+                f"Remaining Qty={remaining_qty:g}"
+            )
+            self._mark_tp1_hit_for_stats()
+
+            be_target = entry_price
+            fee_buf = self._round_trip_fee_frac()
+            be_note = "plain entry"
+            if fee_buf > 0:
+                is_long = position["side"] == "LONG"
+                buffered = entry_price * (1.0 + fee_buf) if is_long else entry_price * (1.0 - fee_buf)
+                tp1_px = float(protected.get("tp1") or 0.0)
+                try:
+                    mkt_px = self._current_market_price(self.symbol)
+                except Exception:
+                    mkt_px = 0.0
+                # Buffered stop must be strictly inside TP1 and safely on the losing side of market.
+                inside_tp1 = tp1_px > 0 and ((buffered < tp1_px) if is_long else (buffered > tp1_px))
+                safe_vs_mkt = mkt_px > 0 and ((buffered < mkt_px * 0.9995) if is_long else (buffered > mkt_px * 1.0005))
+                if inside_tp1 and safe_vs_mkt:
+                    be_target = buffered
+                    be_note = f"entry {'+' if is_long else '-'} round-trip fee {fee_buf * 100:.3f}%"
+            be_price = float(
+                self.exchange.price_to_precision(
+                    self.symbol,
+                    be_target,
+                )
+            )            self.log(f"BREAK-EVEN TARGET: {be_price:.12g} ({be_note})")
+            close_side = "sell" if position["side"] == "LONG" else "buy"
+
+            # Create and verify the replacement stop BEFORE cancelling the old
+            # stop. This keeps the position protected if BE creation fails.
+            if self.exchange_id == "bybit":
+                trigger_direction = 2 if position["side"] == "LONG" else 1
+                be_order = self.create_bybit_trigger(
+                    self.symbol, "STOP_MARKET", close_side, remaining_qty,
+                    be_price, trigger_direction, "BREAK-EVEN SL"
+                )
+            elif self.exchange_id == "binance":
+                be_order = self.create_binance_trigger(
+                    self.symbol, "STOP_MARKET", close_side, remaining_qty,
+                    be_price, "BREAK-EVEN SL"
+                )
+            else:
+                be_order = self.create_generic_trigger(
+                    self.symbol, close_side, remaining_qty,
+                    be_price, "BREAK-EVEN SL"
+                )
+
+            be_id = be_order.get("id")
+            if not be_id:
+                raise RuntimeError("Break-even SL returned no order ID.")
+
+            verified = self.verify_protection_orders(
+                self.symbol,
+                [("BREAK-EVEN SL", be_order)],
+            )
+            if not verified:
+                try:
+                    self.exchange.cancel_order(be_id, self.symbol)
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    "Break-even SL was submitted but could not be verified. Original SL was retained."
+                )
+
+            # Only after the replacement is verified do we cancel the old SL.
+            if old_sl_id and str(old_sl_id) != str(be_id):
+                try:
+                    self.exchange.cancel_order(old_sl_id, self.symbol)
+                    self.log(f"TP1 ACHIEVED: Cancelled old SL: {old_sl_id}")
+                except Exception as e:
+                    # Duplicate protection is safer than no protection.
+                    self.log(f"TP1 ACHIEVED: old SL cancel notice: {e}")
+
+            protected["sl_id"] = be_id
+            protected["sl"] = be_price
+            self.tp1_be_done = True
+
+            self.log(
+                f"BREAK-EVEN ACTIVE ✓ | Entry={entry_price:.12g} | "
+                f"Remaining Qty={remaining_qty:g} | SL={be_price:.12g}"
+            )
+
+        except Exception as e:
+            self.tp1_be_done = False
+            self.log(
+                f"TP1 BREAK-EVEN ERROR: {e}"
+            )
+
+    # -------------------- TIMEFRAME DATA ---------------------
+
+    def _fetch_strategy_ohlcv(self, timeframe, limit):
+        """Fetch strategy candles, including synthetic 45m candles.
+
+        Exchanges supported by CCXT generally provide 1m/3m/5m/15m/30m/1h
+        candles but not a native 45m interval. For 45m, build candles from
+        completed/current 15m candles aligned to UTC 45-minute boundaries.
+        The returned dataframe keeps the current in-progress 45m bucket when
+        available; the main loop ALWAYS uses closed_idx=-2, so an in-progress
+        45m bucket is never used for a signal.
+        """
+        timeframe = str(timeframe).strip().lower()
+        limit = int(limit)
+        if limit <= 0:
+            raise ValueError("OHLCV limit must be greater than 0.")
+
+        if timeframe != "45m":
+            return self.exchange.fetch_ohlcv(
+                self.symbol,
+                timeframe=timeframe,
+                limit=limit,
+            )
+
+        # 45m = three 15m candles. Fetch extra history because aggregation
+        # reduces the number of rows by roughly 3x. Multiple batches are used
+        # when the exchange caps a single request below the required amount.
+        base_interval_ms = 15 * 60 * 1000
+        target_base = limit * 3 + 6
+        batch_limit = min(1000, max(200, target_base))
+        batches = []
+        remaining = target_base
+        since = None
+
+        while remaining > 0 and len(batches) < 5:
+            request_limit = min(batch_limit, remaining)
+            kwargs = {
+                "symbol": self.symbol,
+                "timeframe": "15m",
+                "limit": request_limit,
+            }
+            if since is not None:
+                kwargs["since"] = int(since)
+
+            batch = self.exchange.fetch_ohlcv(**kwargs)
+            if not batch:
+                break
+
+            batches.extend(batch)
+            oldest = min(int(row[0]) for row in batch)
+            new_since = oldest - base_interval_ms * request_limit
+            if since is not None and new_since >= since:
+                break
+            since = new_since
+            remaining = target_base - len(batches)
+
+            if len(batch) < request_limit:
+                break
+
+        if not batches:
+            raise RuntimeError("No 15m OHLCV data returned for synthetic 45m timeframe.")
+
+        # Deduplicate and sort chronologically.
+        unique = {}
+        for row in batches:
+            unique[int(row[0])] = row
+        base = pd.DataFrame(
+            [unique[k] for k in sorted(unique)],
+            columns=["time", "open", "high", "low", "close", "vol"],
+        )
+        base["datetime"] = pd.to_datetime(base["time"], unit="ms", utc=True)
+        base = base.set_index("datetime")
+
+        # Aggregate exactly three 15m candles per 45m bucket. Incomplete
+        # historical buckets are discarded so a missing 15m candle can never
+        # masquerade as a completed 45m candle.
+        grouped = base.resample(
+            "45min", origin="epoch", label="left", closed="left"
+        )
+        agg = grouped.agg({
+            "time": "first",
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "vol": "sum",
+        })
+        counts = grouped["close"].count()
+        agg["base_count"] = counts
+        agg = agg.dropna(subset=["open", "high", "low", "close", "vol"])
+
+        # The newest bucket can be in progress. Keep it so the main strategy
+        # can use closed_idx=-2 and therefore trade only a fully completed 45m bar.
+        # All older buckets must contain exactly 3 base candles.
+        if len(agg) > 1:
+            older = agg.iloc[:-1]
+            newest = agg.iloc[-1:]
+            older = older[older["base_count"] == 3]
+            agg = pd.concat([older, newest], axis=0)
+        agg = agg.reset_index(drop=True)
+
+        # Keep the newest `limit` 45m rows.
+        if len(agg) > limit:
+            agg = agg.iloc[-limit:].reset_index(drop=True)
+
+        return agg[["time", "open", "high", "low", "close", "vol"]].values.tolist()
+
+    def _refresh_volume_sr_cache(self, base_df, tf_names):
+        """Refresh Volume S/R source data with a conservative short cache."""
+        now = time.time()
+        wanted = [str(x).strip() for x in tf_names if str(x).strip() != "Disable"]
+        if not wanted:
+            return {"Chart": base_df.copy()}
+        # Refresh at most every 60 seconds. HTF candles themselves are
+        # confirmed by the numerical module before becoming active.
+        if self.volume_sr_cache and now - self.volume_sr_cache_time < 60:
+            out = dict(self.volume_sr_cache)
+            out["Chart"] = base_df.copy()
+            return out
+        frames = {"Chart": base_df.copy()}
+        tf_ccxt={"15m":"15m","30m":"30m","1h":"1h","4h":"4h","D":"1d","W":"1w"}
+        for tf in wanted:
+            if tf == "Chart":
+                continue
+            try:
+                api_tf=tf_ccxt.get(tf, tf)
+                raw = self.exchange.fetch_ohlcv(self.symbol, timeframe=api_tf, limit=300)
+                f = pd.DataFrame(raw, columns=["time","open","high","low","close","vol"])
+                if not f.empty:
+                    f["datetime"] = pd.to_datetime(f["time"], unit="ms", utc=True)
+                    frames[tf] = f
+            except Exception as e:
+                self.log(f"VOLUME S/R DATA WARNING {tf}: {e}")
+        self.volume_sr_cache = frames
+        self.volume_sr_cache_time = now
+        return frames
+
+    # -------------------- SIGNAL DECISION -------------------
+
+    def _manage_ai_trailing_stop(self, position, atr_value, closed_candle_ts=None):
+        """Bounded post-TP1 ATR trailing stop for accepted AI_AGENT positions.
+
+        The trail only tightens risk, never widens it, and never moves outside
+        the exchange-reported liquidation-safe region. Replacement SL is created
+        and verified before the old SL is cancelled.
+        """
+        if not AI_AGENT_TRAILING_ENABLED or not position or not self.last_protected_position:
+            return False
+        if bool(self._runtime_gui_value("v_hold_until_all_reverse", False)) or self.hold_sl_wait_reversal:
+            return False
+        if not self.tp1_be_done:
+            return False
+        protected = self.last_protected_position
+        if str(protected.get("side") or "") != str(position.get("side") or ""):
+            return False
+        entry = float(protected.get("entry") or position.get("entry") or 0.0)
+        current = float(position.get("mark_price") or 0.0)
+        if entry <= 0:
+            return False
+        if current <= 0:
+            try:
+                ticker = self.exchange.fetch_ticker(self.symbol)
+                current = float(ticker.get("last") or ticker.get("mark") or 0.0)
+            except Exception:
+                current = 0.0
+        atr = float(atr_value or 0.0)
+        if current <= 0 or not np.isfinite(current) or atr <= 0 or not np.isfinite(atr):
+            return False
+        initial_risk = float(protected.get("initial_sl_move") or 0.0)
+        if initial_risk <= 0:
+            initial_sl = float(protected.get("initial_sl") or protected.get("sl") or 0.0)
+            initial_risk = abs(entry - initial_sl) / max(entry, 1e-12) if initial_sl > 0 else 0.0
+        if initial_risk <= 0:
+            return False
+        side = str(position.get("side") or "").upper()
+        move = (current - entry) / entry if side == "LONG" else (entry - current) / entry
+        current_r = move / initial_risk
+        if current_r < AI_AGENT_TRAIL_START_R:
+            return False
+        old_sl = float(protected.get("sl") or 0.0)
+        if old_sl <= 0:
+            return False
+        candidate = current - AI_AGENT_TRAIL_ATR_MULT * atr if side == "LONG" else current + AI_AGENT_TRAIL_ATR_MULT * atr
+        candidate = self.safe_price(self.symbol, candidate)
+        # Never loosen the current stop.
+        if side == "LONG":
+            if candidate <= old_sl:
+                return False
+        else:
+            if candidate >= old_sl:
+                return False
+        step_pct = abs(candidate - old_sl) / max(old_sl, 1e-12) * 100.0
+        if step_pct < AI_AGENT_TRAIL_MIN_STEP_PCT:
+            return False
+
+        # Actual exchange liquidation validation is mandatory when available.
+        self._actual_liquidation_safety_check(position, candidate, position.get("leverage") or None)
+        qty = self.safe_amount(self.symbol, float(position.get("qty") or 0.0))
+        if qty <= 0:
+            return False
+        close_side = "sell" if side == "LONG" else "buy"
+        try:
+            old_id = str(protected.get("sl_id") or "")
+            if self.exchange_id == "bybit":
+                direction = 2 if side == "LONG" else 1
+                new_order = self.create_bybit_trigger(
+                    self.symbol, "STOP_MARKET", close_side, qty, candidate, direction, "AI TRAIL SL"
+                )
+            elif self.exchange_id == "binance":
+                new_order = self.create_binance_trigger(
+                    self.symbol, "STOP_MARKET", close_side, qty, candidate, "AI TRAIL SL"
+                )
+            else:
+                new_order = self.create_generic_trigger(
+                    self.symbol, close_side, qty, candidate, "AI TRAIL SL"
+                )
+            if not self.verify_protection_orders(self.symbol, [("AI TRAIL SL", new_order)]):
+                raise RuntimeError("AI trailing SL could not be verified active.")
+            new_id = str(new_order.get("id") or "")
+            # New SL is live before old SL is cancelled, avoiding an unprotected gap.
+            if old_id and old_id != new_id:
+                try:
+                    self.exchange.cancel_order(old_id, self.symbol)
+                except Exception as e:
+                    self.log(f"AI TRAIL OLD SL CANCEL NOTICE | ID={old_id} | {e}")
+            protected["sl_id"] = new_id or protected.get("sl_id")
+            protected["sl"] = candidate
+            protected["trail_active"] = True
+            protected["trail_last_r"] = current_r
+            if closed_candle_ts is not None:
+                protected["trail_last_candle_ts"] = int(closed_candle_ts)
+                self.last_trailing_update_candle_ts = int(closed_candle_ts)
+            self._persist_runtime_state(status="RUNNING")
+            self.log(
+                f"AI TRAILING STOP ✓ | Side={side} | R={current_r:.2f} | ATR={atr:.12g} | "
+                f"SL {old_sl:.12g} -> {candidate:.12g} | Qty={qty:g}"
+            )
+            return True
+        except Exception as e:
+            self.log(f"AI TRAILING STOP BLOCKED: {e}")
+            return False
+
+    def _tradeability_audit(self, df, cfg):
+        """One-time startup report: CAN this configuration trade, and is it LIKELY to?
+
+        Uses only completed candles already fetched (no orders, no extra API calls). Gate pass
+        rates are measured on recent history; the verdict is advisory and never blocks the bot.
+        """
+        rows, risk_flags = [], 0
+
+        def add(label, value, status=""):
+            rows.append(f"  {label:<30}{value:<26}{status}")
+
+        # Capability (static): can it ever fire?
+        add("Evidence families available:", f"{cfg['n_families']}", f"need {cfg['need_families']}  " + ("PASS" if cfg['n_families'] >= cfg['need_families'] else "FAIL"))
+        if cfg["mode"] in ("AI_AGENT", "ADAPTIVE_EVIDENCE"):
+            add("Trend evidence:", "YES" if cfg["has_trend"] else "NO", "PASS" if (cfg["has_trend"] or not cfg["req_trend"]) else "FAIL")
+            add("Structure evidence:", "YES" if cfg["has_structure"] else "NO", "PASS" if (cfg["has_structure"] or not cfg["req_structure"]) else "FAIL")
+        can_trade = (
+            cfg["n_families"] >= cfg["need_families"]
+            and (cfg["has_trend"] or not cfg["req_trend"])
+            and (cfg["has_structure"] or not cfg["req_structure"])
+        )
+
+        # Likelihood (empirical): how often do the hard gates leave a candle tradable?
+        n = min(len(df) - 2, 300)
+        hist = df.iloc[-n - 1:-1] if n >= 30 else None
+        joint = None
+        if hist is not None:
+            ok = pd.Series(True, index=hist.index)
+            close = hist["close"].replace(0, np.nan)
+            if cfg["use_atr"]:
+                atr_ok = (hist["atr"] / close * 100.0) >= cfg["atr_min_pct"]
+                rate = float(atr_ok.mean()); ok &= atr_ok
+                flag = "HIGH BLOCK RISK" if rate < 0.25 else ("REVIEW" if rate < 0.50 else "OK")
+                risk_flags += rate < 0.25
+                add("ATR gate (min %.2f%%):" % cfg["atr_min_pct"], f"passes {rate * 100:.0f}% of candles", flag)
+            else:
+                add("ATR gate:", "OFF")
+            if cfg["use_adx"]:
+                adx_ok = hist["adx"] >= cfg["adx_thresh"]
+                rate = float(adx_ok.mean()); ok &= adx_ok
+                flag = "HIGH BLOCK RISK" if rate < 0.25 else ("REVIEW" if rate < 0.40 else "OK")
+                risk_flags += rate < 0.25
+                add("ADX gate (>= %g):" % cfg["adx_thresh"], f"passes {rate * 100:.0f}% of candles", flag)
+            else:
+                add("ADX gate:", "OFF")
+            if cfg["use_vol"]:
+                vol_ok = hist["vol"] > hist["vol_ma"]
+                rate = float(vol_ok.mean()); ok &= vol_ok
+                add("Volume gate (> MA):", f"passes {rate * 100:.0f}% of candles", "OK" if rate >= 0.30 else "REVIEW")
+            else:
+                add("Volume gate:", "OFF")
+
+            # Cost gate on the typical (median) ATR stop.
+            if cfg["cost_gate"] and cfg["atr_stop_mult"] and cfg["taker_fee_pct"] > 0:
+                med_atr = float((hist["atr"] / close * 100.0).median()) / 100.0
+                typ_stop = med_atr * cfg["atr_stop_mult"]
+                tp1 = typ_stop * cfg["atr_tp1_mult"] if cfg["tp1_on"] else None
+                reason = cost_gate_reason(typ_stop, tp1, cfg["taker_fee_pct"])
+                add("Cost gate (median ATR stop):", f"stop {typ_stop * 100:.3f}%", ("BLOCKS: " + reason) if reason else "PASS")
+                risk_flags += bool(reason)
+            # Liquidation-buffer gate: the pre-entry guard skips any setup whose ATR stop is wider
+            # than the liquidation-safe limit. Measure it with the TIGHTEST stop the bot may use.
+            if cfg.get("atr_stop_mult_min") and cfg.get("leverage") and cfg.get("liq_buffer"):
+                limit = liq_safe_move(cfg["leverage"], cfg["liq_buffer"])
+                stop_series = (hist["atr"] / close) * cfg["atr_stop_mult_min"]
+                liq_rate = float((stop_series <= limit).mean())
+                med_stop = float(stop_series.median())
+                max_lev = max(int(1.0 / (cfg["liq_buffer"] * med_stop)), 1) if med_stop > 0 else 0
+                flag = "HIGH BLOCK RISK" if liq_rate < 0.25 else ("REVIEW" if liq_rate < 0.50 else "OK")
+                if liq_rate < 0.25:
+                    flag += f" (limit {limit * 100:.3f}% at {cfg['leverage']}x; sensible max ~{max_lev}x)"
+                risk_flags += liq_rate < 0.25
+                add("Liq-buffer gate (AI minimum stop):", f"passes {liq_rate * 100:.0f}% of candles", flag)
+                ok &= (stop_series <= limit)
+            joint = float(ok.mean())
+            flag = "HIGH BLOCK RISK" if joint < 0.10 else ("REVIEW" if joint < 0.25 else "OK")
+            risk_flags += joint < 0.10
+            add("CORE REGIME + LIQ GATES:", f"pass {joint * 100:.0f}% of candles", flag)
+        else:
+            add("Gate history:", "too little data (<30 candles)", "SKIPPED")
+
+        if cfg["mode"] == "AI_AGENT":
+            add("AI edge / confidence min:", f"{cfg['ai_edge']:g} / {cfg['ai_conf']:g}", "strategy thresholds")
+            add("AI participation / conflicts:", f"{cfg['ai_part']:g} / {cfg['ai_conflicts']}", "strategy thresholds")
+        add("MTF (4h) gate:", "ON" if cfg["use_mtf"] else "OFF", "hard gate on direction" if cfg["use_mtf"] else "")
+
+        # A low combined pass rate is itself a review condition. R6.8.7.0 only
+        # escalated the verdict when a single gate was HIGH BLOCK RISK or the
+        # intersection fell below 10%, which made a 14% configuration report
+        # individual REVIEW yet still finish with LIKELY TO TRADE: YES.
+        # Keep the thresholds explicit: <10% = HIGH BLOCK RISK, 10-<25% = REVIEW.
+        _joint_review = bool(joint is not None and joint < 0.25)
+        likely = "NO" if not can_trade else ("REVIEW" if (risk_flags or _joint_review) else "YES")
+        head = "TRADEABILITY AUDIT | " + str(cfg["mode"]) + " | " + str(cfg["symbol"]) + " " + str(cfg["timeframe"])
+        self.log("\n".join([head] + rows + [
+            f"  CONFIGURATION CAN TRADE:       {'YES' if can_trade else 'NO'}",
+            f"  CONFIGURATION LIKELY TO TRADE: {likely}"
+            + ("  (hard gates block most candles; see flags above. Advisory only - the bot keeps running.)" if likely == "REVIEW" else ""),
+        ]))
+        return can_trade, likely
+
+    def _decide_signal(
+        self,
+        directional_modules,
+        signal_mode,
+        min_score,
+        atr_pass=True,
+        vol_pass=True,
+        adx_pass=True,
+        mtf_pass_bull=True,
+        mtf_pass_bear=True,
+        adaptive_edge=None,
+        adaptive_min_weight=None,
+        evidence_min_families=None,
+        evidence_family_min_score=None,
+        evidence_require_trend=None,
+        evidence_require_independent=None,
+        ai_min_families=None,
+        ai_min_edge=None,
+        ai_family_confidence=None,
+        ai_require_trend=None,
+        ai_require_structure=None,
+        ai_max_conflicts=None,
+        ai_min_family_participation=None,
+        ai_soft_regime=None,
+        ai_soft_edge=None,
+        ai_soft_min_families=None,
+        ai_soft_max_regime_misses=None,
+    ):
+        """Compatibility wrapper around the V8.4 evidence-family engine."""
+        if evidence_min_families is None:
+            evidence_min_families = int(self._runtime_gui_value("e_evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
+        if evidence_family_min_score is None:
+            evidence_family_min_score = float(self._runtime_gui_value("e_evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
+        if evidence_require_trend is None:
+            evidence_require_trend = bool(self._runtime_gui_value("v_evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND))
+        if evidence_require_independent is None:
+            evidence_require_independent = bool(self._runtime_gui_value("v_evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT))
+        if ai_min_families is None:
+            ai_min_families = int(self._runtime_gui_value("e_ai_min_families", AI_AGENT_MIN_FAMILIES))
+        if ai_min_edge is None:
+            ai_min_edge = float(self._runtime_gui_value("e_ai_min_edge", AI_AGENT_MIN_EDGE))
+        if ai_family_confidence is None:
+            ai_family_confidence = float(self._runtime_gui_value("e_ai_family_confidence", AI_AGENT_MIN_FAMILY_CONFIDENCE))
+        if ai_require_trend is None:
+            ai_require_trend = bool(self._runtime_gui_value("v_ai_require_trend", AI_AGENT_REQUIRE_TREND))
+        if ai_require_structure is None:
+            ai_require_structure = bool(self._runtime_gui_value("v_ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE))
+        if ai_max_conflicts is None:
+            ai_max_conflicts = int(self._runtime_gui_value("e_ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES))
+        if ai_min_family_participation is None:
+            ai_min_family_participation = self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION)
+        if ai_soft_regime is None:
+            ai_soft_regime = bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED))
+        if ai_soft_edge is None:
+            ai_soft_edge = self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE)
+        if ai_soft_min_families is None:
+            ai_soft_min_families = self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES)
+        if ai_soft_max_regime_misses is None:
+            ai_soft_max_regime_misses = self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES)
+        return StrategyEngine.decide_signal(
+            directional_modules,
+            signal_mode,
+            min_score,
+            atr_pass,
+            vol_pass,
+            adx_pass,
+            mtf_pass_bull,
+            mtf_pass_bear,
+            adaptive_edge,
+            adaptive_min_weight,
+            evidence_min_families,
+            evidence_family_min_score,
+            evidence_require_trend,
+            evidence_require_independent,
+            ai_min_families,
+            ai_min_edge,
+            ai_family_confidence,
+            ai_require_trend,
+            ai_require_structure,
+            ai_max_conflicts,
+            ai_min_family_participation,
+            ai_soft_regime,
+            ai_soft_edge,
+            ai_soft_min_families,
+            ai_soft_max_regime_misses,
+        )
+
+    def _evaluate_reversal_hold(self, position_side, hold_directional_modules):
+        """Evaluate the R9.5 strategy-reversal exit rule.
+
+        ALL_ACTIVE:
+            Every enabled directional module must be on the opposite side.
+
+        MIN_FAMILIES:
+            Count evidence families whose weighted directional state has flipped
+            to the opposite side. Correlated indicators inside one family count
+            once. ATR/ADX are intentionally excluded because they are regime gates.
+        """
+        mode = str(
+            self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)
+        ).strip().upper()
+        try:
+            minimum_families = int(
+                self._runtime_gui_value(
+                    "e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES
+                )
+            )
+        except Exception:
+            minimum_families = DEFAULT_MIN_REVERSE_FAMILIES
+        minimum_families = max(1, min(len(EVIDENCE_FAMILY_ORDER), minimum_families))
+
+        directional = [
+            (name, bool(bull), bool(bear))
+            for name, bull, bear in (hold_directional_modules or [])
+            if name not in ("ATR", "ADX")
+        ]
+
+        if not directional:
+            return False, "NONE", [], []
+
+        if mode == "ALL_ACTIVE":
+            checks = []
+            for name, bull, bear in directional:
+                opposite = bool(bear if position_side == "LONG" else bull)
+                checks.append((name, opposite))
+            not_reversed = [name for name, ok in checks if not ok]
+            return (
+                not not_reversed,
+                "ALL_ACTIVE",
+                [name for name, ok in checks if ok],
+                not_reversed,
+            )
+
+        # MIN_FAMILIES: weighted family direction. A family is considered
+        # reversed only when the opposite-side weight strictly exceeds the
+        # original-side weight. This prevents one weak module from declaring
+        # a correlated family reversed while the family remains conflicted.
+        buckets = {}
+        for name, bull, bear in directional:
+            family = REVERSAL_FAMILY_MAP.get(name)
+            if not family:
+                continue
+            weight = float(ADAPTIVE_MODULE_WEIGHTS.get(name, 1.0))
+            bucket = buckets.setdefault(
+                family, {"bull": 0.0, "bear": 0.0, "active": 0}
+            )
+            if bull and not bear:
+                bucket["bull"] += weight
+                bucket["active"] += 1
+            elif bear and not bull:
+                bucket["bear"] += weight
+                bucket["active"] += 1
+
+        active_families = []
+        reversed_families = []
+        waiting_families = []
+        for family, bucket in buckets.items():
+            if bucket["active"] <= 0:
+                continue
+            active_families.append(family)
+            same_weight = bucket["bull"] if position_side == "LONG" else bucket["bear"]
+            opposite_weight = bucket["bear"] if position_side == "LONG" else bucket["bull"]
+            if opposite_weight > 0 and opposite_weight > same_weight:
+                reversed_families.append(family)
+            else:
+                waiting_families.append(family)
+
+        required = min(minimum_families, len(active_families))
+        allowed = bool(active_families) and len(reversed_families) >= required
+        return allowed, "MIN_FAMILIES", reversed_families, waiting_families
+
+
+    # -------------------- MAIN LOOP --------------------------
+
+    def _run_bot_logic(self):
+        try:
+            if self._kill_switch_latched(self.bot_profile_id, self.session_id):
+                raise RuntimeError("PERSISTENT KILL SWITCH LATCH ACTIVE: trading session is disarmed.")
+            timeframe = str(self._runtime_gui_value("v_tf")).strip().lower()
+            supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "45m", "1h", "4h"}
+            if timeframe not in supported_timeframes:
+                raise ValueError(
+                    f"Unsupported timeframe: {timeframe}. Use 1m, 3m, 5m, 15m, 30m, 45m, 1h or 4h."
+                )
+
+            try:
+                max_trades = int(self._runtime_gui_value("e_max_trades").strip())
+            except Exception:
+                raise ValueError("Max Trades must be a whole number. Use 1 for this single-symbol engine.")
+            if max_trades < 0:
+                raise ValueError("Max Trades cannot be negative.")
+            try:
+                max_open_trades = int(self._runtime_gui_value("e_max_open_trades").strip())
+            except Exception:
+                raise ValueError("Max Open Trades must be a whole number. Use 1 for this single-symbol engine.")
+            if max_open_trades < 0:
+                raise ValueError("Max Open Trades cannot be negative.")
+            if max_open_trades != 1:
+                raise ValueError(
+                    "Max Open Trades must be 1 in the current single-symbol/one-way futures engine. "
+                    "Use Max Completed Trades for the number of trades in a session."
+                )
+            self.log(f"MAX OPEN TRADES: {max_open_trades} net position per bot/symbol.")
+            no_same_candle = self._runtime_gui_value("v_no_same_candle")
+            try:
+                cooldown_min = float(self._runtime_gui_value("e_cooldown_min").strip())
+            except Exception:
+                raise ValueError("Cooldown must be a number of minutes.")
+            if cooldown_min < 0:
+                raise ValueError("Cooldown cannot be negative.")
+
+            use_st = self._runtime_gui_value("v_use_st")
+            st_len = int(
+                self._runtime_gui_value("e_st_len")
+            )
+            st_mult = float(
+                self._runtime_gui_value("e_st_mult")
+            )
+            st_source = self._runtime_gui_value("v_st_source").strip().upper()
+            st_change_atr = bool(self._runtime_gui_value("v_st_change_atr"))
+
+            if st_source not in ("CLOSE", "HL2"):
+                raise ValueError("Supertrend Source must be CLOSE or HL2.")
+            if st_len <= 0 or st_mult <= 0:
+                raise ValueError("Supertrend ATR Period and Multiplier must be greater than 0.")
+
+            use_ema = self._runtime_gui_value("v_use_ema")
+            ema_len = int(
+                self._runtime_gui_value("e_ema_len")
+            )
+            if ema_len <= 0:
+                raise ValueError("EMA period must be greater than 0.")
+
+            use_ema_cross = self._runtime_gui_value("v_use_ema_cross")
+            ema_fast_len = int(
+                self._runtime_gui_value("e_ema_fast")
+            )
+            ema_slow_len = int(
+                self._runtime_gui_value("e_ema_slow")
+            )
+
+            if ema_fast_len <= 0 or ema_slow_len <= 0:
+                raise ValueError(
+                    "EMA crossover periods must be greater than 0."
+                )
+
+            if ema_fast_len == ema_slow_len:
+                raise ValueError(
+                    "EMA crossover Fast and Slow periods must be different."
+                )
+
+            ema_cross_entry_mode = self._runtime_gui_value("v_ema_cross_entry_mode").strip().upper()
+            if ema_cross_entry_mode not in ("FRESH_CROSS", "CURRENT_TREND"):
+                raise ValueError(
+                    "EMA crossover Entry mode must be FRESH_CROSS or CURRENT_TREND."
+                )
+
+            use_macd = self._runtime_gui_value("v_use_macd")
+            macd_fast_len = int(self._runtime_gui_value("e_macd_fast"))
+            macd_slow_len = int(self._runtime_gui_value("e_macd_slow"))
+            macd_signal_len = int(self._runtime_gui_value("e_macd_signal"))
+
+            if macd_fast_len <= 0 or macd_slow_len <= 0 or macd_signal_len <= 0:
+                raise ValueError("MACD periods must be greater than 0.")
+            if macd_fast_len >= macd_slow_len:
+                raise ValueError("MACD Fast period must be smaller than Slow period.")
+
+            use_rsi = self._runtime_gui_value("v_use_rsi")
+            rsi_len = int(self._runtime_gui_value("e_rsi_len"))
+            rsi_ob = float(self._runtime_gui_value("e_rsi_ob"))
+            rsi_os = float(self._runtime_gui_value("e_rsi_os"))
+            rsi_logic = self._runtime_gui_value("v_rsi_logic").strip().upper()
+            rsi_ma_type = self._runtime_gui_value("v_rsi_ma_type").strip().upper()
+            rsi_ma_len = int(self._runtime_gui_value("e_rsi_ma_len"))
+
+            if rsi_len <= 0 or rsi_ma_len <= 0:
+                raise ValueError("RSI and RSI MA periods must be greater than 0.")
+            if not (0 < rsi_os < rsi_ob < 100):
+                raise ValueError("RSI must satisfy 0 < Oversold < Overbought < 100.")
+            if rsi_logic not in ("REVERSAL_ZONE", "CROSS_MA", "EITHER"):
+                raise ValueError("RSI Logic must be REVERSAL_ZONE, CROSS_MA, or EITHER.")
+            if rsi_ma_type not in ("SMA", "EMA", "WMA"):
+                raise ValueError("RSI MA Type must be SMA, EMA, or WMA.")
+
+            use_bb = self._runtime_gui_value("v_use_bb")
+            bb_len = int(self._runtime_gui_value("e_bb_len"))
+            bb_std = float(self._runtime_gui_value("e_bb_std"))
+
+            if bb_len <= 0 or bb_std <= 0:
+                raise ValueError("Bollinger period and StdDev must be greater than 0.")
+
+            use_stoch = self._runtime_gui_value("v_use_stoch")
+            stoch_k_len = int(self._runtime_gui_value("e_stoch_k"))
+            stoch_smooth_len = int(self._runtime_gui_value("e_stoch_smooth"))
+            stoch_d_len = int(self._runtime_gui_value("e_stoch_d"))
+
+            if stoch_k_len <= 0 or stoch_smooth_len <= 0 or stoch_d_len <= 0:
+                raise ValueError("Stochastic periods must be greater than 0.")
+
+            use_vwap = self._runtime_gui_value("v_use_vwap")
+            vwap_len = int(self._runtime_gui_value("e_vwap_len"))
+            if vwap_len <= 0:
+                raise ValueError("VWAP period must be greater than 0.")
+
+            use_vwap_delta = self._runtime_gui_value("v_use_vwap_delta")
+            vwap_delta_smooth = self._runtime_gui_value("v_vwap_delta_smooth")
+            vwap_delta_smooth_len = int(self._runtime_gui_value("e_vwap_delta_smooth_len"))
+            vwap_delta_baseline_len = int(self._runtime_gui_value("e_vwap_delta_baseline"))
+            vwap_delta_logic = self._runtime_gui_value("v_vwap_delta_logic").strip().upper()
+            if vwap_delta_smooth_len <= 0 or vwap_delta_baseline_len <= 0:
+                raise ValueError("VWAP Delta lengths must be greater than 0.")
+            if vwap_delta_logic not in ("CURRENT_TREND", "CROSS_BASELINE"):
+                raise ValueError("VWAP Delta Logic must be CURRENT_TREND or CROSS_BASELINE.")
+
+            use_vidya = self._runtime_gui_value("v_use_vidya")
+            vidya_len = int(self._runtime_gui_value("e_vidya_len"))
+            vidya_momentum = int(self._runtime_gui_value("e_vidya_momentum"))
+            vidya_band = float(self._runtime_gui_value("e_vidya_band"))
+            vidya_entry_mode = self._runtime_gui_value("v_vidya_entry_mode").strip().upper()
+            if vidya_len <= 0 or vidya_momentum <= 0 or vidya_band <= 0:
+                raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
+            if vidya_entry_mode not in ("CURRENT_TREND", "FRESH_FLIP"):
+                raise ValueError("VIDYA Entry must be CURRENT_TREND or FRESH_FLIP.")
+
+            use_nwe = self._runtime_gui_value("v_use_nwe")
+            nwe_bandwidth = float(self._runtime_gui_value("e_nwe_bandwidth"))
+            nwe_mult = float(self._runtime_gui_value("e_nwe_mult"))
+            nwe_entry_mode = self._runtime_gui_value("v_nwe_entry_mode").strip().upper()
+            nwe_repaint = self._runtime_gui_value("v_nwe_repaint")
+            if nwe_bandwidth <= 0 or nwe_mult < 0:
+                raise ValueError("NWE Bandwidth must be > 0 and Mult cannot be negative.")
+            if nwe_entry_mode not in ("CURRENT_TREND", "FRESH_CROSS"):
+                raise ValueError("NWE Entry must be CURRENT_TREND or FRESH_CROSS.")
+            use_liq_swings = self._runtime_gui_value("v_use_liq_swings")
+            liq_length = int(self._runtime_gui_value("e_liq_length"))
+            liq_area = self._runtime_gui_value("v_liq_area").strip()
+            liq_filter = self._runtime_gui_value("v_liq_filter").strip().title()
+            liq_filter_value = float(self._runtime_gui_value("e_liq_filter_value"))
+            liq_entry_mode = self._runtime_gui_value("v_liq_entry_mode").strip().upper()
+            if liq_length <= 0:
+                raise ValueError("Liquidity Swing Pivot Lookback must be greater than 0.")
+            if liq_area not in ("Wick Extremity", "Full Range"):
+                raise ValueError("Liquidity Swing Area must be Wick Extremity or Full Range.")
+            if liq_filter not in ("Count", "Volume"):
+                raise ValueError("Liquidity Swing Filter must be Count or Volume.")
+            if liq_filter_value < 0:
+                raise ValueError("Liquidity Swing Filter Value cannot be negative.")
+            if liq_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND"):
+                raise ValueError("Liquidity Swing Entry must be FRESH_BREAK or CURRENT_TREND.")
+
+            use_trendline = self._runtime_gui_value("v_use_trendline")
+            trendline_length = int(self._runtime_gui_value("e_trendline_length"))
+            trendline_min_distance = int(self._runtime_gui_value("e_trendline_min_distance"))
+            trendline_entry_mode = self._runtime_gui_value("v_trendline_entry_mode").strip().upper()
+            trendline_buffer = float(self._runtime_gui_value("e_trendline_buffer"))
+            trendline_retest_candles = int(self._runtime_gui_value("e_trendline_retest"))
+            if trendline_length <= 0:
+                raise ValueError("Trendline Pivot Lookback must be greater than 0.")
+            if trendline_min_distance <= 0:
+                raise ValueError("Trendline Minimum Pivot Distance must be greater than 0.")
+            if trendline_buffer < 0 or trendline_buffer >= 100:
+                raise ValueError(
+                    "Trendline Breakout Buffer must be >= 0% and less than 100%."
+                )
+            if trendline_retest_candles <= 0:
+                raise ValueError("Trendline Retest Candles must be greater than 0.")
+            if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
+                raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
+
+            use_divergence = bool(self._runtime_gui_value("v_use_divergence"))
+            div_pivot = int(self._runtime_gui_value("e_div_pivot"))
+            div_source = self._runtime_gui_value("v_div_source").strip()
+            div_type = self._runtime_gui_value("v_div_type").strip()
+            div_min_count = int(self._runtime_gui_value("e_div_min_count"))
+            div_max_pivots = int(self._runtime_gui_value("e_div_max_pivots"))
+            div_max_bars = int(self._runtime_gui_value("e_div_max_bars"))
+            div_entry_mode = self._runtime_gui_value("v_div_entry_mode").strip().upper()
+            if div_pivot < 1 or div_pivot > 50:
+                raise ValueError("Divergence Pivot Period must be 1-50.")
+            if div_source not in ("Close", "High/Low"):
+                raise ValueError("Divergence Source must be Close or High/Low.")
+            if div_type not in ("Regular", "Hidden", "Regular/Hidden"):
+                raise ValueError("Divergence Type is invalid.")
+            if div_min_count < 1 or div_min_count > 10:
+                raise ValueError("Minimum Divergence must be 1-10.")
+            if div_max_pivots < 1 or div_max_pivots > 20:
+                raise ValueError("Maximum Divergence Pivots must be 1-20.")
+            if div_max_bars < 30 or div_max_bars > 200:
+                raise ValueError("Maximum Divergence Bars must be 30-200.")
+            if div_entry_mode not in ("FRESH", "CURRENT_STATE"):
+                raise ValueError("Divergence Entry must be FRESH or CURRENT_STATE.")
+            div_use = {
+                "div_use_macd": self.div_use_macd.get(),
+                "div_use_macd_hist": self.div_use_macd_hist.get(),
+                "div_use_rsi": self.div_use_rsi.get(),
+                "div_use_stoch": self.div_use_stoch.get(),
+                "div_use_cci": self.div_use_cci.get(),
+                "div_use_momentum": self.div_use_momentum.get(),
+                "div_use_obv": self.div_use_obv.get(),
+                "div_use_vwmacd": self.div_use_vwmacd.get(),
+                "div_use_cmf": self.div_use_cmf.get(),
+                "div_use_mfi": self.div_use_mfi.get(),
+            }
+            if use_divergence and not any(div_use.values()):
+                raise ValueError("Divergence requires at least one source indicator.")
+            div_cfg = {
+                "div_pivot": div_pivot, "div_source": div_source, "div_type": div_type,
+                "div_max_pivots": div_max_pivots, "div_max_bars": div_max_bars,
+                "div_cci_len": int(self._runtime_gui_value("e_div_cci_len")), "div_mom_len": int(self._runtime_gui_value("e_div_mom_len")),
+                "div_entry_mode": div_entry_mode, **div_use
+            }
+            if div_cfg["div_cci_len"] <= 0 or div_cfg["div_mom_len"] <= 0:
+                raise ValueError("Divergence CCI/Momentum lengths must be greater than 0.")
+
+            use_vol_sr = bool(self._runtime_gui_value("v_use_vol_sr"))
+            sr_volume_ma = int(self._runtime_gui_value("e_sr_volume_ma"))
+            sr_vote_mode = self._runtime_gui_value("v_sr_vote_mode").strip().upper()
+            sr_entry_mode = self._runtime_gui_value("v_sr_entry_mode").strip().upper()
+            sr_tfs = [
+                self._runtime_gui_value("v_sr_tf1").strip(), self._runtime_gui_value("v_sr_tf2").strip(),
+                self._runtime_gui_value("v_sr_tf3").strip(), self._runtime_gui_value("v_sr_tf4").strip()
+            ]
+            if sr_volume_ma <= 0:
+                raise ValueError("Volume S/R Volume MA threshold must be greater than 0.")
+            if sr_vote_mode not in ("MAJORITY", "ANY", "ALL"):
+                raise ValueError("Volume S/R Vote mode must be MAJORITY, ANY or ALL.")
+            if sr_entry_mode not in ("CURRENT_ZONE", "FRESH_BREAK"):
+                raise ValueError("Volume S/R Entry mode must be CURRENT_ZONE or FRESH_BREAK.")
+            if use_vol_sr and all(tf == "Disable" for tf in sr_tfs):
+                raise ValueError("Volume S/R requires at least one enabled timeframe.")
+
+            use_atr = self._runtime_gui_value("v_use_atr")
+            atr_min_pct = float(self._runtime_gui_value("e_atr_min_pct"))
+            if atr_min_pct < 0:
+                raise ValueError("Minimum ATR % cannot be negative.")
+
+            use_vol = self._runtime_gui_value("v_use_vol")
+            vol_len = int(
+                self._runtime_gui_value("e_vol_len")
+            )
+            if vol_len <= 0:
+                raise ValueError("Volume MA period must be greater than 0.")
+
+            use_adx = self._runtime_gui_value("v_use_adx")
+            adx_len = int(self._runtime_gui_value("e_adx_len"))
+            if adx_len <= 0:
+                raise ValueError("ADX period must be greater than 0.")
+            adx_thresh = float(
+                self._runtime_gui_value("e_adx_thresh")
+            )
+            if adx_thresh < 0:
+                raise ValueError("ADX threshold cannot be negative.")
+
+            use_mtf = self._runtime_gui_value("v_use_mtf")
+
+            signal_mode = self._runtime_gui_value("v_signal_mode").strip().upper()
+
+            # Preset modes directly mean "how many directional indicators
+            # must agree for this trade". SCORE keeps the existing custom
+            # minimum-score concept.
+            preset_scores = {
+                "SINGLE_SIGNAL": 1,
+                "ANY_NON_CONFLICTING": 1,
+                "2_SIGNALS": 2,
+                "3_SIGNALS": 3,
+                "4_SIGNALS": 4,
+            }
+
+            if signal_mode in preset_scores:
+                min_score = preset_scores[signal_mode]
+            else:
+                min_score = int(self._runtime_gui_value("e_min_score").strip())
+
+            adaptive_edge = float(self._runtime_gui_value("e_adaptive_edge"))
+            adaptive_min_weight = float(self._runtime_gui_value("e_adaptive_min_weight"))
+            if not 0.0 < adaptive_edge < 1.0 or adaptive_min_weight <= 0:
+                raise ValueError("Adaptive strategy settings are invalid.")
+
+            # V8.4.2 execution-path fix: these values must be local to the
+            # worker cycle.  Previously decision_reason() referenced the names
+            # without initializing them in _run_bot_logic(), causing:
+            # "name 'evidence_min_families' is not defined".
+            evidence_min_families = int(self._runtime_gui_value("e_evidence_min_families"))
+            evidence_family_min_score = float(self._runtime_gui_value("e_evidence_family_min_score"))
+            evidence_require_trend = bool(self._runtime_gui_value("v_evidence_require_trend"))
+            evidence_require_independent = bool(self._runtime_gui_value("v_evidence_require_independent"))
+            ai_min_families = int(self._runtime_gui_value("e_ai_min_families", AI_AGENT_MIN_FAMILIES))
+            ai_min_edge = float(self._runtime_gui_value("e_ai_min_edge", AI_AGENT_MIN_EDGE))
+            ai_family_confidence = float(self._runtime_gui_value("e_ai_family_confidence", AI_AGENT_MIN_FAMILY_CONFIDENCE))
+            ai_max_conflicts = int(self._runtime_gui_value("e_ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES))
+            ai_require_trend = bool(self._runtime_gui_value("v_ai_require_trend", AI_AGENT_REQUIRE_TREND))
+            ai_require_structure = bool(self._runtime_gui_value("v_ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE))
+            if not 1 <= evidence_min_families <= len(EVIDENCE_FAMILY_ORDER):
+                raise ValueError("Evidence Minimum Families must be between 1 and 4.")
+            if not 0.0 < evidence_family_min_score <= 1.0:
+                raise ValueError("Family Minimum Score must be greater than 0 and at most 1.")
+            if not 1 <= ai_min_families <= len(EVIDENCE_FAMILY_ORDER):
+                raise ValueError("AI Agent Minimum Families must be between 1 and 4.")
+            if not 0.0 < ai_min_edge < 1.0:
+                raise ValueError("AI Agent Edge must be greater than 0 and less than 1.")
+            if not 0.0 < ai_family_confidence <= 1.0:
+                raise ValueError("AI Agent Family Confidence must be greater than 0 and at most 1.")
+            if not 0 <= ai_max_conflicts <= len(EVIDENCE_FAMILY_ORDER):
+                raise ValueError("AI Agent Max Conflicts must be between 0 and 4.")
+
+            # Adaptive thresholds are passed explicitly to the pure engine;
+            # no mutable StrategyEngine/class-level state is used.
+            allowed_signal_modes = SUPPORTED_SIGNAL_MODES
+
+            if signal_mode not in allowed_signal_modes:
+                raise ValueError(
+                    f"Unknown signal mode: {signal_mode}"
+                )
+
+            if signal_mode == "AI_AGENT" and not self.ai_agent_preset_applied:
+                self.log(
+                    "AI_AGENT CONFIG NOTICE: Recommended R6.2 preset is not marked as applied; "
+                    "current saved GUI settings are being used unchanged. "
+                    "Select AI_AGENT and confirm YES to apply the full AI-Agent preset."
+                )
+
+            # A family-based mode can never fire if too few evidence families have an enabled
+            # module (or a REQUIRED family has none). Fail loudly at start instead of idling forever.
+            if signal_mode in ("AI_AGENT", "ADAPTIVE_EVIDENCE"):
+                _enabled_modules = {
+                    "ST": use_st, "EMA": use_ema, "EMA_CROSS": use_ema_cross, "MACD": use_macd,
+                    "VIDYA": use_vidya, "NWE": use_nwe, "RSI": use_rsi, "STOCH": use_stoch,
+                    "DIVERGENCE": use_divergence, "VWAP": use_vwap, "VWAP_DELTA": use_vwap_delta,
+                    "VOL": use_vol, "VOL_SR": use_vol_sr, "LIQ_SWING": use_liq_swings,
+                    "TRENDLINE": use_trendline, "MTF": use_mtf,
+                }
+                _fam_active = {
+                    fam: [m for m in EVIDENCE_FAMILIES[fam] if bool(_enabled_modules.get(m))]
+                    for fam in EVIDENCE_FAMILY_ORDER
+                }
+                _n_active = sum(1 for v in _fam_active.values() if v)
+                _need = ai_min_families if signal_mode == "AI_AGENT" else evidence_min_families
+                _req_trend = ai_require_trend if signal_mode == "AI_AGENT" else evidence_require_trend
+                if _n_active < _need:
+                    raise ValueError(
+                        f"{signal_mode} needs {_need} evidence families but only {_n_active} have an enabled module "
+                        f"({', '.join(f for f, v in _fam_active.items() if v) or 'none'}). "
+                        "Enable more indicators or lower Minimum Families."
+                    )
+                if _req_trend and not _fam_active["TREND"]:
+                    raise ValueError(f"{signal_mode} requires TREND evidence but no trend module (ST/EMA/EMA_CROSS/MACD/VIDYA/NWE) is enabled.")
+                if signal_mode == "AI_AGENT" and ai_require_structure and not _fam_active["STRUCTURE"]:
+                    raise ValueError("AI_AGENT requires STRUCTURE evidence but no structure module (LIQ_SWING/TRENDLINE/MTF) is enabled.")
+
+            if min_score <= 0:
+                raise ValueError(
+                    "Minimum score must be greater than 0."
+                )
+
+            size_mode = (
+                self._runtime_gui_value("v_size_mode")
+            )
+
+            # Keep Risk Per Trade in GUI units (percentage points) throughout
+            # the worker. calculate_entry_qty() performs the single /100
+            # conversion where it needs a fraction.
+            risk_pct = float(self._runtime_gui_value("e_risk_pct"))
+            fixed_qty = float(self._runtime_gui_value("e_fixed_qty"))
+            if risk_pct <= 0 or risk_pct >= 100.0:
+                raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
+            if fixed_qty <= 0:
+                raise ValueError("Fixed Qty must be greater than 0.")
+
+            max_dd_enabled = bool(self._runtime_gui_value("v_max_dd_enabled", True))
+            emergency_enabled = bool(self._runtime_gui_value("v_emergency_enabled", True))
+            max_dd = (
+                float(
+                    self._runtime_gui_value("e_max_dd")
+                ) / 100.0
+            )
+            if not 0.0 <= max_dd < 1.0:
+                raise ValueError("Max Daily Drawdown must be between 0% and less than 100%. Use 0% to disable it.")
+            emergency_capital_loss = float(self._runtime_gui_value("e_emergency_capital_pct")) / 100.0
+            emergency_scope = self._runtime_gui_value("v_emergency_scope").strip().upper()
+            if emergency_scope not in ("BOT_SYMBOL", "ALL_ACCOUNT"):
+                raise ValueError("Emergency Scope must be BOT_SYMBOL or ALL_ACCOUNT.")
+            if not 0.0 <= emergency_capital_loss < 1.0:
+                raise ValueError("Emergency Capital Loss Stop must be between 0% and less than 100%.")
+
+            leverage = int(
+                self._runtime_gui_value("e_lev").strip()
+            )
+
+            # ----------------------------------------------------------------
+            # R9.6 UNIFIED PROTECTION CONTRACT
+            # ----------------------------------------------------------------
+            leverage = int(self._runtime_gui_value("e_lev").strip())
+            if leverage <= 0:
+                raise ValueError("Leverage must be greater than 0.")
+            use_legacy_protection = bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+            hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+            hold_wait_reversal = bool(hold_all_reverse and self._runtime_gui_value("v_hold_sl_wait_reversal", False))
+            reverse_exit_mode = str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper()
+            min_reverse_families = int(self._runtime_gui_value("e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)
+            if reverse_exit_mode not in REVERSAL_EXIT_MODES:
+                raise ValueError("Reverse Exit Rule must be ALL_ACTIVE or MIN_FAMILIES.")
+            if not 1 <= min_reverse_families <= len(EVIDENCE_FAMILY_ORDER):
+                raise ValueError("Minimum Reverse Families must be between 1 and 4.")
+            if hold_wait_reversal and not hold_all_reverse:
+                raise ValueError("Hold-SL WAIT requires Hold Position Until Reverse to be ON.")
+
+            # Risk sizing toggle is authoritative for NORMAL strategy entry sizing.
+            risk_sizing_enabled = bool(self._runtime_gui_value("v_risk_sizing_enabled", True))
+            size_mode = "EQUITY_RISK_%" if risk_sizing_enabled else "FIXED_QTY"
+            risk_pct = float(self._runtime_gui_value("e_risk_pct"))
+            fixed_qty = float(self._runtime_gui_value("e_fixed_qty"))
+            if not 0 < risk_pct < 100:
+                raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
+            if fixed_qty <= 0:
+                raise ValueError("Fixed Qty must be greater than 0.")
+
+            tp_qty_mode = str(self._runtime_gui_value("v_tp_qty_mode", "PERCENT_%")).strip().upper()
+            tp1_close_value = float(self._runtime_gui_value("e_tp1_close", 50))
+            tp2_close_value = float(self._runtime_gui_value("e_tp2_close", 50))
+            if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
+                raise ValueError(f"Unknown TP quantity mode: {tp_qty_mode}")
+            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
+            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
+            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
+            if tp_engine_enabled and (tp1_enabled or tp2_enabled):
+                if tp1_enabled and tp2_enabled:
+                    if tp1_close_value <= 0 or tp2_close_value <= 0:
+                        raise ValueError("TP1 and TP2 close values must be greater than 0.")
+                    if tp_qty_mode == "PERCENT_%" and abs((tp1_close_value + tp2_close_value) - 100.0) > 1e-9:
+                        raise ValueError("When both TP1 and TP2 are ON, their close percentages must equal 100%.")
+                else:
+                    enabled_value = tp1_close_value if tp1_enabled else tp2_close_value
+                    if enabled_value <= 0:
+                        raise ValueError("The enabled TP close value must be greater than 0.")
+
+            # New simple fields. Legacy fields remain stored and validated only when legacy mode is selected.
+            simple_sl_enabled = bool(self._runtime_gui_value("v_sl_enabled", True))
+            simple_roi_sl_enabled = bool(self._runtime_gui_value("v_roi_sl_enabled", True))
+            roi_sl_target = float(self._runtime_gui_value("e_roi_sl", DEFAULT_SIMPLE_SL_ROI))
+            simple_atr_sl_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED))
+            fallback_sl_enabled = bool(self._runtime_gui_value("v_fallback_sl_enabled", True))
+            fallback_sl_roi = float(self._runtime_gui_value("e_fallback_sl_roi", DEFAULT_SIMPLE_FALLBACK_SL_ROI))
+            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
+            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
+            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
+            tp1_roi = float(self._runtime_gui_value("e_roi_tp1", DEFAULT_SIMPLE_TP1_ROI))
+            tp2_roi = float(self._runtime_gui_value("e_roi_tp2", DEFAULT_SIMPLE_TP2_ROI))
+            atr_tp_enabled = bool(self._runtime_gui_value("v_simple_atr_tp_enabled", DEFAULT_SIMPLE_ATR_TP_ENABLED))
+            atr_sl_mult = float(self._runtime_gui_value("e_atr_sl_mult", 1.8))
+            atr_tp1_mult = float(self._runtime_gui_value("e_atr_tp1_mult", 1.2))
+            atr_tp2_mult = float(self._runtime_gui_value("e_atr_tp2_mult", 2.2))
+            # R6.1 AI manager values are per-cycle locals. GUI values remain the
+            # user-visible baseline; AI_AGENT may adapt the effective values for
+            # an accepted trade inside hard safety envelopes.
+            ai_effective_risk_pct = risk_pct
+            ai_effective_atr_sl_mult = atr_sl_mult
+            ai_effective_atr_tp1_mult = atr_tp1_mult
+            ai_effective_atr_tp2_mult = atr_tp2_mult
+            ai_management_active = False
+
+            # Legacy values for explicit advanced mode.
+            sl_mode = self._runtime_gui_value("v_sl_mode").strip().upper()
+            tp_mode = self._runtime_gui_value("v_tp_mode").strip().upper()
+            sl_target_pct = float(self._runtime_gui_value("e_sl_pct"))
+            tp1_target_pct = float(self._runtime_gui_value("e_tp1_pct"))
+            tp2_target_pct = float(self._runtime_gui_value("e_tp2_pct"))
+            hold_sl_roi_pct = float(self._runtime_gui_value("e_hold_sl_roi"))
+            legacy_atr_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED))
+            if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
+                raise ValueError(f"Unknown legacy SL/TP mode: SL={sl_mode} TP={tp_mode}")
+            if min(roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct, sl_target_pct, tp1_target_pct, tp2_target_pct) <= 0:
+                raise ValueError("All enabled SL/TP targets must be greater than 0.")
+            if not all(np.isfinite(x) for x in (roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct)):
+                raise ValueError("SL/TP targets must be finite numbers.")
+            if atr_sl_mult <= 0 or atr_tp1_mult <= 0 or atr_tp2_mult <= 0:
+                raise ValueError("ATR multipliers must be greater than 0.")
+            if atr_sl_mult > 10 or atr_tp1_mult > 20 or atr_tp2_mult > 50:
+                raise ValueError("ATR Dynamic multipliers are outside the safety range.")
+            # ATR TP targets are R-multiples of the SL distance. TP2 <= TP1 would pass
+            # startup, fill an entry, then fail the resolver AFTER the position exists
+            # and force an immediate emergency close on every single trade.
+            if (
+                not use_legacy_protection and not hold_all_reverse
+                and tp_engine_enabled and tp1_enabled and tp2_enabled
+                and atr_tp_enabled and atr_tp2_mult <= atr_tp1_mult
+            ):
+                raise ValueError("ATR TP2 multiplier must be greater than ATR TP1 multiplier.")
+            # Static ROI targets (non-ATR). The resolver raises on TP2 <= TP1 only AFTER the
+            # entry has filled, which forces an emergency close on every trade -> block at start.
+            if (
+                not use_legacy_protection and not hold_all_reverse
+                and tp_engine_enabled and tp1_enabled and tp2_enabled
+                and not atr_tp_enabled and tp2_roi <= tp1_roi
+            ):
+                raise ValueError(
+                    f"TP2 ROI ({tp2_roi:g}%) must be greater than TP1 ROI ({tp1_roi:g}%)."
+                )
+            if (
+                use_legacy_protection and not hold_all_reverse
+                and tp1_target_pct > 0 and tp2_target_pct > 0
+                and tp2_target_pct <= tp1_target_pct
+            ):
+                raise ValueError(
+                    f"Legacy TP2 ({tp2_target_pct:g}) must be greater than TP1 ({tp1_target_pct:g})."
+                )
+            liq_buffer = float(self._runtime_gui_value("e_liq_buffer", DEFAULT_LIQ_BUFFER_MULT) or DEFAULT_LIQ_BUFFER_MULT)
+            taker_fee_pct = float(self._runtime_gui_value("e_taker_fee_pct", DEFAULT_TAKER_FEE_PCT) or 0.0)
+            cost_gate_enabled = bool(self._runtime_gui_value("v_cost_gate_enabled", DEFAULT_COST_GATE_ENABLED))
+            if not 1.25 <= liq_buffer <= 50.0:
+                raise ValueError("Liquidation Buffer must be between 1.25 and 50 (x stop distance).")
+            if not 0.0 <= taker_fee_pct < 1.0:
+                raise ValueError("Taker Fee %/side must be between 0 and 1.")
+            if not use_legacy_protection:
+                liq_roi_limit = min(SL_LIQUIDATION_SAFETY_FRACTION, 1.0 / liq_buffer) * 100.0
+                for _lbl, _on, _val in (
+                    ("Normal ROI SL", simple_roi_sl_enabled, roi_sl_target),
+                    ("Fallback SL ROI", fallback_sl_enabled, fallback_sl_roi),
+                    ("Hold-SL ROI", hold_all_reverse, hold_sl_roi_pct),
+                ):
+                    if _on and _val >= liq_roi_limit:
+                        raise ValueError(
+                            f"{_lbl} ({_val:g}% ROI) is at/beyond the liquidation-safe limit "
+                            f"({liq_roi_limit:g}% ROI = {liq_buffer:g}x buffer at any leverage). "
+                            "Lower it, or reduce the Liquidation Buffer."
+                        )
+
+            # Only one resolver is allowed to own normal protection.
+            # Pre-entry sizing distance is derived from the exact resolver priority.
+            effective_sl_mode = sl_mode
+            effective_sl_target_pct = sl_target_pct
+            effective_tp_mode = tp_mode
+            if use_legacy_protection:
+                if sl_mode == "RISK_%" and size_mode != "FIXED_QTY":
+                    raise ValueError("Legacy RISK_% SL requires FIXED_QTY sizing.")
+                if sl_mode == "RISK_%" and hold_all_reverse:
+                    raise ValueError("Legacy RISK_% SL cannot be combined with Hold-All-Reverse.")
+                effective_sl_target_pct = hold_sl_roi_pct if hold_all_reverse else sl_target_pct
+                effective_sl_mode = "ROI_%" if hold_all_reverse else ("ATR_DYNAMIC" if legacy_atr_enabled else sl_mode)
+                effective_tp_mode = tp_mode
+                if sl_mode == "RISK_%":
+                    sl_price_fraction = 1e-9
+                elif legacy_atr_enabled and not hold_all_reverse:
+                    sl_price_fraction = max(sl_target_pct / 100.0, 1e-9)
+                else:
+                    sl_price_fraction = self.target_to_price_fraction(effective_sl_target_pct, effective_sl_mode, leverage)
+                self.log(f"PROTECTION ENGINE: LEGACY R9.3 | SL={effective_sl_mode} | TP={effective_tp_mode}")
+            else:
+                if hold_all_reverse:
+                    sl_price_fraction = self.target_to_price_fraction(hold_sl_roi_pct, "ROI_%", leverage)
+                elif not simple_sl_enabled:
+                    raise ValueError("Normal SL Engine is OFF. R9.6 blocks new entries unless Hold-SL WAIT is active.")
+                elif simple_atr_sl_enabled:
+                    # Actual completed-candle ATR is resolved later in the cycle; use ROI fallback for a pre-entry estimate.
+                    sl_price_fraction = self.target_to_price_fraction(roi_sl_target if simple_roi_sl_enabled else fallback_sl_roi, "ROI_%", leverage)
+                elif simple_roi_sl_enabled:
+                    sl_price_fraction = self.target_to_price_fraction(roi_sl_target, "ROI_%", leverage)
+                elif fallback_sl_enabled:
+                    sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
+                else:
+                    raise ValueError("No Simple ROI/ATR/Fallback SL source is enabled.")
+                self.log(
+                    "PROTECTION ENGINE: SIMPLE ROI | "
+                    f"SL={'HOLD' if hold_all_reverse else 'ATR' if simple_atr_sl_enabled else 'ROI' if simple_roi_sl_enabled else 'FALLBACK'} | "
+                    f"TP={'ATR' if atr_tp_enabled else 'ROI'} | TP1={'ON' if tp_engine_enabled and tp1_enabled else 'OFF'} | TP2={'ON' if tp_engine_enabled and tp2_enabled else 'OFF'}"
+                )
+                self.log(
+                    "SL RESOLUTION: HOLD-WAIT > ATR > ROI > FALLBACK. "
+                    "Only one SL is installed; no SL modes overlap."
+                )
+
+            ai_min_participation = self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION)
+            if not 0.0 < ai_min_participation <= 1.0:
+                raise ValueError("AI Agent Family Participation must be greater than 0 and at most 1.")
+            _ai_soft_edge_chk = self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE)
+            if not 0.0 < _ai_soft_edge_chk < 1.0:
+                raise ValueError("AI Agent Soft Edge must be greater than 0 and less than 1.")
+            self.log(
+                f"AI AGENT COUNCIL: MinFamilies={ai_min_families} | Edge>={ai_min_edge:g} | "
+                f"FamilyConfidence>={ai_family_confidence:g} | FamilyParticipation>={ai_min_participation:g} | MaxConflicts={ai_max_conflicts} | "
+                f"RequireTrend={'ON' if ai_require_trend else 'OFF'} | "
+                f"RequireStructure={'ON' if ai_require_structure else 'OFF'}"
+            )
+            self.log(
+                f"SIZING MODE: {size_mode} | "
+                + (f"Risk={risk_pct:g}%" if risk_sizing_enabled else f"FixedQty={fixed_qty:g} | Risk Per Trade NOT used for entry size")
+            )
+            self.log(f"HOLD-ALL-REVERSE: {'ON' if hold_all_reverse else 'OFF'} | ReverseExit={reverse_exit_mode} | MinReverseFamilies={min_reverse_families}")
+            # Risk Per Trade governs the per-trade loss either through equity sizing OR, in legacy
+            # mode, through the RISK_% stop (FIXED_QTY size + SL distance derived from the risk budget).
+            risk_governs_loss = bool(
+                risk_sizing_enabled
+                or (use_legacy_protection and sl_mode == "RISK_%" and not hold_all_reverse)
+            )
+            tier_risk_cap, tier_cooldown = leverage_tier(leverage)
+            if risk_governs_loss and tier_risk_cap is not None and risk_pct > tier_risk_cap:
+                self.log(f"LEVERAGE TIER: {leverage}x -> Risk Per Trade capped {risk_pct:g}% -> {tier_risk_cap:g}% (tiers only lower risk).")
+                risk_pct = tier_risk_cap
+            if tier_cooldown > cooldown_min:
+                self.log(f"LEVERAGE TIER: {leverage}x -> Cooldown raised {cooldown_min:g} -> {tier_cooldown:g} min.")
+                cooldown_min = tier_cooldown
+            _lim = liq_safe_move(leverage, liq_buffer)
+            self.log(
+                f"LEVERAGE PROFILE: {leverage}x | liquidation ~{100.0 / leverage:.3f}% adverse move | "
+                f"max SL distance {_lim * 100:.3f}% (buffer {liq_buffer:g}x)"
+            )
+            if not use_legacy_protection:
+                self.log(
+                    f"ROI->PRICE @{leverage}x: SL {roi_sl_target:g}% ROI = {roi_sl_target / leverage:.3f}% price | "
+                    f"TP1 {tp1_roi:g}% = {tp1_roi / leverage:.3f}% | TP2 {tp2_roi:g}% = {tp2_roi / leverage:.3f}% "
+                    "(ATR SL/TP override these when ATR mode is ON)"
+                )
+            self.log(
+                f"EXECUTION SAFETY: Spread<={self._safe_runtime_float("e_max_entry_spread_pct", float(DEFAULT_MAX_ENTRY_SPREAD_PCT)):g}% | Slippage<={self._safe_runtime_float("e_max_entry_slippage_pct", float(DEFAULT_MAX_ENTRY_SLIPPAGE_PCT)):g}% | Depth>={self._safe_runtime_float("e_min_orderbook_depth_mult", float(DEFAULT_MIN_ORDERBOOK_DEPTH_MULT)):g}x | CandleDrift<={self._safe_runtime_float("e_max_entry_candle_drift_pct", float(DEFAULT_MAX_ENTRY_CANDLE_DRIFT_PCT)):g}% | PostFillSlippage=ENFORCED"
+            )
+            self.log(
+                f"COST MODEL: taker fee {taker_fee_pct:g}%/side = {2 * taker_fee_pct:g}% round trip | "
+                f"Cost gate {'ON' if cost_gate_enabled else 'OFF'} (stop >= {COST_GATE_MIN_STOP_TO_FEE:g}x round-trip fee; "
+                f"TP1 net >= {COST_GATE_MIN_NET_TP1_R:g}R)"
+            )
+            if risk_governs_loss:
+                if max_dd_enabled and max_dd > 0 and risk_pct >= max_dd * 100.0:
+                    raise ValueError(
+                        f"RISK CONFLICT: Risk Per Trade {risk_pct:g}% >= Max Daily Drawdown {max_dd * 100:g}%. "
+                        "One stop-out (plus fees/slippage) would trip the circuit breaker. "
+                        "Lower Risk Per Trade or raise Max Daily Drawdown."
+                    )
+                if emergency_enabled and emergency_capital_loss > 0 and risk_pct >= emergency_capital_loss * 100.0:
+                    raise ValueError(
+                        f"RISK CONFLICT: Risk Per Trade {risk_pct:g}% >= Emergency Capital Loss Stop {emergency_capital_loss * 100:g}%."
+                    )
+            if (
+                max_dd_enabled and max_dd > 0 and emergency_enabled and emergency_capital_loss > 0
+                and emergency_capital_loss <= max_dd
+            ):
+                self.log(
+                    f"RISK CONFLICT WARNING: Emergency Capital Loss Stop {emergency_capital_loss * 100:g}% <= Max Daily Drawdown "
+                    f"{max_dd * 100:g}%. The emergency stop can fire before the daily breaker; keep Emergency > Daily Drawdown."
+                )
+
+            if hold_all_reverse:
+                hold_rule = (
+                    "ALL_ACTIVE"
+                    if reverse_exit_mode == "ALL_ACTIVE"
+                    else f"MIN_FAMILIES({min_reverse_families})"
+                )
+                self.log(
+                    f"HOLD-SL: {hold_sl_roi_pct:g}% ROI | Rule={hold_rule} | "
+                    + ("WAIT mode ON: no exchange SL; selected reversal rule controls exit." if hold_wait_reversal else "Hard exchange SL active; normal TP disabled.")
+                )
+            elif not use_legacy_protection:
+                self.log(
+                    f"SIMPLE ROI TARGETS: SL={roi_sl_target:g}% ROI | Fallback SL={fallback_sl_roi:g}% ROI | "
+                    f"TP1={tp1_roi:g}% ROI | TP2={tp2_roi:g}% ROI"
+                )
+
+            grid_cfg = self._grid_validate_settings()
+            # Fixed execution cadence shared by the normal and Grid loops.
+            # Grid previously referenced an undefined `poll_seconds`.
+            poll_seconds = 30.0
+            atr_reality_checked = False
+            tradeability_audited = False
+            blk_counts = {}
+            blk_candles = 0
+            blk_last_ts = None
+            BLK_REPORT_EVERY = 12
+            entry_block_logged = {}
+
+            def _log_entry_block_once(key, msg, ts):
+                """Log a pre-entry block once per closed candle (the 30s poll would repeat it)."""
+                if entry_block_logged.get(key) != ts:
+                    entry_block_logged[key] = ts
+                    blk_counts[key] = blk_counts.get(key, 0) + 1
+                    self.log(msg)
+
+            while self.is_running:
+                cycle_start = time.time()
+
+                try:
+                    if self._consume_remote_stop_request():
+                        # Remote stop uses the same worker-finalization path as a
+                        # local stop. Grid cleanup is performed by the consumer.
+                        self.is_running = False
+                        break
+
+                    # ------------------------------------------------
+                    # 1. Balance / drawdown
+                    # ------------------------------------------------
+                    balance_snapshot = self._fetch_exchange_balance_with_retry()
+                    curr_balance = self._balance_total_from_snapshot(balance_snapshot)
+                    curr_equity = self.fetch_account_equity(balance_snapshot)
+                    self.session_peak_equity = max(float(self.session_peak_equity or 0.0), float(curr_equity))
+                    self.daily_peak_equity = max(float(self.daily_peak_equity or 0.0), float(curr_equity))
+
+                    # Reset the daily drawdown reference at local midnight.
+                    # Emergency Capital Loss Stop remains session-based.
+                    today = datetime.now().date()
+                    if self.daily_start_date != today:
+                        self.daily_start_date = today
+                        self.daily_start_balance = curr_balance
+                        self.daily_peak_equity = curr_equity
+                        self.log(
+                            f"DAILY RISK RESET: {today.isoformat()} | "
+                            f"Daily Start Balance={curr_balance:.4f}"
+                        )
+
+                    emergency_threshold = self.start_balance * (1.0 - emergency_capital_loss)
+                    if emergency_enabled and emergency_capital_loss > 0 and curr_equity <= emergency_threshold:
+                        self._emergency_flatten_all_positions(
+                            reason=f"Emergency Capital Loss Stop {emergency_capital_loss * 100:.2f}% reached",
+                            equity=curr_equity,
+                            threshold=emergency_threshold,
+                        )
+                        break
+
+                    drawdown = (
+                        (self.daily_peak_equity - curr_equity) / self.daily_peak_equity
+                        if self.daily_peak_equity > 0 else 0.0
+                    )
+
+                    self.net_pnl = (
+                        curr_balance
+                        - self.start_balance
+                    )
+
+                    if (
+                        max_dd_enabled
+                        and max_dd > 0
+                        and drawdown >= max_dd
+                    ):
+                        self.log(
+                            f"CRITICAL: Max drawdown "
+                            f"{max_dd * 100:.2f}% reached. "
+                            f"Bot stopped."
+                        )
+
+                        self.send_telegram(
+                            "Circuit breaker triggered. Bot stopped."
+                        )
+
+                        # This code executes in the worker thread. Do not call
+                        # stop_bot(), which accesses Tkinter widgets directly.
+                        # The worker finally block performs checkpoint/DB close
+                        # and releases the profile lock.
+                        self.is_running = False
+                        break
+
+                    # ------------------------------------------------
+                    # 2. Market data
+                    # ------------------------------------------------
+                    ohlcv = self._fetch_strategy_ohlcv(
+                        timeframe=timeframe,
+                        limit=600 if (use_nwe or use_liq_swings or use_trendline or use_divergence) else 250,
+                    )
+
+                    if timeframe == "45m":
+                        self.log(
+                            "TIMEFRAME ENGINE: 45m candles are synthetic 45m bars from 15m Bybit candles; only completed 45m bars are traded."
+                        )
+
+                    df = pd.DataFrame(
+                        ohlcv,
+                        columns=[
+                            "time",
+                            "open",
+                            "high",
+                            "low",
+                            "close",
+                            "vol",
+                        ],
+                    )
+                    if len(df) < 30:
+                        raise RuntimeError("INSUFFICIENT_MARKET_DATA")
+                    latest_ts = int(df["time"].iloc[-1])
+                    self.last_market_data_ts = latest_ts
+                    tf_minutes = {"1m":1,"3m":3,"5m":5,"15m":15,"30m":30,"45m":45,"1h":60,"4h":240}[timeframe]
+                    stale_limit_ms = int(tf_minutes * 60_000 * MAX_DATA_STALENESS_MULTIPLIER)
+                    if int(time.time()*1000) - latest_ts > stale_limit_ms:
+                        raise RuntimeError(f"STALE_MARKET_DATA latest={latest_ts} age_ms={int(time.time()*1000)-latest_ts}")
+
+                    df = calculate_supertrend(
+                        df,
+                        length=st_len,
+                        multiplier=st_mult,
+                        source=st_source,
+                        change_atr=st_change_atr,
+                    )
+                    
+                    # All chart indicators below use this SAME selected
+                    # strategy timeframe. The only intentional exception is
+                    # the optional 4H MTF confirmation, which always uses
+                    # completed 4H candles. 45m is synthesized from 15m data.
+
+                    df = calculate_adx(df, adx_len)
+
+                    df["ema"] = (
+                        df["close"].ewm(
+                            span=ema_len,
+                            adjust=False,
+                        ).mean()
+                    )
+
+                    # Optional independent EMA crossover filter.
+                    # The crossover is evaluated ONLY on completed candles:
+                    # -3 = candle before the latest completed candle
+                    # -2 = latest completed candle
+                    df["ema_fast"] = (
+                        df["close"].ewm(
+                            span=ema_fast_len,
+                            adjust=False,
+                        ).mean()
+                    )
+
+                    df["ema_slow"] = (
+                        df["close"].ewm(
+                            span=ema_slow_len,
+                            adjust=False,
+                        ).mean()
+                    )
+
+                    if use_macd:
+                        df = calculate_macd(
+                            df,
+                            fast=macd_fast_len,
+                            slow=macd_slow_len,
+                            signal=macd_signal_len,
+                        )
+
+                    if use_rsi:
+                        df = calculate_rsi(
+                            df,
+                            length=rsi_len,
+                        )
+                        df = calculate_rsi_ma(
+                            df,
+                            rsi_ma_type=rsi_ma_type,
+                            length=rsi_ma_len,
+                        )
+
+                    if use_bb:
+                        df = calculate_bollinger(
+                            df,
+                            length=bb_len,
+                            std_mult=bb_std,
+                        )
+
+                    if use_stoch:
+                        df = calculate_stochastic(
+                            df,
+                            k_length=stoch_k_len,
+                            k_smooth=stoch_smooth_len,
+                            d_length=stoch_d_len,
+                        )
+
+                    if use_vwap:
+                        df = calculate_vwap(
+                            df,
+                            length=vwap_len,
+                        )
+
+                    if use_vwap_delta:
+                        df = calculate_vwap_delta(
+                            df,
+                            smoothing=vwap_delta_smooth,
+                            smoothing_length=vwap_delta_smooth_len,
+                            baseline_length=vwap_delta_baseline_len,
+                        )
+
+                    if use_vidya:
+                        df = calculate_vidya(
+                            df,
+                            vidya_length=vidya_len,
+                            vidya_momentum=vidya_momentum,
+                            band_distance=vidya_band,
+                            atr_length=200,
+                            smoothing_length=15,
+                        )
+
+                    if use_nwe:
+                        df = calculate_nadaraya_watson_envelope(
+                            df,
+                            bandwidth=nwe_bandwidth,
+                            multiplier=nwe_mult,
+                            lookback=500,
+                            mae_length=499,
+                        )
+
+                    if use_liq_swings:
+                        df = calculate_liquidity_swings(
+                            df,
+                            length=liq_length,
+                            area=liq_area,
+                            filter_options=liq_filter,
+                            filter_value=liq_filter_value,
+                        )
+
+                    if use_trendline:
+                        df = calculate_trendline_breakout(
+                            df,
+                            length=trendline_length,
+                            min_pivot_distance=trendline_min_distance,
+                            breakout_buffer_pct=trendline_buffer,
+                            retest_candles=trendline_retest_candles,
+                        )
+
+                    df["vol_ma"] = (
+                        df["vol"].rolling(
+                            vol_len
+                        ).mean()
+                    )
+
+                    # V8.3.0 Divergence module. All calculations are causal:
+                    # confirmed pivots only, no "don't wait for confirmation".
+                    if use_divergence:
+                        df = calculate_divergence_module(df, div_cfg)
+                    else:
+                        df["div_bull_count"] = 0
+                        df["div_bear_count"] = 0
+                        df["div_bull_signal"] = False
+                        df["div_bear_signal"] = False
+                        df["divergence_state"] = 0
+
+                    sr_state = {"bull":False,"bear":False,"fresh_bull":False,"fresh_bear":False,"states":[]}
+                    if use_vol_sr:
+                        sr_frames = self._refresh_volume_sr_cache(
+                            df, sr_tfs
+                        )
+                        sr_state = calculate_volume_sr_module(
+                            [(tf, sr_frames.get(tf), tf != "Disable") for tf in sr_tfs],
+                            {
+                                "sr_volume_ma": sr_volume_ma,
+                                "sr_vote_mode": sr_vote_mode,
+                                "sr_entry_mode": sr_entry_mode,
+                            },
+                        )
+
+                    advanced_key = (
+                        int(df["div_bull_count"].iloc[-2]) if use_divergence else 0,
+                        int(df["div_bear_count"].iloc[-2]) if use_divergence else 0,
+                        bool(sr_state.get("fresh_bull")) if use_vol_sr else False,
+                        bool(sr_state.get("fresh_bear")) if use_vol_sr else False,
+                    )
+                    if not any(advanced_key):
+                        self.last_advanced_signal_log = None
+                    elif advanced_key != self.last_advanced_signal_log:
+                        self.log(
+                            f"ADVANCED SIGNALS | Divergence B={advanced_key[0]} S={advanced_key[1]} | "
+                            f"Volume-SR Fresh B={advanced_key[2]} S={advanced_key[3]}"
+                        )
+                        self.last_advanced_signal_log = advanced_key
+
+                    # Use the LAST COMPLETED candle.
+                    closed_idx = -2
+
+                    close = float(
+                        df["close"].iloc[
+                            closed_idx
+                        ]
+                    )
+
+                    # ------------------------------------------------
+                    # 3. 4H MTF - also use completed candle
+                    # ------------------------------------------------
+                    mtf_pass_bull = True
+                    mtf_pass_bear = True
+
+                    if use_mtf:
+                        ohlcv_4h = (
+                            self.exchange.fetch_ohlcv(
+                                self.symbol,
+                                timeframe="4h",
+                                limit=250,
+                            )
+                        )
+
+                        df_4h = pd.DataFrame(
+                            ohlcv_4h,
+                            columns=[
+                                "time",
+                                "open",
+                                "high",
+                                "low",
+                                "close",
+                                "vol",
+                            ],
+                        )
+
+                        df_4h["ema200"] = (
+                            df_4h["close"].ewm(
+                                span=200,
+                                adjust=False,
+                            ).mean()
+                        )
+
+                        mtf_idx = -2
+
+                        mtf_pass_bull = (
+                            df_4h["close"].iloc[
+                                mtf_idx
+                            ]
+                            >
+                            df_4h["ema200"].iloc[
+                                mtf_idx
+                            ]
+                        )
+
+                        mtf_pass_bear = (
+                            df_4h["close"].iloc[
+                                mtf_idx
+                            ]
+                            <
+                            df_4h["ema200"].iloc[
+                                mtf_idx
+                            ]
+                        )
+
+                    # ------------------------------------------------
+                    # 4. Strategy signal
+                    # ------------------------------------------------
+                    st_flip_bull = (
+                        not use_st
+                        or (
+                            not df["trend"].iloc[-3]
+                            and df["trend"].iloc[-2]
+                        )
+                    )
+
+                    st_flip_bear = (
+                        not use_st
+                        or (
+                            df["trend"].iloc[-3]
+                            and not df["trend"].iloc[-2]
+                        )
+                    )
+
+                    st_entry_mode = self._runtime_gui_value("v_st_entry_mode").strip().upper()
+
+                    # FRESH_FLIP: only the newly completed candle's flip triggers.
+                    # CURRENT_TREND: the current completed Supertrend direction
+                    # can trigger even when the trend began earlier.
+                    st_trend_bull = bool(df["trend"].iloc[-2])
+                    st_trend_bear = not st_trend_bull
+
+                    if st_entry_mode == "CURRENT_TREND":
+                        st_entry_bull = st_trend_bull if use_st else True
+                        st_entry_bear = st_trend_bear if use_st else True
+                    else:
+                        st_entry_bull = st_flip_bull
+                        st_entry_bear = st_flip_bear
+
+                    ema_bull = (
+                        not use_ema
+                        or close
+                        > df["ema"].iloc[-2]
+                    )
+
+                    ema_bear = (
+                        not use_ema
+                        or close
+                        < df["ema"].iloc[-2]
+                    )
+
+                    # Optional EMA fast/slow directional module.
+                    # FRESH_CROSS: BUY only on a fresh Fast-over-Slow crossover
+                    #              on the latest completed candle; SELL only on
+                    #              a fresh Fast-under-Slow crossover.
+                    # CURRENT_TREND: BUY while Fast > Slow; SELL while Fast < Slow.
+                    # This is independent from the existing EMA Filter.
+                    ema_cross_up = (
+                        df["ema_fast"].iloc[-3]
+                        <= df["ema_slow"].iloc[-3]
+                        and
+                        df["ema_fast"].iloc[-2]
+                        > df["ema_slow"].iloc[-2]
+                    )
+                    ema_cross_down = (
+                        df["ema_fast"].iloc[-3]
+                        >= df["ema_slow"].iloc[-3]
+                        and
+                        df["ema_fast"].iloc[-2]
+                        < df["ema_slow"].iloc[-2]
+                    )
+                    ema_cross_trend_bull = (
+                        float(df["ema_fast"].iloc[-2])
+                        > float(df["ema_slow"].iloc[-2])
+                    )
+                    ema_cross_trend_bear = (
+                        float(df["ema_fast"].iloc[-2])
+                        < float(df["ema_slow"].iloc[-2])
+                    )
+
+                    if ema_cross_entry_mode == "CURRENT_TREND":
+                        ema_cross_bull = (
+                            not use_ema_cross or ema_cross_trend_bull
+                        )
+                        ema_cross_bear = (
+                            not use_ema_cross or ema_cross_trend_bear
+                        )
+                    else:
+                        ema_cross_bull = (
+                            not use_ema_cross or ema_cross_up
+                        )
+                        ema_cross_bear = (
+                            not use_ema_cross or ema_cross_down
+                        )
+
+                    # Optional MACD fresh crossover filter.
+                    macd_bull = (
+                        not use_macd
+                        or (
+                            df["macd"].iloc[-3]
+                            <= df["macd_signal"].iloc[-3]
+                            and
+                            df["macd"].iloc[-2]
+                            > df["macd_signal"].iloc[-2]
+                        )
+                    )
+
+                    macd_bear = (
+                        not use_macd
+                        or (
+                            df["macd"].iloc[-3]
+                            >= df["macd_signal"].iloc[-3]
+                            and
+                            df["macd"].iloc[-2]
+                            < df["macd_signal"].iloc[-2]
+                        )
+                    )
+
+                    # RSI trade logic. All calculations use completed candles.
+                    # IMPORTANT: when RSI is disabled, do not access df["rsi"] or
+                    # df["rsi_ma"], because those columns are intentionally not
+                    # calculated. Disabled RSI must never stop the execution cycle.
+                    if use_rsi:
+                        rsi_reversal_bull = (
+                            float(df["rsi"].iloc[-2]) <= rsi_os
+                        )
+                        rsi_reversal_bear = (
+                            float(df["rsi"].iloc[-2]) >= rsi_ob
+                        )
+                        rsi_cross_bull = (
+                            float(df["rsi"].iloc[-3])
+                            <= float(df["rsi_ma"].iloc[-3])
+                            and
+                            float(df["rsi"].iloc[-2])
+                            > float(df["rsi_ma"].iloc[-2])
+                        )
+                        rsi_cross_bear = (
+                            float(df["rsi"].iloc[-3])
+                            >= float(df["rsi_ma"].iloc[-3])
+                            and
+                            float(df["rsi"].iloc[-2])
+                            < float(df["rsi_ma"].iloc[-2])
+                        )
+
+                        if rsi_logic == "CROSS_MA":
+                            rsi_bull = rsi_cross_bull
+                            rsi_bear = rsi_cross_bear
+                        elif rsi_logic == "EITHER":
+                            rsi_bull = (
+                                rsi_reversal_bull
+                                or rsi_cross_bull
+                            )
+                            rsi_bear = (
+                                rsi_reversal_bear
+                                or rsi_cross_bear
+                            )
+                        else:
+                            rsi_bull = rsi_reversal_bull
+                            rsi_bear = rsi_reversal_bear
+                    else:
+                        # RSI is disabled: it must not participate in any
+                        # signal mode and must not block a trade.
+                        rsi_bull = True
+                        rsi_bear = True
+
+                    # Bollinger breakout filter.
+                    bb_bull = (
+                        not use_bb
+                        or df["close"].iloc[-2] > df["bb_upper"].iloc[-2]
+                    )
+
+                    bb_bear = (
+                        not use_bb
+                        or df["close"].iloc[-2] < df["bb_lower"].iloc[-2]
+                    )
+
+                    # Stochastic fresh K/D crossover.
+                    stoch_bull = (
+                        not use_stoch
+                        or (
+                            df["stoch_k"].iloc[-3]
+                            <= df["stoch_d"].iloc[-3]
+                            and
+                            df["stoch_k"].iloc[-2]
+                            > df["stoch_d"].iloc[-2]
+                        )
+                    )
+
+                    stoch_bear = (
+                        not use_stoch
+                        or (
+                            df["stoch_k"].iloc[-3]
+                            >= df["stoch_d"].iloc[-3]
+                            and
+                            df["stoch_k"].iloc[-2]
+                            < df["stoch_d"].iloc[-2]
+                        )
+                    )
+
+                    # Rolling VWAP trend filter.
+                    vwap_bull = (
+                        not use_vwap
+                        or df["close"].iloc[-2] > df["vwap"].iloc[-2]
+                    )
+
+                    vwap_bear = (
+                        not use_vwap
+                        or df["close"].iloc[-2] < df["vwap"].iloc[-2]
+                    )
+
+                    if use_vwap_delta:
+                        vd_now = float(df["vwap_delta"].iloc[-2])
+                        vd_base_now = float(df["vwap_delta_baseline"].iloc[-2])
+                        vd_prev = float(df["vwap_delta"].iloc[-3])
+                        vd_base_prev = float(df["vwap_delta_baseline"].iloc[-3])
+                        if vwap_delta_logic == "CROSS_BASELINE":
+                            vwap_delta_bull = vd_prev <= vd_base_prev and vd_now > vd_base_now
+                            vwap_delta_bear = vd_prev >= vd_base_prev and vd_now < vd_base_now
+                        else:
+                            vwap_delta_bull = vd_now > vd_base_now
+                            vwap_delta_bear = vd_now < vd_base_now
+                    else:
+                        vwap_delta_bull = True
+                    vwap_delta_bear = True
+
+                    if use_vidya:
+                        if vidya_entry_mode == "FRESH_FLIP":
+                            vidya_bull = bool(df["vidya_cross_up"].iloc[-2])
+                            vidya_bear = bool(df["vidya_cross_down"].iloc[-2])
+                        else:
+                            vidya_bull = bool(df["vidya_trend_up"].iloc[-2])
+                            vidya_bear = not bool(df["vidya_trend_up"].iloc[-2])
+                    else:
+                        vidya_bull = True
+                        vidya_bear = True
+
+                    if use_nwe:
+                        nwe_out_now = float(df["nwe_out"].iloc[-2])
+                        nwe_out_prev = float(df["nwe_out"].iloc[-3])
+                        nwe_upper_now = float(df["nwe_upper"].iloc[-2])
+                        nwe_lower_now = float(df["nwe_lower"].iloc[-2])
+                        nwe_close_now = float(df["close"].iloc[-2])
+                        nwe_close_prev = float(df["close"].iloc[-3])
+                        nwe_upper_prev = float(df["nwe_upper"].iloc[-3])
+                        nwe_lower_prev = float(df["nwe_lower"].iloc[-3])
+                        finite = all(np.isfinite(x) for x in (
+                            nwe_out_now, nwe_out_prev, nwe_upper_now,
+                            nwe_lower_now, nwe_close_now, nwe_close_prev,
+                            nwe_upper_prev, nwe_lower_prev,
+                        ))
+                        if not finite:
+                            nwe_bull = False
+                            nwe_bear = False
+                        elif nwe_entry_mode == "FRESH_CROSS":
+                            nwe_bull = nwe_close_now < nwe_lower_now and nwe_close_prev >= nwe_lower_prev
+                            nwe_bear = nwe_close_now > nwe_upper_now and nwe_close_prev <= nwe_upper_prev
+                        else:
+                            nwe_bull = nwe_out_now > nwe_out_prev
+                            nwe_bear = nwe_out_now < nwe_out_prev
+                    else:
+                        nwe_bull = True
+                        nwe_bear = True
+
+                    # LuxAlgo Liquidity Swings directional module.
+                    # FRESH_BREAK: only a completed candle breaking the latest
+                    # confirmed swing level creates a signal.
+                    # CURRENT_TREND: remain bullish after a swing-high breakout
+                    # and bearish after a swing-low breakout until the opposite
+                    # liquidity level breaks.
+                    if use_liq_swings:
+                        liq_bull_break = bool(df["liq_swing_high_break"].iloc[-2])
+                        liq_bear_break = bool(df["liq_swing_low_break"].iloc[-2])
+                        if liq_entry_mode == "CURRENT_TREND":
+                            liq_state = int(df["liq_swing_trend"].iloc[-2])
+                            liq_bull = liq_state > 0
+                            liq_bear = liq_state < 0
+                        else:
+                            liq_bull = liq_bull_break
+                            liq_bear = liq_bear_break
+                    else:
+                        liq_bull = True
+                        liq_bear = True
+
+                    # Confirmed-pivot Trendline Breakout directional module.
+                    # FRESH_BREAK: completed candle crosses the active line.
+                    # CURRENT_TREND: persist after a breakout until opposite.
+                    # BREAK_RETEST: require a later retest of the broken line
+                    # and a close back in the breakout direction.
+                    if use_trendline:
+                        tl_up_break = bool(df["trendline_break_up"].iloc[-2])
+                        tl_down_break = bool(df["trendline_break_down"].iloc[-2])
+                        tl_up_retest = bool(df["trendline_retest_up"].iloc[-2])
+                        tl_down_retest = bool(df["trendline_retest_down"].iloc[-2])
+                        tl_state = int(df["trendline_state"].iloc[-2])
+                        if trendline_entry_mode == "CURRENT_TREND":
+                            trendline_bull = tl_state > 0
+                            trendline_bear = tl_state < 0
+                        elif trendline_entry_mode == "BREAK_RETEST":
+                            trendline_bull = tl_up_retest
+                            trendline_bear = tl_down_retest
+                        else:
+                            trendline_bull = tl_up_break
+                            trendline_bear = tl_down_break
+                    else:
+                        trendline_bull = True
+                        trendline_bear = True
+
+                    # ATR volatility filter: ATR as % of price.
+                    atr_pct = (
+                        float(df["atr"].iloc[-2])
+                        / close
+                        * 100.0
+                        if close > 0
+                        else 0.0
+                    )
+
+                    atr_pass = (
+                        not use_atr
+                        or atr_pct >= atr_min_pct
+                    )
+
+                    if use_atr and not atr_reality_checked:
+                        atr_reality_checked = True
+                        try:
+                            _atr_hist = (df["atr"] / df["close"] * 100.0).iloc[-201:-1].dropna()
+                            if len(_atr_hist) >= 30:
+                                _reach = float((_atr_hist >= atr_min_pct).mean())
+                                if _reach < 0.10:
+                                    self.log(
+                                        f"CONFIG BLOCKER WARNING: ATR Min % = {atr_min_pct:g} but only {_reach * 100:.0f}% of the last "
+                                        f"{len(_atr_hist)} {timeframe} candles on {self.symbol} reach it (typical ATR% now "
+                                        f"{float(_atr_hist.median()):.3f}). The ATR gate will block almost every entry. "
+                                        f"Lower ATR Min % to about {float(_atr_hist.quantile(0.30)):.3f} or use a higher timeframe."
+                                    )
+                                else:
+                                    self.log(f"ATR GATE CHECK: {_reach * 100:.0f}% of the last {len(_atr_hist)} candles pass ATR Min % {atr_min_pct:g}.")
+                                _med_atr = float(_atr_hist.median()) / 100.0
+                                _typ_stop = _med_atr * float(atr_sl_mult)
+                                if _typ_stop > 0:
+                                    _max_lev = int(1.0 / (liq_buffer * _typ_stop))
+                                    _rt_adv = 2.0 * taker_fee_pct / 100.0
+                                    _ratio_txt = f"{_typ_stop / _rt_adv:.1f}x" if _rt_adv > 0 else "n/a"
+                                    self.log(
+                                        f"LEVERAGE ADVISOR: typical ATR stop {_typ_stop * 100:.3f}% on {self.symbol} {timeframe} -> "
+                                        f"max sensible leverage ~{max(_max_lev, 1)}x for a {liq_buffer:g}x liquidation buffer "
+                                        f"(you use {leverage}x). Typical stop = {_ratio_txt} the round-trip fee "
+                                        f"(cost gate needs >= {COST_GATE_MIN_STOP_TO_FEE:g}x)."
+                                    )
+                                    if cost_gate_enabled and _rt_adv > 0:
+                                        _tp1_typ = _typ_stop * float(atr_tp1_mult)
+                                        _cost_preview = cost_gate_reason(_typ_stop, _tp1_typ, taker_fee_pct)
+                                        if _cost_preview:
+                                            self.log(
+                                                f"CONFIG BLOCKER WARNING: current median ATR stop/TP settings fail the cost gate: {_cost_preview}. "
+                                                "This is a configuration-quality block, not an execution error."
+                                            )
+                                    if leverage > max(_max_lev, 1):
+                                        self.log(f"LEVERAGE ADVISOR WARNING: {leverage}x is above the sensible maximum; pre-entry buffer guard will skip wide-stop setups.")
+                        except Exception as _atr_chk_err:
+                            self.log(f"ATR gate check notice: {_atr_chk_err}")
+
+                    vol_pass = (
+                        not use_vol
+                        or (
+                            df["vol"].iloc[-2]
+                            >
+                            df["vol_ma"].iloc[-2]
+                        )
+                    )
+
+                    adx_pass = (
+                        not use_adx
+                        or (
+                            df["adx"].iloc[-2]
+                            >= adx_thresh
+                        )
+                    )
+
+                    if not tradeability_audited:
+                        tradeability_audited = True
+                        try:
+                            _fam_on = {
+                                "ST": use_st, "EMA": use_ema, "EMA_CROSS": use_ema_cross, "MACD": use_macd,                                "VIDYA": use_vidya, "NWE": use_nwe, "RSI": use_rsi, "STOCH": use_stoch,
+                                "DIVERGENCE": use_divergence, "VWAP": use_vwap, "VWAP_DELTA": use_vwap_delta,
+                                "VOL": use_vol, "VOL_SR": use_vol_sr, "LIQ_SWING": use_liq_swings,
+                                "TRENDLINE": use_trendline, "MTF": use_mtf,
+                            }
+                            _fam_act = {f: any(bool(_fam_on.get(m)) for m in EVIDENCE_FAMILIES[f]) for f in EVIDENCE_FAMILY_ORDER}
+                            _is_ai = signal_mode == "AI_AGENT"
+                            self._tradeability_audit(df, {
+                                "mode": signal_mode, "symbol": self.symbol, "timeframe": timeframe,
+                                "n_families": sum(_fam_act.values()),
+                                "need_families": ai_min_families if _is_ai else (evidence_min_families if signal_mode == "ADAPTIVE_EVIDENCE" else 1),
+                                "has_trend": _fam_act["TREND"], "has_structure": _fam_act["STRUCTURE"],
+                                "req_trend": ai_require_trend if _is_ai else (evidence_require_trend if signal_mode == "ADAPTIVE_EVIDENCE" else False),
+                                "req_structure": bool(ai_require_structure) if _is_ai else False,
+                                "use_atr": bool(use_atr), "atr_min_pct": float(atr_min_pct),
+                                "use_adx": bool(use_adx), "adx_thresh": float(adx_thresh),
+                                "use_vol": bool(use_vol), "use_mtf": bool(use_mtf),
+                                "cost_gate": bool(cost_gate_enabled), "taker_fee_pct": float(taker_fee_pct),
+                                "atr_stop_mult": float(ai_effective_atr_sl_mult if ai_management_active else atr_sl_mult) if ((simple_atr_sl_enabled or (signal_mode == 'AI_AGENT' and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED and not use_legacy_protection and not hold_all_reverse))) else 0.0,
+                                "leverage": float(leverage), "liq_buffer": float(liq_buffer),
+                                "atr_stop_mult_min": (
+                                    float(AI_AGENT_MIN_ATR_SL_MULT) if (_is_ai and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED and not use_legacy_protection and not hold_all_reverse)
+                                    else float(atr_sl_mult)
+                                ) if (simple_atr_sl_enabled or (_is_ai and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED and not use_legacy_protection and not hold_all_reverse)) and not hold_all_reverse else 0.0,
+                                "atr_tp1_mult": float(atr_tp1_mult), "tp1_on": bool(tp_engine_enabled and tp1_enabled and not hold_all_reverse),
+                                "ai_edge": ai_min_edge, "ai_conf": ai_family_confidence,
+                                "ai_part": self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                                "ai_conflicts": ai_max_conflicts,
+                            })
+                        except Exception as _ta_err:
+                            self.log(f"TRADEABILITY AUDIT notice: {_ta_err}")
+
+                    # ------------------------------------------------
+                    # 5. Signal decision
+                    # ------------------------------------------------
+                    # Every enabled module can participate in the
+                    # 1/2/3/4/SCORE voting system. This includes Volume,
+                    # ADX and ATR. Directional indicators provide their own
+                    # direction. Non-directional modules get a transparent
+                    # directional interpretation when their condition passes:
+                    #   Volume -> completed candle direction when volume > MA
+                    #   ADX    -> +DI/-DI direction when ADX >= threshold
+                    #   ATR    -> completed candle direction when ATR% passes
+                    # This makes Supertrend + Volume with 2_SIGNALS mean
+                    # both conditions must vote in the same direction.
+                    # Supertrend entry mode controls whether ST uses a fresh flip or current trend.
+                    directional_modules = []
+
+                    candle_bull = (
+                        float(df["close"].iloc[-2])
+                        > float(df["open"].iloc[-2])
+                    )
+                    candle_bear = (
+                        float(df["close"].iloc[-2])
+                        < float(df["open"].iloc[-2])
+                    )
+
+                    if use_st:
+                        if st_entry_mode == "CURRENT_TREND":
+                            st_score_bull = st_trend_bull
+                            st_score_bear = st_trend_bear
+                        elif signal_mode == "SCORE":
+                            st_score_bull = st_trend_bull
+                            st_score_bear = st_trend_bear
+                        else:
+                            st_score_bull = st_flip_bull
+                            st_score_bear = st_flip_bear
+                        directional_modules.append(
+                            ("ST", st_score_bull, st_score_bear)
+                        )
+
+                    if use_ema:
+                        directional_modules.append(
+                            ("EMA", ema_bull, ema_bear)
+                        )
+
+                    if use_ema_cross:
+                        directional_modules.append(
+                            ("EMA_CROSS", ema_cross_bull, ema_cross_bear)
+                        )
+
+                    if use_macd:
+                        directional_modules.append(
+                            ("MACD", macd_bull, macd_bear)
+                        )
+
+                    if use_rsi:
+                        directional_modules.append(
+                            ("RSI", rsi_bull, rsi_bear)
+                        )
+
+                    if use_bb:
+                        directional_modules.append(
+                            ("BB", bb_bull, bb_bear)
+                        )
+
+                    if use_stoch:
+                        directional_modules.append(
+                            ("STOCH", stoch_bull, stoch_bear)
+                        )
+
+                    if use_vwap:
+                        directional_modules.append(
+                            ("VWAP", vwap_bull, vwap_bear)
+                        )
+
+                    if use_vwap_delta:
+                        directional_modules.append(
+                            ("VWAP_DELTA", vwap_delta_bull, vwap_delta_bear)
+                        )
+
+                    if use_vidya:
+                        directional_modules.append(
+                            ("VIDYA", vidya_bull, vidya_bear)
+                        )
+
+                    if use_nwe:
+                        directional_modules.append(
+                            ("NWE", nwe_bull, nwe_bear)
+                        )
+
+                    if use_liq_swings:
+                        directional_modules.append(
+                            ("LIQ_SWING", liq_bull, liq_bear)
+                        )
+
+                    if use_trendline:
+                        directional_modules.append(
+                            ("TRENDLINE", trendline_bull, trendline_bear)
+                        )
+
+                    if use_mtf:
+                        directional_modules.append(
+                            ("MTF", mtf_pass_bull, mtf_pass_bear)
+                        )
+
+                    # V8.3.0 Divergence directional module.
+                    if use_divergence:
+                        div_bull_count = int(df["div_bull_count"].iloc[-2])
+                        div_bear_count = int(df["div_bear_count"].iloc[-2])
+                        div_state = int(df["divergence_state"].iloc[-2])
+                        if div_entry_mode == "CURRENT_STATE":
+                            divergence_bull = div_state > 0 and div_bull_count >= div_min_count
+                            divergence_bear = div_state < 0 and div_bear_count >= div_min_count
+                        else:
+                            divergence_bull = (
+                                bool(df["div_bull_signal"].iloc[-2])
+                                and div_bull_count >= div_min_count
+                            )
+                            divergence_bear = (
+                                bool(df["div_bear_signal"].iloc[-2])
+                                and div_bear_count >= div_min_count
+                            )
+                        directional_modules.append(
+                            ("DIVERGENCE", divergence_bull, divergence_bear)
+                        )
+
+                    # V8.3.0 Volume-based Support/Resistance Zones.
+                    if use_vol_sr:
+                        directional_modules.append(
+                            ("VOL_SR", bool(sr_state["bull"]), bool(sr_state["bear"]))
+                        )
+
+                    # Volume is a strength/participation measure rather than
+                    # a direction by itself. If volume is above its MA, its
+                    # vote follows the completed candle direction.
+                    if use_vol and vol_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
+                        directional_modules.append(
+                            ("VOL", candle_bull, candle_bear)
+                        )
+
+                    # ADX becomes directional through +DI versus -DI, while
+                    # the ADX threshold remains the strength requirement.
+                    if use_adx and adx_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
+                        adx_bull = (
+                            float(df["plus_di"].iloc[-2])
+                            > float(df["minus_di"].iloc[-2])
+                        )
+                        adx_bear = (
+                            float(df["minus_di"].iloc[-2])
+                            > float(df["plus_di"].iloc[-2])
+                        )
+                        directional_modules.append(
+                            ("ADX", adx_bull, adx_bear)
+                        )
+
+                    # ATR is volatility-only. When the ATR threshold passes,
+                    # its vote follows the completed candle direction.
+                    if use_atr and atr_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
+                        directional_modules.append(
+                            ("ATR", candle_bull, candle_bear)
+                        )
+
+                    buy_score = sum(
+                        1 for _, bull, _ in directional_modules
+                        if bull
+                    )
+                    sell_score = sum(
+                        1 for _, _, bear in directional_modules
+                        if bear
+                    )
+
+                    directional_count = len(directional_modules)
+
+                    # ------------------------------------------------
+                    # Grid Strategy integration
+                    # ------------------------------------------------
+                    # IMPORTANT:
+                    # Grid SCORE uses the COMPLETE Section 3 Strategy engine.
+                    # Every enabled Strategy indicator participates here:
+                    #   ST, EMA, EMA Cross, MACD, RSI, BB, STOCH, VWAP,
+                    #   VWAP Delta, VIDYA, NWE, Liquidity Swings, Trendline,
+                    #   MTF, Volume, ADX and ATR.
+                    #
+                    # The SAME GUI enable/disable switches and the SAME
+                    # indicator parameters are used. There is no reduced
+                    # five-indicator Grid-only implementation.
+                    #
+                    # We intentionally use the already-built directional_modules
+                    # unchanged. That means the Grid receives the exact same
+                    # completed-candle signal state/entry-mode logic as Section 3.
+                    # The only thing that differs is the threshold: Grid Score
+                    # Min is independent from the normal Strategy Signal Mode.
+                    grid_directional_modules = list(directional_modules)
+
+                    grid_buy_score = sum(
+                        1 for _, bull, _ in grid_directional_modules if bull
+                    )
+                    grid_sell_score = sum(
+                        1 for _, _, bear in grid_directional_modules if bear
+                    )
+                    grid_score_count = len(grid_directional_modules)
+
+                    # Centralized, pure signal decision. Adaptive thresholds
+                    # are explicit per-call parameters, preventing cross-profile
+                    # races when multiple bots run concurrently.
+                    buy_signal, sell_signal, buy_score, sell_score = self._decide_signal(
+                        directional_modules,
+                        signal_mode,
+                        min_score,
+                        atr_pass=atr_pass,
+                        vol_pass=vol_pass,
+                        adx_pass=adx_pass,
+                        mtf_pass_bull=mtf_pass_bull,
+                        mtf_pass_bear=mtf_pass_bear,
+                        adaptive_edge=adaptive_edge,
+                        adaptive_min_weight=adaptive_min_weight,
+                        evidence_min_families=evidence_min_families,
+                        evidence_family_min_score=evidence_family_min_score,
+                        evidence_require_trend=evidence_require_trend,
+                        evidence_require_independent=evidence_require_independent,
+                        ai_min_families=ai_min_families,
+                        ai_min_edge=ai_min_edge,
+                        ai_family_confidence=ai_family_confidence,
+                        ai_require_trend=ai_require_trend,
+                        ai_require_structure=ai_require_structure,
+                        ai_max_conflicts=ai_max_conflicts,
+                         ai_min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                        ai_soft_regime=bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)),
+                        ai_soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
+                        ai_soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
+                        ai_soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
+                    )
+
+                    if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT"):
+                        # Grid mode owns execution while selected, including its
+                        # post-stop cooldown/inactive state. Never fall through
+                        # into the normal signal-entry engine.
+                        grid_handled = self._manage_grid(
+                            self.symbol, curr_balance, curr_equity, grid_cfg,
+                            st_trend_bull, st_trend_bear,
+                            grid_buy_score, grid_sell_score
+                        )
+                        if grid_handled:
+                            grid_status = "ACTIVE" if self.grid_state.get("active") else "STOPPED/COOLDOWN"
+                            self.log(
+                                f"[{self.exchange_id.upper()}] GRID | Mode={grid_cfg['mode']} | "
+                                f"Status={grid_status} | Center={self.grid_state.get('center', 0):.12g} | "
+                                f"Score=B{grid_buy_score}/S{grid_sell_score} of {grid_score_count} | "
+                                f"GridMin={grid_cfg.get('score_min', 0)} | "
+                                f"Strategy={','.join(name for name, _, _ in grid_directional_modules) or 'NONE'} | "
+                                f"Position={self.fetch_position(self.symbol) or 'NONE'}"
+                            )
+                            cycle_elapsed = time.time() - cycle_start
+                            time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                            continue
+
+                    decision_reason = StrategyEngine.decision_reason(
+                        directional_modules, signal_mode, min_score,
+                        atr_pass=atr_pass, vol_pass=vol_pass, adx_pass=adx_pass,
+                        mtf_pass_bull=mtf_pass_bull, mtf_pass_bear=mtf_pass_bear,
+                        adaptive_edge=adaptive_edge, adaptive_min_weight=adaptive_min_weight,
+                        evidence_min_families=evidence_min_families,
+                        evidence_family_min_score=evidence_family_min_score,
+                        evidence_require_trend=evidence_require_trend,
+                        evidence_require_independent=evidence_require_independent,
+                        ai_min_families=ai_min_families,
+                        ai_min_edge=ai_min_edge,
+                        ai_min_family_confidence=ai_family_confidence,
+                        ai_require_trend=ai_require_trend,
+                        ai_require_structure=ai_require_structure,
+                        ai_max_conflicting_families=ai_max_conflicts,
+                         ai_min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                        ai_soft_regime=bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)),
+                        ai_soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
+                        ai_soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
+                        ai_soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
+                    )
+
+                    # R6.8.4 SHADOW COUNCIL: diagnostic-only relaxed regime evaluation.
+                    # It never changes buy_signal/sell_signal and never places an order.
+                    ai_shadow = None
+                    if signal_mode == "AI_AGENT" and bool(self._runtime_gui_value("v_ai_shadow_mode", AI_AGENT_SHADOW_MODE)):
+                        try:
+                            ai_shadow = StrategyEngine.ai_agent_decision(
+                                directional_modules,
+                                atr_pass=atr_pass,
+                                vol_pass=vol_pass,
+                                adx_pass=adx_pass,
+                                mtf_pass_bull=mtf_pass_bull,
+                                mtf_pass_bear=mtf_pass_bear,
+                                min_families=ai_min_families,
+                                min_edge=ai_min_edge,
+                                min_family_confidence=ai_family_confidence,
+                                require_trend=ai_require_trend,
+                                require_structure=ai_require_structure,
+                                max_conflicting_families=ai_max_conflicts,
+                                 min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                                soft_regime=True,
+                                soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
+                                soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
+                                soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
+                            )
+                            _shadow_ts = int(df["time"].iloc[-2])
+                            if getattr(self, "_last_ai_shadow_log_ts", None) != _shadow_ts:
+                                self._last_ai_shadow_log_ts = _shadow_ts
+                                _shadow_side = ai_shadow.get("shadow_side", "NONE")
+                                _live_side = "BUY" if buy_signal else "SELL" if sell_signal else "NONE"
+                                _sf = "+".join(ai_shadow.get("bull_families", [])) if _shadow_side == "BUY" else "+".join(ai_shadow.get("bear_families", [])) if _shadow_side == "SELL" else "NONE"
+                                _shadow_status = (
+                                    "WOULD_ENTER_" + _shadow_side
+                                    if _shadow_side in ("BUY", "SELL") else
+                                    "NO_SHADOW_ENTRY"
+                                )
+                                self.log(
+                                    f"AI SHADOW | {_shadow_status} | Live={_live_side} | "
+                                    f"Edge={ai_shadow.get('edge', 0.0):.2f} | Families={_sf} | "
+                                    f"ATR={'PASS' if atr_pass else 'FAIL'} | "
+                                    f"ADX={'PASS' if adx_pass else 'FAIL'} | "
+                                    f"VOL={'PASS' if vol_pass else 'FAIL'} | "
+                                    f"MTF={'PASS' if (mtf_pass_bull and mtf_pass_bear) else 'BULL_OK/BEAR_BLOCKED' if mtf_pass_bull else 'BEAR_OK/BULL_BLOCKED' if mtf_pass_bear else 'FAIL'} | "
+                                    f"RegimeMisses={ai_shadow.get('soft_regime_misses', 0)} | "
+                                    f"NOTE=diagnostic only; downstream cost/liquidation/execution gates still apply."
+                                )
+                        except Exception as _shadow_err:
+                            self.log(f"AI SHADOW NOTICE: {_shadow_err}")
+
+                    signal = "NONE"
+
+                    # A candle that satisfies BOTH directions is ambiguous: never default to BUY.
+                    if buy_signal and sell_signal:
+                        # Logged once per closed candle (the 30s poll would otherwise repeat it).
+                        _log_entry_block_once(
+                            "AMBIGUOUS_CANDLE",
+                            "ENTRY BLOCKED: AMBIGUOUS_CANDLE | BUY and SELL were both true on the same completed candle; "
+                            "signal forced to NONE.",
+                            int(df["time"].iloc[-2]),
+                        )
+                        buy_signal = sell_signal = False
+                    if buy_signal:
+                        signal = "BUY"
+                    elif sell_signal:
+                        signal = "SELL"
+
+                    vwap_delta_state = (
+                        "BULL"
+                        if vwap_delta_bull
+                        else "BEAR"
+                        if vwap_delta_bear
+                        else "NEUTRAL"
+                    )
+                    vidya_state = (
+                        "BULL"
+                        if vidya_bull
+                        else "BEAR"
+                        if vidya_bear
+                        else "NEUTRAL"
+                    )
+                    nwe_state = (
+                        "BULL"
+                        if nwe_bull
+                        else "BEAR"
+                        if nwe_bear
+                        else "NEUTRAL"
+                    )
+
+                    # ------------------------------------------------
+                    # 5. Current actual position
+                    # ------------------------------------------------
+                    position = (
+                        self.fetch_position(
+                            self.symbol
+                        )
+                    )
+
+                    if position:
+                        pos_type = position["side"]
+                        pos_qty = position["qty"]
+                        pos_entry = position["entry"]
+
+                        # Check whether TP1 has actually filled before
+                        # evaluating the next signal/reversal.
+                        self._manage_tp1_break_even(position)
+
+                        # R6.8.7.2 FIX: activate the existing bounded AI ATR trail.
+                        # Previously this method existed but was never invoked.
+                        if signal_mode == "AI_AGENT" and AI_AGENT_TRAILING_ENABLED and not hold_all_reverse:
+                            try:
+                                self._manage_ai_trailing_stop(
+                                    position,
+                                    float(df["atr"].iloc[-2]),
+                                    int(df["time"].iloc[-2]),
+                                )
+                            except Exception as _trail_err:
+                                # Never widen/remove protection because a trailing update failed.
+                                self.log(
+                                    f"AI TRAILING NOTICE: {_trail_err} | "
+                                    "Existing SL remains authoritative."
+                                )
+
+                        # Optional Hold-SL mode: once the configured ROI
+                        # threshold is reached, DO NOT close.  Wait for the
+                        # all-active-signals reversal logic below.
+                        self._manage_hold_sl_wait_reversal(position)
+
+                        # Normal exchange-side protection reconciliation is
+                        # skipped when Hold-SL wait mode intentionally has no
+                        # exchange stop order.
+                        try:
+                            self._reconcile_protection_orders(position)
+                        except Exception as protection_error:
+                            # If protection state cannot be verified, do not
+                            # continue generating new strategy entries. Pause
+                            # the bot with the position untouched so the user
+                            # can inspect/recover it rather than guessing.
+                            self.log(
+                                f"CRITICAL PROTECTION VERIFICATION ERROR: {protection_error} | "
+                                "BOT PAUSED; no new entries will be opened."
+                            )
+                            try:
+                                self.send_telegram(
+                                    f"[{self.exchange_id.upper()}] PROTECTION VERIFICATION ERROR "
+                                    f"{self.symbol}: bot paused; position was not silently changed."
+                                )
+                            except Exception:
+                                pass
+                            self._persist_runtime_state(
+                                status="PAUSED_WITH_POSITION",
+                                last_error=str(protection_error),
+                            )
+                            self.is_running = False
+                            continue
+                    else:
+                        # A position disappeared without this loop intentionally
+                        # reversing it.  Determine whether the exchange-side
+                        # stop (including a TP1-created break-even stop) fired.
+                        # The post-exit lock is specifically a STOP lock: TP1/TP2
+                        # exits do not force a reversal signal before re-entry.
+                        exited_side = None
+                        exit_reason = "UNKNOWN"
+                        previous_protection = self.last_protected_position
+                        # A flat cycle is not itself a new exit. Preserve the
+                        # cooldown timestamp only when this cycle actually
+                        # observes a previously-live bot trade/position.
+                        # Otherwise refreshing last_flat_time every polling
+                        # cycle makes a 15-minute cooldown effectively infinite.
+                        had_live_state = (
+                            previous_protection is not None
+                            or self.active_trade is not None
+                        )
+                        if previous_protection:
+                            exited_side = previous_protection.get("side")
+                            exit_reason = self._detect_protection_exit_reason(
+                                previous_protection
+                            )
+
+                        # IMPORTANT: once a post-SL lock is created, it must persist
+                        # across subsequent flat polling cycles until a valid opposite
+                        # signal releases it.  Previously, last_protected_position was
+                        # cleared below and the next flat cycle interpreted that as an
+                        # UNKNOWN exit, clearing the lock and allowing an immediate
+                        # same-direction re-entry.
+                        lock_already_active = self.reentry_direction_lock in ("LONG", "SHORT")
+
+                        if not lock_already_active and (
+                            exited_side in ("LONG", "SHORT")
+                            and self._runtime_gui_value("v_require_opposite_after_exit")
+                            and exit_reason in ("SL", "UNKNOWN")
+                        ):
+                            self.reentry_direction_lock = exited_side
+                            self.reentry_lock_reason = f"{exit_reason}_EXIT"
+                            self.log(
+                                f"POST-SL LOCK: {exited_side} re-entry blocked after {exit_reason}. "
+                                f"Waiting for a valid opposite signal under {signal_mode}."
+                            )
+                        elif not lock_already_active:
+                            self.reentry_direction_lock = None
+                            self.reentry_lock_reason = ""
+                            if exit_reason in ("TP1", "TP2"):
+                                self.log(
+                                    f"POST-EXIT: {exit_reason} completed; no opposite-signal lock."
+                                )
+                        else:
+                            self.log(
+                                f"POST-SL LOCK PERSISTING: {self.reentry_direction_lock} re-entry remains blocked "
+                                f"until a valid opposite signal under {signal_mode}."
+                            )
+
+                        if self.active_trade is not None:
+                            try:
+                                flat_balance = self.fetch_balance_total()
+                            except Exception:
+                                flat_balance = None
+                            self._finalize_performance_trade(
+                                reason="PROTECTION/EXTERNAL CLOSE",
+                                balance=flat_balance,
+                            )
+                        # Preserve the exact protection IDs in the recovery checkpoint
+                        # BEFORE clearing the live position state. This is what lets a later
+                        # NEW session safely identify stale bot-created SL/TP orders.
+                        self._remember_managed_order_ids(
+                            self._known_managed_order_ids(self.symbol)
+                        )
+                        pos_type = "NONE"
+                        pos_qty = 0.0
+                        pos_entry = 0.0
+                        self.last_protected_position = None
+                        self.tp1_be_done = False
+                        self.hold_sl_wait_reversal = False
+                        self.hold_sl_threshold_hit = False
+                        self.hold_sl_threshold_logged = False
+                        self.last_protection_reconcile = 0.0
+                        # R6 FIX: only start/restart cooldown when a real live
+                        # state transitioned to flat. A continuously-flat bot must
+                        # not reset the cooldown on every 30-second poll.
+                        if had_live_state:
+                            self.last_flat_time = time.time()
+                            if cooldown_min > 0:
+                                self.log(
+                                    f"COOLDOWN STARTED: {cooldown_min:g} min after verified live->flat transition."
+                                )
+
+                    post_sl_lock_on = bool(self._runtime_gui_value("v_require_opposite_after_exit"))
+                    hold_all_reverse_log = bool(self._runtime_gui_value("v_hold_until_all_reverse"))
+                    closed_candle_ts = int(df["time"].iloc[-2])
+                    if pos_type == "NONE" and closed_candle_ts != blk_last_ts:
+                        blk_last_ts = closed_candle_ts
+                        blk_candles += 1
+                        if signal == "NONE" and str(decision_reason).startswith("AI_AGENT_BLOCKED"):
+                            for _tok in str(decision_reason).split("|", 1)[-1].split(","):
+                                _tok = _tok.strip()
+                                if not _tok or _tok.startswith(("DOMINANT=", "FAMILY_DETAIL=")):
+                                    continue
+                                _key = ("FAMILIES" if _tok.startswith("FAMILIES_") else "EDGE" if _tok.startswith("EDGE_")
+                                        else "MTF_GATE" if _tok.startswith("MTF_GATE") else _tok.split("|")[0])
+                                blk_counts[_key] = blk_counts.get(_key, 0) + 1
+                        if blk_candles >= BLK_REPORT_EVERY:
+                            if blk_counts:
+                                _ranked = sorted(blk_counts.items(), key=lambda kv: -kv[1])
+                                _txt = " | ".join(f"{k} {v}/{blk_candles}" for k, v in _ranked)
+                                self.log(f"ENTRY BLOCKER SUMMARY (last {blk_candles} closed candles, flat): {_txt}")
+                                _hints = []
+                                if blk_counts.get("ATR_GATE", 0) >= 0.8 * blk_candles:
+                                    _hints.append(f"ATR_GATE blocks ~always: ATR%={atr_pct:.3f} < Min {atr_min_pct:g}. Lower ATR Min % or raise timeframe.")
+                                if blk_counts.get("ADX_GATE", 0) >= 0.8 * blk_candles:
+                                    _hints.append(f"ADX_GATE blocks ~always (ADX {float(df['adx'].iloc[-2]):.1f} < {adx_thresh:g}): market is ranging or threshold too high.")
+                                if blk_counts.get("VOLUME_GATE", 0) >= 0.8 * blk_candles:
+                                    _hints.append("VOLUME_GATE blocks ~always: volume rarely exceeds its MA; consider turning Volume OFF or shortening Volume MA.")
+                                if blk_counts.get("COST_GATE", 0) >= 0.5 * blk_candles:
+                                    _hints.append("COST_GATE blocks most signals: stops are too small versus round-trip fees on this timeframe. Use a higher timeframe or widen the ATR multiplier.")
+                                if blk_counts.get("LIQ_BUFFER_GUARD", 0) >= 0.5 * blk_candles:
+                                    _hints.append("LIQ_BUFFER_GUARD blocks most signals: leverage is too high for the current ATR stop. Lower leverage (see LEVERAGE ADVISOR).")
+                                if blk_counts.get("MTF_GATE", 0) >= 0.8 * blk_candles:
+                                    _hints.append("MTF_GATE blocks ~always: price is on the wrong side of the 4H EMA200 for the signalled direction (intended trend filter).")
+                                for _h in _hints:
+                                    self.log(f"BLOCKER HINT: {_h}")
+                            blk_counts = {}
+                            blk_candles = 0
+                    closed_candle_time = time.strftime(
+                        "%H:%M:%S", time.gmtime(closed_candle_ts / 1000.0)
+                    )
+                    strategy_log_key = (
+                        closed_candle_ts,
+                        signal,
+                        pos_type,
+                        round(float(pos_qty or 0.0), 12),
+                        self.reentry_direction_lock or "NONE",
+                        decision_reason,
+                    )
+                    if strategy_log_key != self.last_strategy_signal_log_key:
+                        self.log(
+                            f"[{self.exchange_id.upper()}] "
+                            f"TF={timeframe} | "
+                            f"Signal={signal} | "
+                            f"ClosedCandle={close:.8f} | "
+                            f"ClosedCandleTime={closed_candle_time} UTC | "
+                            f"EMA_Filter={'ON' if use_ema else 'OFF'} "
+                            f"EMA_Cross={'ON' if use_ema_cross else 'OFF'} "
+                            f"Mode={ema_cross_entry_mode} "
+                            f"Cross={'BULL' if ema_cross_bull and use_ema_cross else 'BEAR' if ema_cross_bear and use_ema_cross else 'NONE'} | "
+                            f"STEntry={st_entry_mode} SignalMode={signal_mode} "
+                            f"HoldAllReverse={'ON' if hold_all_reverse_log else 'OFF'} "
+                            f"PostSL_Lock={'ON' if post_sl_lock_on else 'OFF'} "
+                            f"LockSide={self.reentry_direction_lock or 'NONE'} "
+                            f"Confirmations={'OFF' if signal_mode in ('SINGLE_SIGNAL','ANY_NON_CONFLICTING','2_SIGNALS','3_SIGNALS','4_SIGNALS','SCORE','ADAPTIVE_SCORE') else 'ON'} "
+                             f"States={','.join(name + ':' + ('BULL' if bull and not bear else 'BEAR' if bear and not bull else 'CONFLICT' if bull and bear else 'NEUTRAL') for name, bull, bear in directional_modules) or 'NONE'} "
+                             f"Score=B{buy_score}/S{sell_score} "
+                             f"Required={({'SINGLE_SIGNAL':1,'ANY_NON_CONFLICTING':1,'2_SIGNALS':2,'3_SIGNALS':3,'4_SIGNALS':4,'AI_AGENT':ai_min_families}.get(signal_mode, min_score))} | "
+                             f"DecisionReason={decision_reason} | "
+                            f"MACD={'ON' if use_macd else 'OFF'} "
+                            f"RSI={'ON' if use_rsi else 'OFF'} "
+                            f"BB={'ON' if use_bb else 'OFF'} "
+                            f"STOCH={'ON' if use_stoch else 'OFF'} "
+                            f"VWAP={'ON' if use_vwap else 'OFF'} "
+                            f"VWAP_DELTA={'ON' if use_vwap_delta else 'OFF'}"
+                            f"({vwap_delta_state}) "
+                            f"VIDYA={'ON' if use_vidya else 'OFF'}"
+                            f"({vidya_state}) "
+                            f"LIQ_SWING={'ON' if use_liq_swings else 'OFF'}"
+                            f"({liq_entry_mode if use_liq_swings else 'OFF'}) "
+                            f"TRENDLINE={'ON' if use_trendline else 'OFF'}"
+                            f"({trendline_entry_mode if use_trendline else 'OFF'}) "
+                            f"ATR={'ON' if use_atr else 'OFF'} "
+                            f"ATR%={atr_pct:.3f} "
+                            f"ADX={'ON' if use_adx else 'OFF'} "
+                            f"ADX={float(df['adx'].iloc[-2]):.2f} "
+                            f"ADXGate={'PASS' if adx_pass else 'FAIL'} | "
+                            f"Position={pos_type} "
+                            f"Qty={pos_qty}"
+                        )
+                        self.last_strategy_signal_log_key = strategy_log_key
+
+                    # ------------------------------------------------
+                    # 6. If there is already a position in the same
+                    #    direction, do NOT create another position.
+                    # ------------------------------------------------
+                    desired_side = (
+                        "LONG"
+                        if signal == "BUY"
+                        else "SHORT"
+                        if signal == "SELL"
+                        else "NONE"
+                    )
+
+                    # ------------------------------------------------
+                    # 7. New/reversal trade
+                    # ------------------------------------------------
+                    # Hold-All-Reverse must use PERSISTENT direction states,
+                    # not one-bar entry events. Otherwise an indicator using
+                    # FRESH_FLIP (EMA crossover, MACD crossover, etc.) could
+                    # become neutral on the very next candle and prevent a
+                    # legitimate reversal forever.
+                    hold_directional_modules = []
+                    if use_st:
+                        hold_directional_modules.append(("ST", st_trend_bull, st_trend_bear))
+                    if use_ema:
+                        hold_directional_modules.append(("EMA", close > float(df["ema"].iloc[-2]), close < float(df["ema"].iloc[-2])))
+                    if use_ema_cross:
+                        # Reversal-hold uses the persistent EMA relationship,
+                        # regardless of entry mode. This prevents a fresh
+                        # crossover event from becoming neutral one candle later.
+                        hold_directional_modules.append(
+                            (
+                                "EMA_CROSS",
+                                ema_cross_trend_bull,
+                                ema_cross_trend_bear,
+                            )
+                        )
+                    if use_macd:
+                        hold_directional_modules.append(("MACD", float(df["macd"].iloc[-2]) > float(df["macd_signal"].iloc[-2]), float(df["macd"].iloc[-2]) < float(df["macd_signal"].iloc[-2])))
+                    if use_rsi:
+                        hold_directional_modules.append(("RSI", float(df["rsi"].iloc[-2]) > 50.0, float(df["rsi"].iloc[-2]) < 50.0))
+                    if use_bb:
+                        hold_directional_modules.append(("BB", close > float(df["bb_mid"].iloc[-2]), close < float(df["bb_mid"].iloc[-2])))
+                    if use_stoch:
+                        hold_directional_modules.append(("STOCH", float(df["stoch_k"].iloc[-2]) > float(df["stoch_d"].iloc[-2]), float(df["stoch_k"].iloc[-2]) < float(df["stoch_d"].iloc[-2])))
+                    if use_vwap:
+                        hold_directional_modules.append(("VWAP", close > float(df["vwap"].iloc[-2]), close < float(df["vwap"].iloc[-2])))
+                    if use_vwap_delta:
+                        hold_directional_modules.append(("VWAP_DELTA", vwap_delta_bull, vwap_delta_bear))
+                    if use_vidya:
+                        hold_directional_modules.append(("VIDYA", bool(df["vidya_trend_up"].iloc[-2]), not bool(df["vidya_trend_up"].iloc[-2])))
+                    if use_nwe:
+                        hold_directional_modules.append(("NWE", nwe_out_now > nwe_out_prev, nwe_out_now < nwe_out_prev))
+                    if use_liq_swings:
+                        hold_directional_modules.append(("LIQ_SWING", bool(df["liq_swing_trend"].iloc[-2] > 0), bool(df["liq_swing_trend"].iloc[-2] < 0)))
+                    if use_trendline:
+                        hold_directional_modules.append(("TRENDLINE", bool(df["trendline_state"].iloc[-2] > 0), bool(df["trendline_state"].iloc[-2] < 0)))
+                    if use_mtf:
+                        hold_directional_modules.append(("MTF", mtf_pass_bull, mtf_pass_bear))
+                    if use_divergence:
+                        div_state = int(df["divergence_state"].iloc[-2])
+                        hold_directional_modules.append(("DIVERGENCE", div_state > 0, div_state < 0))
+                    if use_vol_sr:
+                        hold_directional_modules.append(("VOL_SR", bool(sr_state["bull"]), bool(sr_state["bear"])))
+                    if use_vol and vol_pass:
+                        hold_directional_modules.append(("VOL", candle_bull, candle_bear))
+                    if use_adx and adx_pass:
+                        hold_directional_modules.append(("ADX", adx_bull, adx_bear))
+                    if use_atr and atr_pass:
+                        hold_directional_modules.append(("ATR", candle_bull, candle_bear))
+
+                    reversal_allowed = True
+                    if (
+                        pos_type in ("LONG", "SHORT")
+                        and desired_side != pos_type
+                        and self._runtime_gui_value("v_hold_until_all_reverse")
+                    ):
+                        if self.hold_sl_wait_reversal and not self.hold_sl_threshold_hit:
+                            # In Hold-SL WAIT mode the ROI threshold is a
+                            # prerequisite for strategy reversal. Do not let the
+                            # later ALL-REVERSE check overwrite this hard gate.
+                            reversal_allowed = False
+                            self.log(
+                                f"HOLD-SL WAIT: {pos_type} remains open because the "
+                                "configured Hold-SL ROI threshold has not been reached yet."
+                            )
+                        else:
+                            # R9.6 reversal hold uses the selectable R9.5 rule.
+                            # Correlated indicators inside one family never count as multiple families.
+                            (
+                                reversal_allowed,
+                                reversal_rule,
+                                reversed_states,
+                                waiting_states,
+                            ) = self._evaluate_reversal_hold(
+                                pos_type,
+                                hold_directional_modules,
+                            )
+                            if reversal_rule == "ALL_ACTIVE":
+                                if not reversal_allowed:
+                                    self.log(
+                                        f"HOLD {pos_type}: signal={desired_side}; "
+                                        "waiting for ALL active directional states to reverse. "
+                                        f"Waiting={', '.join(waiting_states) if waiting_states else 'NONE'}"
+                                    )
+                                else:
+                                    self.log(
+                                        f"HOLD {pos_type}: ALL active directional states reversed -> strategy reversal allowed."
+                                    )
+                            else:
+                                required = int(self._runtime_gui_value("e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)
+                                if not reversal_allowed:
+                                    self.log(
+                                        f"HOLD {pos_type}: signal={desired_side}; reverse rule=MIN_FAMILIES({required}) | "
+                                        f"Reversed={','.join(reversed_states) if reversed_states else 'NONE'} | "
+                                        f"Waiting={','.join(waiting_states) if waiting_states else 'NONE'}"
+                                    )
+                                else:
+                                    self.log(
+                                        f"HOLD {pos_type}: MIN_FAMILIES satisfied | "
+                                        f"Reversed={','.join(reversed_states)} | strategy reversal allowed."
+                                    )
+
+                    if (
+                        desired_side in ("LONG", "SHORT")
+                        and desired_side != pos_type
+                        and reversal_allowed
+                    ):
+                        # Cancel old protection BEFORE changing side.
+                        if pos_type != "NONE":
+                            self.log(
+                                "Reversal detected. "
+                                "Cancelling old protection..."
+                            )
+
+                            self._cancel_known_managed_orders(
+                                self.symbol
+                            )
+
+                            # This is a strategy reversal, not a protective exit.
+                            # Do not carry a same-direction post-exit lock into the
+                            # intentionally opposite position.
+                            self.reentry_direction_lock = None
+                            self.reentry_lock_reason = ""
+
+                            self.close_position_market(
+                                self.symbol,
+                                pos_type,
+                                pos_qty,
+                                reason="STRATEGY REVERSAL: closing position before opposite entry.",
+                            )
+
+                            # Never place the opposite entry on top of a residual
+                            # position. Wait briefly and verify the exchange is flat.
+                            time.sleep(1.0)
+                            if self.fetch_position(self.symbol):
+                                self.log(
+                                    "REVERSAL ABORTED: previous position is still open "
+                                    "after close request; no opposite entry will be submitted."
+                                )
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
+                            try:
+                                reversal_balance = self.fetch_balance_total()
+                            except Exception:
+                                reversal_balance = None
+                            self._finalize_performance_trade(
+                                reason="REVERSAL",
+                                balance=reversal_balance,
+                            )
+                            self.last_flat_time = time.time()
+                            if cooldown_min > 0:
+                                self.log(
+                                    f"COOLDOWN STARTED: {cooldown_min:g} min after strategy reversal."
+                                )
+
+                        else:
+                            # If flat, clean up orphan orders.
+                            self._cancel_known_managed_orders(
+                                self.symbol
+                            )
+
+                        # Safety gates before opening a fresh position.
+                        if pos_type == "NONE":
+                            current_candle_ts = int(df["time"].iloc[-2])
+
+                            # Max Open Trades is validated as a hard per-profile
+                            # cap. This execution engine manages one symbol and one
+                            # live position per profile, so the only supported cap is 1.
+                            # The explicit setting prevents future multi-position
+                            # changes from silently bypassing the configured safety.
+                            if max_open_trades == 1 and position:
+                                self.log("ENTRY BLOCKED: Max Open Trades=1 reached.")
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
+
+                            # Post-exit direction lock: a LONG stopped/closed by
+                            # protection must not immediately re-enter LONG while
+                            # the strategy is still bullish; likewise for SHORT.
+                            # The lock is released only when the opposite signal
+                            # is actually produced.
+                            if self.reentry_direction_lock in ("LONG", "SHORT"):
+                                locked_side = self.reentry_direction_lock
+                                if desired_side == locked_side:
+                                    self.log(
+                                        f"ENTRY BLOCKED: Post-SL Opposite Signal Lock is ON | "
+                                        f"{locked_side} re-entry blocked until a valid {('SELL' if locked_side == 'LONG' else 'BUY')} signal under {signal_mode}."
+                                    )
+                                    cycle_elapsed = time.time() - cycle_start
+                                    time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                    continue
+                                elif desired_side == ("SHORT" if locked_side == "LONG" else "LONG"):
+                                    self.log(
+                                        f"POST-SL LOCK RELEASED: Valid opposite signal {signal} detected under {signal_mode}. "
+                                        f"{locked_side} re-entry is now allowed again."
+                                    )
+                                    self.reentry_direction_lock = None
+                                    self.reentry_lock_reason = ""
+
+                            if no_same_candle and self.last_entry_candle_ts == current_candle_ts:
+                                self.log("ENTRY BLOCKED: No Re-Entry Same Candle is ON.")
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
+                            if cooldown_min > 0 and self.last_flat_time > 0:
+                                remaining = cooldown_min * 60.0 - (time.time() - self.last_flat_time)
+                                if remaining > 0:
+                                    self.log(f"ENTRY BLOCKED: Cooldown active for {remaining:.0f}s.")
+                                    cycle_elapsed = time.time() - cycle_start
+                                    time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                    continue
+
+                        # ------------------------------------------------
+                        # Calculate requested entry quantity.
+                        # With ATR Dynamic SL enabled, risk sizing uses the
+                        # latest COMPLETED candle ATR, not a stale fixed %
+                        # configured at startup.
+                        # ------------------------------------------------
+                        # R6: AI risk/SL/TP management runs only after the
+                        # deterministic AI Agent has produced an actual entry
+                        # signal. Other signal modes are unchanged.
+                        ai_management_active = False
+                        ai_effective_risk_pct = risk_pct
+                        ai_effective_atr_sl_mult = atr_sl_mult
+                        ai_effective_atr_tp1_mult = atr_tp1_mult
+                        ai_effective_atr_tp2_mult = atr_tp2_mult
+                        if (
+                            signal_mode == "AI_AGENT"
+                            and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED
+                            and not use_legacy_protection
+                            and not hold_all_reverse
+                            and desired_side in ("LONG", "SHORT")
+                        ):
+                            ai_mgr = self._ai_agent_trade_management(
+                                directional_modules,
+                                desired_side,
+                                float(df["atr"].iloc[-2]),
+                                close,
+                                risk_pct,
+                                atr_sl_mult,
+                                atr_tp1_mult,
+                                atr_tp2_mult,
+                                ai_min_families,
+                                ai_min_edge,
+                                ai_family_confidence,
+                                ai_require_trend,
+                                ai_require_structure,
+                                ai_max_conflicts,
+                                 min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                                atr_pass=atr_pass,
+                                vol_pass=vol_pass,
+                                adx_pass=adx_pass,
+                                mtf_pass_bull=mtf_pass_bull,
+                                mtf_pass_bear=mtf_pass_bear,
+                            )
+                            ai_effective_risk_pct = ai_mgr["risk_pct"]
+                            ai_effective_atr_sl_mult = ai_mgr["atr_sl_mult"]
+                            ai_effective_atr_tp1_mult = ai_mgr["tp1_r"]
+                            ai_effective_atr_tp2_mult = ai_mgr["tp2_r"]
+                            ai_management_active = True
+                            self.log(
+                                "AI TRADE MANAGER: "
+                                f"Side={desired_side} | Families={ai_mgr['family_count']} "
+                                f"({','.join(ai_mgr['families']) or 'NONE'}) | "
+                                f"Edge={ai_mgr['edge']:.3f} | Confidence={ai_mgr['confidence']:.3f} | "
+                                f"Conflicts={ai_mgr['conflicts']} | Conviction={ai_mgr['conviction']:.3f} | "
+                                f"ATR={ai_mgr['atr_pct']:.3f}% | "
+                                f"Risk={ai_effective_risk_pct:.3f}% | "
+                                f"SL={ai_effective_atr_sl_mult:.2f} ATR | "
+                                f"TP1={ai_effective_atr_tp1_mult:.2f}R | "
+                                f"TP2={ai_effective_atr_tp2_mult:.2f}R"
+                            )
+                        elif (
+                            signal_mode == "AI_AGENT"
+                            and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED
+                            and not use_legacy_protection
+                            and hold_all_reverse
+                            and desired_side in ("LONG", "SHORT")
+                        ):
+                            self.log(
+                                "AI TRADE MANAGER BLOCKED: HOLD-ALL-REVERSE is ON. "
+                                "Turn HOLD-ALL-REVERSE OFF to enable dynamic AI risk/ATR-SL/ATR-TP management."
+                            )
+
+                        # AI TP management uses R-multiples of the resolved ATR
+                        # stop. Therefore the protection resolver must use the
+                        # ATR TP branch for this trade.
+                        effective_simple_atr_sl_enabled = (
+                            simple_atr_sl_enabled or ai_management_active
+                        )
+                        effective_atr_tp_enabled = (
+                            atr_tp_enabled or ai_management_active
+                        )
+
+                        entry_sl_price_fraction = sl_price_fraction
+                        atr_entry_value = None
+                        if (use_legacy_protection and legacy_atr_enabled and not hold_all_reverse and sl_mode != "RISK_%") or (not use_legacy_protection and effective_simple_atr_sl_enabled and not hold_all_reverse):
+                            atr_entry_value = float(df["atr"].iloc[-2])
+                            if not np.isfinite(atr_entry_value) or atr_entry_value <= 0:
+                                # Priority MUST mirror _calculate_r96_protection_prices():
+                                # ATR -> ROI -> FALLBACK, otherwise entry size is computed
+                                # from a different stop than the one actually installed.
+                                if not use_legacy_protection and simple_roi_sl_enabled:
+                                    entry_sl_price_fraction = self.target_to_price_fraction(roi_sl_target, "ROI_%", leverage)
+                                    self.log("ATR SL unavailable: using configured normal ROI SL for entry sizing.")
+                                elif not use_legacy_protection and fallback_sl_enabled:
+                                    entry_sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
+                                    self.log("ATR SL unavailable: using configured fallback ROI SL for entry sizing.")
+                                else:
+                                    raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
+                            else:
+                                entry_sl_price_fraction = (atr_entry_value * (ai_effective_atr_sl_mult if ai_management_active else atr_sl_mult) / close)
+                                if entry_sl_price_fraction <= 0:
+                                    raise RuntimeError("ATR_DYNAMIC_SL_DISTANCE_INVALID")
+
+                        liq_safe_limit = liq_safe_move(leverage, liq_buffer)
+                        if entry_sl_price_fraction >= liq_safe_limit and entry_sl_price_fraction > 1e-6:
+                            _log_entry_block_once(
+                                "LIQ_BUFFER_GUARD",
+                                f"ENTRY BLOCKED (liquidation buffer): resolved SL distance {entry_sl_price_fraction * 100:.3f}% "
+                                f"is not {liq_buffer:g}x inside liquidation (limit {liq_safe_limit * 100:.3f}% at {leverage}x). "
+                                "Lower leverage, tighten the ATR multiplier, or reduce the buffer.",
+                                closed_candle_ts,
+                            )
+                            cycle_elapsed = time.time() - cycle_start
+                            time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                            continue
+
+                        if cost_gate_enabled and entry_sl_price_fraction > 1e-6:
+                            _tp1_est = None
+                            if tp_engine_enabled and tp1_enabled and not hold_all_reverse and not use_legacy_protection:
+                                if effective_atr_tp_enabled:
+                                    _tp1_est = entry_sl_price_fraction * float(ai_effective_atr_tp1_mult if ai_management_active else atr_tp1_mult)
+                                else:
+                                    _tp1_est = float(tp1_roi) / 100.0 / float(leverage)
+                            _cost_reason = cost_gate_reason(entry_sl_price_fraction, _tp1_est, taker_fee_pct)
+                            if _cost_reason:                                _log_entry_block_once(
+                                    "COST_GATE",
+                                    f"ENTRY BLOCKED (cost gate): {_cost_reason}. Fees would eat the edge; use a higher timeframe "
+                                    "or a wider stop, or turn the cost gate OFF.",
+                                    closed_candle_ts,
+                                )
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
+
+                        entry_qty = (
+                            self.calculate_entry_qty(
+                                self.symbol,
+                                curr_balance,
+                                close,
+                                ai_effective_risk_pct,
+                                entry_sl_price_fraction,
+                                size_mode,
+                                fixed_qty,
+                                leverage=leverage,
+                            )
+                        )
+
+                        if use_legacy_protection and sl_mode == "RISK_%" and not hold_all_reverse and curr_balance > 0:
+                            _risk_sl_frac = (float(curr_balance) * float(risk_pct) / 100.0) / (float(entry_qty) * float(close))
+                            _risk_liq_limit = liq_safe_move(leverage, liq_buffer)
+                            if _risk_sl_frac >= _risk_liq_limit:
+                                _log_entry_block_once(
+                                    "LIQ_BUFFER_GUARD",
+                                    f"ENTRY BLOCKED (liquidation buffer): RISK_% SL for Qty={entry_qty:g} would be "
+                                    f"{_risk_sl_frac * 100:.3f}% away, beyond the {_risk_liq_limit * 100:.3f}% liquidation-safe limit "
+                                    f"at {leverage}x. Increase Fixed Qty or lower Risk Per Trade / leverage.",
+                                    closed_candle_ts,
+                                )
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
+
+                        self.log(
+                            f"ENTRY {desired_side}: "
+                            f"Requested Qty={entry_qty}"
+                        )
+
+                        try:
+                            self._execution_quality_snapshot(
+                                self.symbol,
+                                signal,
+                                float(entry_qty),
+                                float(close),
+                            )
+                        except Exception as _exec_gate_error:
+                            _log_entry_block_once(
+                                "EXECUTION_QUALITY_GATE",
+                                f"ENTRY BLOCKED: {_exec_gate_error}",
+                                closed_candle_ts,
+                            )
+                            cycle_elapsed = time.time() - cycle_start
+                            time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                            continue
+
+                        # PRE-ENTRY TP SPLIT SAFETY:
+                        # FIXED_QTY means literal exchange quantity, not %.
+                        # Validate before sending the market order so a bad
+                        # TP split can never create an unprotected position.
+                        if not self._runtime_gui_value("v_hold_until_all_reverse"):
+                            if (
+                                tp_engine_enabled
+                                and tp1_enabled
+                                and tp2_enabled
+                                and tp_qty_mode == "FIXED_QTY"
+                            ):
+                                requested_tp1 = self.safe_amount(
+                                    self.symbol,
+                                    tp1_close_value,
+                                )
+                                requested_tp2 = self.safe_amount(
+                                    self.symbol,
+                                    tp2_close_value,
+                                )
+                                requested_entry_qty = self.safe_amount(
+                                    self.symbol,
+                                    entry_qty,
+                                )
+                                if abs(
+                                    (requested_tp1 + requested_tp2)
+                                    - requested_entry_qty
+                                ) > 1e-12:
+                                    raise ValueError(
+                                        "FIXED_QTY TP split is invalid BEFORE entry. "
+                                        f"Requested entry Qty={requested_entry_qty:g}, "
+                                        f"but TP1={requested_tp1:g} + TP2={requested_tp2:g}. "
+                                        "Use PERCENT_% with values such as 50 + 50 "
+                                        "for a 50/50 split, or set FIXED_QTY values "
+                                        "whose sum equals the entry quantity."
+                                    )
+
+                        if (
+                            not self._runtime_gui_value("v_hold_until_all_reverse")
+                            and tp_engine_enabled and tp1_enabled and tp2_enabled
+                            and tp_qty_mode == "PERCENT_%"
+                        ):
+                            try:
+                                self.calculate_tp_close_quantities(
+                                    self.symbol, entry_qty, tp_qty_mode,
+                                    tp1_close_value, tp2_close_value,
+                                )
+                            except RuntimeError as split_error:
+                                self.log(
+                                    f"ENTRY BLOCKED: position of {entry_qty:g} is too small to split "
+                                    f"into TP1/TP2 at the exchange lot size ({split_error}). "
+                                    "Increase equity/risk, or turn TP2 OFF."
+                                )
+                                cycle_elapsed = time.time() - cycle_start
+                                time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                continue
+
+                        try:
+                            new_position, actual_entry = (
+                                self.open_market_position(
+                                    self.symbol,
+                                    signal,
+                                    entry_qty,
+                                )
+                            )
+
+                            actual_qty = (
+                                new_position["qty"]
+                            )
+
+                            self.log(
+                                f"ACTUAL FILL: "
+                                f"{desired_side} | "
+                                f"Entry={actual_entry:.12g} | "
+                                f"Qty={actual_qty}"
+                            )
+
+                            # R6.8.7.2: the pre-entry order-book check is only a snapshot.
+                            # Verify the actual exchange average fill before SL/TP installation.
+                            self._post_fill_execution_safety_check(
+                                new_position,
+                                getattr(self, "execution_quality_last", None),
+                            )
+
+                            actual_position_margin = (
+                                new_position.get(
+                                    "initial_margin",
+                                    0.0,
+                                )
+                            )
+
+                            actual_position_leverage = (
+                                new_position.get(
+                                    "leverage",                                    0.0,
+                                )
+                            )
+
+                            if actual_position_margin > 0:
+                                self.log(
+                                    f"ACTUAL POSITION MARGIN: "
+                                    f"{actual_position_margin:.12g}"
+                                )
+
+                            if actual_position_leverage > 0:
+                                self.log(
+                                    f"ACTUAL POSITION LEVERAGE: "
+                                    f"{actual_position_leverage:.12g}x"
+                                )
+
+                            # ------------------------------------------------
+                            # Calculate protection from ACTUAL entry.
+                            # ------------------------------------------------
+                            (
+                                sl,
+                                tp1,
+                                tp2,
+                                sl_move,
+                                tp1_move,
+                                tp2_move,
+                                protection_source,
+                            ) = self._calculate_r96_protection_prices(
+                                self.symbol, desired_side, actual_entry, actual_qty,
+                                new_position.get("initial_margin", 0.0), leverage,
+                                atr_value=atr_entry_value, use_legacy=use_legacy_protection,
+                                hold_all_reverse=hold_all_reverse, hold_wait_reversal=hold_wait_reversal,
+                                simple_sl_enabled=simple_sl_enabled, simple_roi_sl_enabled=simple_roi_sl_enabled,
+                                roi_sl_target=roi_sl_target, simple_atr_sl_enabled=effective_simple_atr_sl_enabled,
+                                fallback_sl_enabled=fallback_sl_enabled, fallback_sl_roi=fallback_sl_roi,
+                                simple_tp_enabled=tp_engine_enabled, tp1_enabled=tp1_enabled, tp2_enabled=tp2_enabled,
+                                tp1_roi=tp1_roi, tp2_roi=tp2_roi, simple_atr_tp_enabled=effective_atr_tp_enabled,
+                                atr_sl_mult=(ai_effective_atr_sl_mult if ai_management_active else atr_sl_mult),
+                                atr_tp1_mult=(ai_effective_atr_tp1_mult if ai_management_active else atr_tp1_mult),
+                                atr_tp2_mult=(ai_effective_atr_tp2_mult if ai_management_active else atr_tp2_mult),
+                                legacy_sl_target=effective_sl_target_pct, legacy_tp1_target=tp1_target_pct,
+                                legacy_tp2_target=tp2_target_pct, legacy_sl_mode=effective_sl_mode,
+                                legacy_tp_mode=tp_mode, account_balance=curr_balance, risk_pct=(ai_effective_risk_pct if ai_management_active else risk_pct),
+                            )
+
+                            self._actual_liquidation_safety_check(
+                                new_position,
+                                sl,
+                                leverage=actual_position_leverage or leverage,
+                            )
+
+                            self.log(
+                                f"SL MODE: {effective_sl_mode} | TP MODE: {tp_mode}"
+                            )
+                            if ai_management_active:
+                                self.log(
+                                    f"AI EFFECTIVE RISK: {ai_effective_risk_pct:.3f}% | "
+                                    f"AI SL={ai_effective_atr_sl_mult:.2f} ATR | "
+                                    f"AI TP1={ai_effective_atr_tp1_mult:.2f}R | "
+                                    f"AI TP2={ai_effective_atr_tp2_mult:.2f}R"
+                                )
+                            elif sl_mode == "RISK_%":
+                                self.log(
+                                    f"FIXED QTY RISK SL: Budget={risk_pct:g}% of current balance | "
+                                    f"Actual Qty={actual_qty:g} | SL derived from actual fill"
+                                )
+                            if curr_balance > 0 and sl_move > 0:
+                                stop_risk_pct = (
+                                    float(actual_qty) * float(actual_entry) * float(sl_move)
+                                    / float(curr_balance) * 100.0
+                                )
+                                self.log(
+                                    f"ESTIMATED GROSS STOP RISK: {stop_risk_pct:.4f}% of current balance"
+                                )
+
+                            # Unified protection diagnostics: report the resolved source only;
+                            # never refer to an obsolete/unbound `use_atr_sl` variable.
+                            margin_for_roi = float(actual_position_margin or 0.0)
+                            def _roi_from_move(move):
+                                if move is None or float(move) <= 0:
+                                    return None
+                                if margin_for_roi > 0:
+                                    pnl_abs = abs(float(move)) * float(actual_entry) * float(actual_qty)
+                                    return (pnl_abs / margin_for_roi) * 100.0
+                                return abs(float(move)) * float(actual_position_leverage or leverage) * 100.0
+
+                            resolved_sl_roi = _roi_from_move(sl_move)
+                            resolved_tp1_roi = _roi_from_move(tp1_move)
+                            resolved_tp2_roi = _roi_from_move(tp2_move)
+                            self.log(
+                                f"PROTECTION RESOLVED: Source={protection_source} | "
+                                f"SL PriceMove={sl_move * 100:.4f}%"
+                                + (f" | SL ROI={resolved_sl_roi:.2f}%" if resolved_sl_roi is not None else "")
+                            )
+                            self.log(
+                                "TP RESOLVED: "
+                                + (f"TP1 PriceMove={tp1_move * 100:.4f}%" if tp1 is not None else "TP1=OFF")
+                                + (f" | TP1 ROI={resolved_tp1_roi:.2f}%" if resolved_tp1_roi is not None else "")
+                                + (f" | TP2 PriceMove={tp2_move * 100:.4f}%" if tp2 is not None else " | TP2=OFF")
+                                + (f" | TP2 ROI={resolved_tp2_roi:.2f}%" if resolved_tp2_roi is not None else "")
+                            )
+
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
+                                self.log(
+                                    f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
+                                    f"Hold SL={hold_sl_roi_pct:g}% ROI | "
+                                    "TP1/TP2 DISABLED (Hold-All-Reverse ON)"
+                                )
+                            else:
+                                self.log(
+                                    f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
+                                    f"TP1={(f'{tp1:.12g}' if tp1 is not None else 'OFF')} | "
+                                    f"TP2={(f'{tp2:.12g}' if tp2 is not None else 'OFF')} | Source={protection_source}"
+                                )
+
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
+                                self.log(
+                                    f"PRICE MOVE EQUIVALENTS: SL={sl_move * 100:.6g}% | "
+                                    "TP1/TP2 disabled"
+                                )
+                            else:
+                                self.log(
+                                    f"PRICE MOVE EQUIVALENTS: SL={sl_move * 100:.6g}% | "
+                                    f"TP1={(f'{tp1_move * 100:.6g}%' if tp1 is not None else 'OFF')} | "
+                                    f"TP2={(f'{tp2_move * 100:.6g}%' if tp2 is not None else 'OFF')}"
+                                )
+
+                            # ------------------------------------------------
+                            # Create protection.
+                            # ------------------------------------------------
+                            tp1_txt = f"{tp1:.12g}" if tp1 is not None else "OFF"
+                            tp2_txt = f"{tp2:.12g}" if tp2 is not None else "OFF"
+                            self.log(
+                                f"PROTECTION TARGETS | Side={desired_side} | "
+                                f"Entry={actual_entry:.12g} | PositionQty={actual_qty:g} | "
+                                f"SL={sl:.12g} | TP1={tp1_txt} | TP2={tp2_txt} | "
+                                f"TPQtyMode={tp_qty_mode} | TP1Close={tp1_close_value:g} | TP2Close={tp2_close_value:g}"
+                            )
+                            hold_wait_reversal = (
+                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
+                                and bool(self._runtime_gui_value("v_hold_sl_wait_reversal"))
+                            )
+                            self.hold_sl_wait_reversal = hold_wait_reversal
+                            self.hold_sl_threshold_hit = False
+                            self.hold_sl_threshold_logged = False
+
+                            if hold_wait_reversal:
+                                # Deliberately DO NOT place an exchange-side SL.
+                                # The calculated `sl` is retained as the ROI
+                                # threshold.  Once reached, the bot waits for
+                                # ALL active directional modules to reverse.
+                                created = []
+                                verified = True
+                                self.log(
+                                    f"HOLD-SL WAIT MODE ACTIVE: threshold={sl:.12g} "
+                                    f"({hold_sl_roi_pct:g}% ROI). NO exchange SL placed. "
+                                    + (
+                                        "Waiting for ALL active directional signals to reverse."
+                                        if str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() == "ALL_ACTIVE"
+                                        else f"Waiting for at least {int(self._runtime_gui_value('e_min_reverse_families', DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)} evidence families to reverse."
+                                    )
+                                )
+                            else:
+                                created = (
+                                    self.create_protection_orders(
+                                        self.symbol,
+                                        desired_side,
+                                        actual_qty,
+                                        sl,
+                                        tp1,
+                                        tp2,
+                                        tp_qty_mode,
+                                        tp1_close_value,
+                                        tp2_close_value,
+                                    )
+                                )
+
+                                # ------------------------------------------------
+                                # Verify protection.
+                                # ------------------------------------------------
+                                verified = (
+                                    self.verify_protection_orders(
+                                        self.symbol,
+                                        created,
+                                    )
+                                )
+
+                            if not verified:
+                                raise RuntimeError(
+                                    "One or more protection orders "
+                                    "could not be verified."
+                                )
+
+                            # In Hold-SL WAIT mode, `created` is intentionally empty
+                            # because there is NO exchange-side SL.  Keep the
+                            # protection state valid without requiring an order ID.
+                            sl_order = next(
+                                (order for label, order in created if label == "SL"),
+                                None,
+                            )
+                            tp1_order = next(
+                                (order for label, order in created if label == "TP1"), None
+                            )
+                            tp2_order = next(
+                                (order for label, order in created if label == "TP2"), None
+                            )
+
+                            self.last_protected_position = {
+                                "side": desired_side,
+                                "qty": actual_qty,
+                                "entry": actual_entry,
+                                "sl": sl,
+                                "initial_sl": sl,
+                                "initial_sl_move": abs(actual_entry - sl) / max(actual_entry, 1e-12) if actual_entry > 0 and sl > 0 else 0.0,
+                                "tp1": tp1,
+                                "tp2": tp2,
+                                "sl_id": sl_order.get("id") if sl_order else None,
+                                "tp1_id": tp1_order.get("id") if tp1_order else None,
+                                "tp2_id": tp2_order.get("id") if tp2_order else None,
+                                "entry_order_id": self.current_entry_order_id,
+                                "tp1_qty": float(tp1_order.get("amount") or 0.0) if tp1_order else 0.0,
+                                "tp2_qty": float(tp2_order.get("amount") or 0.0) if tp2_order else 0.0,
+                                "tp_qty_mode": str(tp_qty_mode),
+                                "tp1_close_value": float(tp1_close_value),
+                                "tp2_close_value": float(tp2_close_value),
+                                "tp_orders_enabled": bool(tp1_order or tp2_order),
+                                "protection_contract_version": "R6.7",
+                                "protection_expected_labels": [label for label, _ in created],
+                                "hold_sl_wait_reversal": hold_wait_reversal,
+                            }
+
+                            # Hard execution invariant: the exchange-reported SL must cover the
+                            # entire live position before this trade is considered protected.
+                            self._verify_protection_coverage(
+                                {"side": desired_side, "qty": actual_qty, "entry": actual_entry},
+                                self.last_protected_position,
+                            )
+
+                            # Crash window hardening: checkpoint the live position/protection identity
+                            # immediately after verification, before Telegram/CSV/accounting calls.
+                            self._persist_runtime_state(status="RUNNING")
+
+                            self.tp1_be_done = False
+                            self.tp1_be_enabled = bool(self._runtime_gui_value("v_tp1_be", True)) and bool(tp_engine_enabled and tp1_enabled and not hold_all_reverse)
+                            # A fresh position is now active; any previous post-exit
+                            # lock has already been cleared or satisfied.
+                            self.reentry_direction_lock = None
+                            self.reentry_lock_reason = ""
+                            if hold_wait_reversal or self._runtime_gui_value("v_hold_until_all_reverse"):
+                                self.log(
+                                    "TP1 BREAK-EVEN: DISABLED BY HOLD-ALL-REVERSE | "
+                                    "TP1/TP2 are disabled in this mode."
+                                )
+                            else:
+                                self.log(
+                                    "TP1 BREAK-EVEN: "
+                                    + (
+                                        "ON | TP1 fill will move the remaining SL to actual entry."
+                                        if self._runtime_gui_value("v_tp1_be")
+                                        else "OFF"
+                                    )
+                                )
+                            self.log(
+                                "========================================"
+                            )
+                            self.log(
+                                "POSITION MONITORED ✓"
+                                if hold_wait_reversal
+                                else "POSITION PROTECTED ✓"
+                            )
+                            self.log(
+                                f"{desired_side} Entry = {actual_entry:.12g}"
+                            )
+                            self.log(
+                                f"SL  = {sl:.12g}"
+                            )
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
+                                if hold_wait_reversal:
+                                    rule_text = (
+                                        "ALL active directional signals"
+                                        if str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper() == "ALL_ACTIVE"
+                                        else f"at least {int(self._runtime_gui_value('e_min_reverse_families', DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)} evidence families"
+                                    )
+                                    self.log(
+                                        "TP1/TP2 = DISABLED | Hold-SL WAIT mode: no exchange SL; "
+                                        f"ROI threshold is monitored and {rule_text} must reverse to exit."
+                                    )
+                                else:
+                                    self.log(
+                                        "TP1/TP2 = DISABLED | Hold-All-Reverse uses strategy reversal as the exit."
+                                    )
+                            else:
+                                self.log(f"TP1 = {tp1_txt}")
+                                self.log(f"TP2 = {tp2_txt}")
+                                if tp1 is not None or tp2 is not None:
+                                    self.log(
+                                        f"TP CLOSE = {tp_qty_mode} | "
+                                        f"TP1={tp1_close_value:g} | "
+                                        f"TP2={tp2_close_value:g}"
+                                    )
+                                else:
+                                    self.log("TP CLOSE = n/a | TP engine OFF: exchange SL only.")
+                            self.log(
+                                f"Qty = {actual_qty}"
+                            )
+                            self.log(
+                                "========================================"
+                            )
+
+                            self.log_trade_csv(
+                                time.strftime(
+                                    "%Y-%m-%d %H:%M:%S"
+                                ),
+                                self.exchange_id,
+                                self.symbol,
+                                "BUY"
+                                if desired_side == "LONG"
+                                else "SELL",
+                                actual_entry,
+                                actual_qty,
+                                sl,
+                                tp1,
+                                tp2,
+                                (
+                                    "Entry + Hold-SL WAIT monitoring | "
+                                    if hold_wait_reversal
+                                    else "Entry + verified protection | "
+                                )
+                                + f"SL_MODE={sl_mode} | TP_MODE={tp_mode} | "
+                                f"TP_QTY_MODE={tp_qty_mode} | "
+                                f"TP1_CLOSE={tp1_close_value:g} | "
+                                f"TP2_CLOSE={tp2_close_value:g}",
+                            )
+
+                            self.send_telegram(
+                                (
+                                    f"[{self.exchange_id.upper()}] "
+                                    f"{desired_side} {self.symbol}\n"
+                                    f"Actual Entry: {actual_entry}\n"
+                                    f"Qty: {actual_qty}\n"
+                                    f"SL Mode: {sl_mode} | TP Mode: {tp_mode}\n"
+                                    f"SL: {sl}\n"
+                                    f"TP1: {tp1}\n"
+                                    f"TP2: {tp2}\n"
+                                    f"TP Close: {tp_qty_mode} "
+                                    f"TP1={tp1_close_value:g} "
+                                    f"TP2={tp2_close_value:g}\n"
+                                    f"Protection: {'WAIT-MONITORED (NO EXCHANGE SL)' if hold_wait_reversal else 'VERIFIED'}"
+                                )
+                            )
+
+                            self.last_entry_candle_ts = int(df["time"].iloc[-2])
+                            self._begin_performance_trade(
+                                desired_side, actual_entry, actual_qty, curr_balance
+                            )
+                            self.log(
+                                f"TRADE OPENED | Completed={self.total_trades} | "
+                                f"Opened={self.opened_trades}"
+                            )
+
+                        except Exception as trade_error:
+                            self.log(
+                                f"TRADE/PROTECTION ERROR: "
+                                f"{trade_error}"
+                            )
+
+                            # ------------------------------------------------
+                            # SAFETY: If a position exists but protection
+                            # failed, cancel orphan orders and close it.
+                            # ------------------------------------------------
+                            try:
+                                recovery_pos = (
+                                    self.fetch_position(
+                                        self.symbol
+                                    )
+                                )
+
+                                if recovery_pos:
+                                    self.cancel_all_open_orders(
+                                        self.symbol
+                                    )
+
+                                    self.close_position_market(
+                                        self.symbol,
+                                        recovery_pos["side"],
+                                        recovery_pos["qty"],
+                                    )
+
+                                    self.log(
+                                        "Unprotected position "
+                                        "closed by safety recovery."
+                                    )
+
+                            except Exception as recovery_error:
+                                self.log(
+                                    "!!! CRITICAL RECOVERY ERROR !!! "
+                                    f"{recovery_error}"
+                                )
+
+                    self.consecutive_cycle_errors = 0
+
+                    # ------------------------------------------------
+                    # 8. Update dashboard
+                    # ------------------------------------------------
+                    decided_trades = self.winning_trades + self.losing_trades
+                    win_rate = (
+                        self.winning_trades
+                        / decided_trades
+                        * 100
+                        if decided_trades > 0
+                        else 0.0
+                    )
+
+                    try:
+                        self.root.after(
+                            0,
+                            lambda pnl=self.net_pnl,
+                            start=self.start_balance,
+                            curr=curr_balance,
+                            trades=self.total_trades,
+                            wins=self.winning_trades,
+                            losses=self.losing_trades,
+                            wr=win_rate: self.lbl_pnl.config(
+                                text=(
+                                    f"Start Balance: ${start:.4f} | "
+                                    f"Current Balance: ${curr:.4f} | "
+                                    f"Net PnL: ${pnl:.2f} | "
+                                    f"Trades: {trades} | "
+                                    f"Wins: {wins} | "
+                                    f"Losses: {losses} | "
+                                    f"Win Rate: {wr:.1f}%"
+                                )
+                            ),
+                        )
+                    except Exception:
+                        pass
+
+                    if (
+                        self.session_max_trades > 0
+                        and self.total_trades >= self.session_max_trades
+                    ):
+                        self.log(
+                            f"TRADE LIMIT REACHED: {self.total_trades} completed trades. "
+                            "Stopping execution safely."
+                        )
+                        # This branch runs in the worker thread. stop_bot()
+                        # touches Tk widgets and must not be called here.
+                        self.is_running = False
+                        break
+
+                except Exception as cycle_error:
+                    if self._is_transient_exchange_error(cycle_error):
+                        self.consecutive_cycle_errors += 1
+                        self.log(
+                            f"Transient exchange/API cycle error "
+                            f"{self.consecutive_cycle_errors}/{MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS}: "
+                            f"{cycle_error} | No new entry will be attempted this cycle."
+                        )
+                        if self.consecutive_cycle_errors >= MAX_CONSECUTIVE_TRANSIENT_CYCLE_ERRORS:
+                            self.runtime_last_error = (
+                                f"Persistent transient exchange/API failure: {cycle_error}"
+                            )
+                            self.log(
+                                "CRITICAL: persistent exchange/API failure limit reached; "
+                                "bot halted fail-closed."
+                            )
+                            self.is_running = False
+                            break
+                    else:
+                        self.consecutive_cycle_errors += 1
+                        self.log(
+                            f"Execution cycle error "
+                            f"{self.consecutive_cycle_errors}/{MAX_CONSECUTIVE_CYCLE_ERRORS}: "
+                            f"{cycle_error}"
+                        )
+                        if self.consecutive_cycle_errors >= MAX_CONSECUTIVE_CYCLE_ERRORS:
+                            self.runtime_last_error = f"Consecutive cycle safety halt: {cycle_error}"
+                            self.log("CRITICAL: consecutive cycle error limit reached; bot halted fail-closed.")
+                            self.is_running = False
+                            break
+
+                # ------------------------------------------------
+                # 9. Persistent checkpoint + 30-second scan
+                # ------------------------------------------------
+                # The checkpoint is written after every completed execution
+                # cycle.  If Windows kills the process or an exchange call
+                # stalls, the next launch can recover the most recent stage
+                # rather than starting from an empty in-memory state.
+                if self.is_running:
+                    try:
+                        # Save the current GUI configuration from Tk's main
+                        # thread, then checkpoint the in-memory runtime state.
+                        self.root.after(0, self._checkpoint_gui_config)
+                    except Exception:
+                        self._persist_runtime_state(status="RUNNING")
+
+                elapsed = (
+                    time.time()
+                    - cycle_start
+                )
+
+                remaining = max(
+                    0,
+                    30 - elapsed,
+                )
+
+                end_time = (
+                    time.time()
+                    + remaining
+                )
+
+                while (
+                    self.is_running
+                    and time.time() < end_time
+                ):
+                    self._write_kill_switch_heartbeat(status="RUNNING")
+                    if self._consume_remote_stop_request():
+                        self.is_running = False
+                        break
+                    time.sleep(1)
+
+        except Exception as fatal_error:
+            self.runtime_last_error = str(fatal_error)
+            self.log(
+                f"BOT FATAL ERROR: {fatal_error}"
+            )
+
+        finally:
+            self.is_running = False
+            try:
+                self._write_kill_switch_heartbeat(status="STOPPING")
+                # This runs for normal stop, trade-limit stop, safety halt, and
+                # unexpected worker exceptions. The independent watchdog covers
+                # the harder case where the whole Python process disappears.
+                if not self.kill_switch_completed:
+                    self._activate_kill_switch(
+                        "WORKER HALT" if not self.runtime_last_error else f"WORKER CRASH/SAFETY HALT: {self.runtime_last_error}"
+                    )
+                else:
+                    self.log("FINAL KILL SWITCH: already verified FLAT + NO OPEN ORDERS; skipping duplicate flatten.")
+            except Exception as kill_error:
+                self.log(f"FINAL KILL SWITCH WARNING: {kill_error}")
+            try:
+                self._clear_profile_control(self.bot_profile_id)
+            except Exception:
+                pass
+
+            try:
+                live_position = None
+                if self.exchange and self.symbol:
+                    try:
+                        live_position = self.fetch_position(self.symbol)
+                    except Exception as final_position_error:
+                        self.log(
+                            f"FINAL POSITION CHECK WARNING: {final_position_error}"
+                        )
+                final_status = (
+                    "STOPPED"
+                    if self.kill_switch_completed and self.stop_requested
+                    else ("CRASHED" if self.runtime_last_error else "STOPPED")
+                )
+                if live_position:
+                    self.log(
+                        "CRITICAL: kill switch completed but exchange still reports a live position; "
+                        "watchdog/retry protection remains armed."
+                    )
+                self._persist_runtime_state(
+                    status=final_status,
+                    last_error=self.runtime_last_error or None,
+                )
+                try:
+                    end_balance = self.fetch_balance_total() if self.exchange else None
+                except Exception:
+                    end_balance = None
+                self._db_session_end(
+                    final_status,
+                    end_balance=end_balance,
+                    notes=self.runtime_last_error or "Bot execution thread halted.",
+                )
+            except Exception as state_error:
+                self.log(f"FINAL RUNTIME STATE WARNING: {state_error}")
+
+            try:
+                self.root.after(
+                    0,
+                    self._on_worker_finished,
+                )
+            except Exception:
+                # The GUI may already be closing. Release the lock directly
+                # because no second bot can safely start once this worker exits.
+                self._release_symbol_lock()
+                self._release_profile_lock()
+
+            self.log(
+                "Bot execution thread halted."
+            )
+            self._release_symbol_lock()
+            self._release_profile_lock()
+
+
+# -------------------- MAIN ----------------------------------
+
+if __name__ == "__main__":
+    # Independent crash watchdog mode. It intentionally runs without Tk so it
+    # can survive a GUI/process crash and flatten the bot-owned symbol.
+    if "--kill-switch-watchdog" in sys.argv:
+        try:
+            idx = sys.argv.index("--kill-switch-watchdog")
+            profile = sys.argv[idx + 1]
+            parent_pid = int(sys.argv[idx + 2])
+            _run_kill_switch_watchdog(profile, parent_pid)
+        except Exception as e:
+            try:
+                profile = sys.argv[sys.argv.index("--kill-switch-watchdog") + 1]
+            except Exception:
+                profile = "BOT-01"
+            _, _, _, _, _, log_path = _kill_switch_profile_paths(profile)
+            _kill_switch_log(log_path, f"WATCHDOG FATAL ERROR | {e}")
+    else:
+        root = tk.Tk()
+        app = UniversalFuturesBotGUI(root)
+        root.mainloop()
