@@ -1,3 +1,13 @@
+# R6.8.7.2 — 2026-09-29
+
+## Fixed
+- Activated the existing bounded AI ATR trailing stop after TP1/break-even.
+- Added post-fill execution-quality verification using the actual exchange-reported average entry.
+- Preserved fail-closed recovery when the actual fill exceeds the configured slippage envelope.
+- Full contract and configuration audit completed.
+
+See docs/R6.8.7.2_FULL_AUDIT.md.
+
 ## 2026-09-29 — Crypto AI-Agent R6.8 Fixed Engine / Safety Hotfix
 
 ### Fixed
