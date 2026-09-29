@@ -98,8 +98,8 @@ from pathlib import Path
 #  8. ADDED pre-entry PERCENT_% TP split check (tiny position skips entry instead of open-then-close).
 #  9. FIXED "EMERGENCY" log on normal strategy reversals; FIXED TP1 missing-order log spam after a fill.
 # R6.8.7.2.1: activated AI trailing execution + post-fill execution-quality guard + audit hardening.
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2.1.1"
-APP_TITLE = "Universal Futures Bot V8.4.2-AI-AGENT-R6.8.7.2.1.1 - Execution-Safety + AI Council 2.0"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2.1"
+APP_TITLE = "Universal Futures Bot V8.4.2-AI-AGENT-R6.8.7.2.1 - Execution-Safety + AI Council 2.0"
 AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.8.7.2.1-EXECUTION-SAFETY-AI2-TRAIL-FILL-GUARD"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
