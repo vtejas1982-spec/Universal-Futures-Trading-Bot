@@ -770,3 +770,22 @@ Strategy modules, evidence families, AI-Agent gates, MTF/ADX/Volume/ATR regime f
 Validation: AST parse, bytecode compile, module import, GUI callback audit, configuration-contract audit, AI decision smoke tests, TP split smoke tests, and completed-candle Volume/SR smoke test all pass locally.
 
 The remaining operational validation is Bybit Demo: open a small position and verify the actual SL + TP1 + TP2 conditional orders remain active and behave as configured.
+
+
+## Crypto AI-Agent R6.8 — Strategy / Risk Hardening (2026-09-29)
+
+### What changed
+- Added a conservative equity-risk notional guard: calculated risk-sized entries are capped at 95% of Balance x Leverage when a very tight stop would otherwise create excessive notional.
+- FIXED_QTY never silently resizes; if the requested fixed quantity exceeds the conservative leverage/notional capacity, the entry fails closed.
+- AI-Agent blocked-signal diagnostics now include per-family dominant direction and confidence, making FAMILIES_x/3, TREND_REQUIRED, STRUCTURE_REQUIRED, EDGE and gate failures easier to diagnose.
+- Retained the completed-candle Volume/SR fix and feature-aware SL/TP validation from R6.7.
+- Retained actual-fill protection, ACK/verification, rollback, reconciliation and TP1 break-even safety.
+
+### Audit coverage
+Strategy/evidence-family logic, AI-Agent gates, MTF/ATR/Volume/ADX filters, risk sizing, emergency controls, SL/TP ownership, TP quantity accounting, GUI callbacks, defaults and profile persistence were rechecked.
+
+### Diagnostic example
+Blocked AI logs can now expose FAMILY_DETAIL=TREND:SELL:0.82|MOMENTUM:SELL:0.67|FLOW:NONE:0.00|STRUCTURE:SELL:0.58. This does not relax any entry gate; it only makes the deterministic decision auditable.
+
+### Validation
+AST parse: PASS. py_compile: PASS. Static strategy/protection/configuration audit: PASS. Bare-container import was not available because ccxt is not installed there. Bybit Demo remains the final exchange-side validation environment.
