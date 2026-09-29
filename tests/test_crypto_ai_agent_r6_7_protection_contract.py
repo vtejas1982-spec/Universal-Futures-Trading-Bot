@@ -114,3 +114,16 @@ def test_r67_ai_runtime_log_uses_configured_values():
     assert 'f"AI Edge>={ai_min_edge:.2f}' in source
     assert 'f"AI FamilyConfidence>={ai_family_confidence:.2f}' in source
     assert 'f"AI MaxConflicts={ai_max_conflicts}' in source
+
+
+def test_r68_risk_notional_cap_is_present():
+    source = _source()
+    assert 'RISK_NOTIONAL_UTILIZATION_CAP = 0.95' in source
+    assert 'RISK NOTIONAL CAP' in source
+    assert 'leverage=None' in source
+
+
+def test_r68_ai_block_diagnostics_include_family_confidence():
+    source = _source()
+    assert 'FAMILY_DETAIL=' in source
+    assert "data['confidence']:.2f" in source
