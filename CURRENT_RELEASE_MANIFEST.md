@@ -89,3 +89,17 @@ Strategy and evidence-family decision logic; completed-candle consistency includ
 No unresolved missing GUI callback, undefined runtime protection setting, or broken AI gate was found in the audited engine. One live-strategy timing inconsistency was fixed: Volume/SR now uses confirmed candles only.
 
 Exchange-side Bybit Demo validation remains mandatory before Live.
+
+
+## R6.8 Release — 2026-09-29
+
+- Engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.py
+- Build script: BUILD_CRYPTO_AI_AGENT_R6.8_EXE.bat
+- Tests: tests/test_crypto_ai_agent_r6_8_contract.py
+- Config schema remains 23; no new persistent GUI field was introduced.
+- Runtime schema remains 24; no new checkpoint field was introduced.
+
+### R6.8 audit
+Strategy/evidence-family logic, AI-Agent confidence/edge/family/trend/structure/MTF gates, risk sizing, fixed quantity fail-closed behavior, SL/TP ownership, TP quantity accounting, GUI callbacks/defaults/save-load and the R6.7 completed-candle Volume/SR correction were checked.
+
+Source-level checks pass. Bybit Demo order behavior remains the final operational validation before Live.
