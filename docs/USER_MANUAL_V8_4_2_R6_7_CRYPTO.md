@@ -292,3 +292,12 @@ Volume/SR is now explicitly completed-candle only in the live worker. The newest
 - The normal protection resolver still owns exactly one SL basis at a time: Hold-SL/WAIT, then ATR, then ROI, then Fallback.
 - TP uses ATR multipliers only when ATR TP is enabled; otherwise it uses the configured ROI targets.
 - The exchange-side SL protects the full live position; TP1/TP2 are separate reduce-only exits whose quantities account for the actual filled position.
+
+
+## R6.8 notes — 2026-09-29
+
+- Equity-risk sizing has a conservative 95% Balance x Leverage notional guard.
+- Fixed quantity mode fails closed if the requested quantity exceeds that capacity; it is not silently resized.
+- AI-Agent blocked diagnostics now show per-family direction and confidence in FAMILY_DETAIL.
+- No AI entry threshold was relaxed.
+- Existing R6.7 completed-candle Volume/SR, SL/TP protection, TP split and break-even contracts remain active.
