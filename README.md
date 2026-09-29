@@ -1,3 +1,35 @@
+## Current Crypto AI-Agent R6.8.7.2 release — 2026-09-29
+
+The current audited deterministic Crypto AI-Agent engine is V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2.
+
+### R6.8.7.2 fixes
+
+- Activated the existing AI ATR trailing stop. The implementation existed in R6.8.7.1 but was not invoked by the live position loop. It now runs after TP1/break-even processing and can only tighten the existing SL.
+- Added a post-fill execution-quality guard. Pre-entry order-book checks are snapshots; the actual exchange average fill is now checked against the pre-entry executable bid/ask before SL/TP installation.
+- Fail-closed bad-fill recovery. A materially bad fill raises into the existing recovery path, which cancels orphan orders and closes the position.
+- Preserved the R6.8.7 execution-safety contract: spread, projected slippage, order-book depth, candle drift, actual liquidation/mark checks, protection-quantity coverage, symbol ownership and persistent kill latch.
+- Preserved the AI Council 2.0 contract: family-normalized edge, purity + participation, Trend/Structure requirements, regime gates outside directional voting, and ambiguous-candle blocking.
+- Preserved the 5x recommended AI preset, 0.35% baseline risk, 3-family minimum, 0.20 edge, 0.55 family confidence, 0.35 participation and max 1 family conflict.
+
+### Validation
+
+- AST parse: PASS
+- Python bytecode compile: PASS
+- 8 focused R6.8.7.2 contract tests: PASS
+- Preset/save configuration coverage: PASS
+- No missing self method calls found by static audit
+- Backtester compile: PASS
+
+### Files
+
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.2.py
+- UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.2_BACKTESTER.py
+- tests/test_crypto_ai_agent_r6_8_7_2_contract.py
+- docs/R6.8.7.2_FULL_AUDIT.md
+- docs/R6.8.7.2_CHANGELOG.md
+
+This is an engineering hardening release. It does not guarantee profitability or live-exchange execution. Run the exact build on Bybit Demo/Testnet before Live.
+
 ## Current Crypto AI-Agent R6.7 release — 2026-09-29
 
 The current deterministic Crypto AI-Agent maintenance release is **V8.4.2-CRYPTO-AI-AGENT-R6.7**.
