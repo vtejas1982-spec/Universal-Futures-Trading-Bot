@@ -1,3 +1,26 @@
+## 2026-09-29 — Crypto AI-Agent R6.8 Fixed Engine / Safety Hotfix
+
+### Fixed
+- Corrected R6.8 Python syntax hazards in nested same-quote f-strings.
+- Prevented TP1/TP2 success logging from crashing when a TP is disabled (None).
+- Enforced the configured Risk Per Trade as a hard upper ceiling for AI dynamic risk management.
+- Made ATR-unavailable entry sizing follow the same SL resolution order as the installed protection: ATR -> normal ROI -> fallback ROI.
+- Added liquidation-distance guards to resolver, startup preflight, and pre-entry sizing.
+- Added pre-entry percentage TP split lot-size validation so a tiny position is blocked before an exchange order is opened.
+- Stopped normal strategy/Grid reversals from being labelled as emergency closes.
+- Prevented TP1 reconciliation from repeatedly treating an already-filled TP1 as a missing order.
+
+### Added / Modified
+- R6.8 protection display uses safe OFF values when TP levels are disabled.
+- Worker-thread Tk activity now goes through the GUI UI queue instead of calling Tk directly.
+- Protection runtime metadata is consistently marked R6.8.
+- Expanded the R6.8 contract regression tests for risk, liquidation safety, TP split protection, TP1 reconciliation and worker-thread safety.
+
+### Validation
+- Local Python bytecode compilation: PASS.
+- Worker-thread Tk static audit: PASS.
+- Hotfix contract static checks: PASS.
+
 ## 2026-09-29 — Crypto AI-Agent R6.7 Full-Contract Audit Hotfix
 
 ### Fixed
