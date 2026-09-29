@@ -46,9 +46,9 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.7"
-APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.7 - Crypto Production Engine"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.7-PROTECTION-ENGINE-AUDIT-FULL-CONTRACT-AUDIT"
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8"
+APP_TITLE = "Universal Futures Trading Bot V8.4.2-AI-AGENT-R6.8 - Crypto Production Engine"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-29-R6.8-STRATEGY-RISK-PROTECTION-HARDENING"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -110,6 +110,8 @@ AI_AGENT_MIN_FAMILY_CONFIDENCE = 0.55
 AI_AGENT_REQUIRE_TREND = True
 AI_AGENT_REQUIRE_STRUCTURE = True
 AI_AGENT_MAX_CONFLICTING_FAMILIES = 1
+# R6.8 conservative notional guard for equity-risk sizing.
+RISK_NOTIONAL_UTILIZATION_CAP = 0.95
 AI_AGENT_RISK_PER_TRADE = "0.35"
 AI_AGENT_ATR_SL_MULT = 1.8
 AI_AGENT_FALLBACK_SL_ROI = 30.0
@@ -1816,6 +1818,13 @@ class StrategyEngine:
                 fams = result["bull_families"] if result["bull_families"] else result["bear_families"]
 
             blocks=[f"DOMINANT={dominant_side}"]
+            family_detail = "|".join(
+                f"{family}:{data['dominant']}:{data['confidence']:.2f}"
+                for family, data in result["families"].items()
+                if data["total"] > 0
+            )
+            if family_detail:
+                blocks.append(f"FAMILY_DETAIL={family_detail}")
             effective_min_families = AI_AGENT_MIN_FAMILIES if ai_min_families is None else int(ai_min_families)
             effective_min_edge = AI_AGENT_MIN_EDGE if ai_min_edge is None else float(ai_min_edge)
             effective_max_conflicts = AI_AGENT_MAX_CONFLICTING_FAMILIES if ai_max_conflicting_families is None else int(ai_max_conflicting_families)
@@ -8201,6 +8210,7 @@ class UniversalFuturesBotGUI:
         sl_price_fraction,
         size_mode,
         fixed_qty,
+        leverage=None,
     ):
         mode = str(size_mode).strip().upper()
         if mode == "FIXED_QTY":
@@ -8235,6 +8245,29 @@ class UniversalFuturesBotGUI:
                 "Calculated quantity is below "
                 "the exchange minimum/precision."
             )
+
+        # R6.8: prevent an extremely tight stop from creating notional above
+        # the account's conservative leverage capacity.
+        lev = float(leverage) if leverage is not None else 0.0
+        if balance > 0 and reference_price > 0 and lev > 0:
+            max_notional = float(balance) * lev * RISK_NOTIONAL_UTILIZATION_CAP
+            requested_notional = qty * float(reference_price)
+            if requested_notional > max_notional:
+                if mode == "FIXED_QTY":
+                    raise RuntimeError(
+                        f"FIXED_QTY notional exceeds the conservative leverage cap: "
+                        f"requested={requested_notional:g}, cap={max_notional:g}. "
+                        "Reduce Fixed Qty or leverage the account appropriately."
+                    )
+                capped_qty = self.safe_amount(symbol, max_notional / float(reference_price))
+                if capped_qty <= 0:
+                    raise RuntimeError("Leverage/notional cap reduced quantity below exchange minimum.")
+                self.log(
+                    f"RISK NOTIONAL CAP | RequestedQty={qty:g} | FinalQty={capped_qty:g} | "
+                    f"RequestedNotional={requested_notional:g} | Cap={max_notional:g} | "
+                    f"Leverage={lev:g}x | Utilization={RISK_NOTIONAL_UTILIZATION_CAP:.0%}"
+                )
+                qty = capped_qty
 
         if balance > 0 and sl_price_fraction > 0:
             actual_risk_pct = (
@@ -12785,6 +12818,10 @@ class UniversalFuturesBotGUI:
                 f"SIZING MODE: {size_mode} | "
                 + (f"Risk={risk_pct:g}%" if risk_sizing_enabled else f"FixedQty={fixed_qty:g} | Risk Per Trade NOT used for entry size")
             )
+            self.log(
+                f"RISK NOTIONAL CAP: {RISK_NOTIONAL_UTILIZATION_CAP:.0%} of Balance x Leverage | "
+                "Equity-risk sizing caps safely; FIXED_QTY fails closed if oversized."
+            )
             self.log(f"HOLD-ALL-REVERSE: {'ON' if hold_all_reverse else 'OFF'} | ReverseExit={reverse_exit_mode} | MinReverseFamilies={min_reverse_families}")
 
             if hold_all_reverse:
@@ -14313,6 +14350,7 @@ class UniversalFuturesBotGUI:
                                 entry_sl_price_fraction,
                                 size_mode,
                                 fixed_qty,
+                                leverage=leverage,
                             )
                         )
 
