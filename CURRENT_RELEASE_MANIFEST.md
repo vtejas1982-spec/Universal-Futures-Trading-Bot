@@ -1,3 +1,16 @@
+# Current Release Manifest — R6.8.7.2
+
+## Crypto AI Agent
+- Release: V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2
+- Live engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.2.py
+- Backtester: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.2_BACKTESTER.py
+- Config schema: 27
+- AI preset: AI_AGENT_RECOMMENDED_R6.8.7.2
+- Primary fixes: AI trailing-stop activation; post-fill execution-quality guard; fail-closed bad-fill recovery.
+- Contract tests: tests/test_crypto_ai_agent_r6_8_7_2_contract.py
+- Audit: docs/R6.8.7.2_FULL_AUDIT.md
+- Changelog: docs/R6.8.7.2_CHANGELOG.md
+
 ## R6.7 Crypto AI-Agent manifest update — 2026-09-29
 
 - Crypto live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py`
