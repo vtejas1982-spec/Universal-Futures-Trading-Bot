@@ -52,7 +52,7 @@ R6.6 remains a deterministic rule-based AI-Agent council, not an external LLM. S
 # Universal Futures & Forex Trading Bot
 
 **Current production release: V8.4.2-R9.6**  
-**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.7**  
+**Crypto AI Agent engine: V8.4.2-CRYPTO-AI-AGENT-R6.8**  
 **Forex/MT5 AI Agent engine: V8.4.2-FOREX-AI-AGENT-R6.6**
 
 This repository is intentionally kept clean: the main branch contains the **current production engines**, not a pile of old V8.x copies. Historical snapshots belong in Git history/tags/releases.
@@ -62,7 +62,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 | Area | Live engine | Backtester |
 |---|---|---|
 | Crypto / Futures | `UniversalFuturesBot_CRYPTO_V8.4.2-R9.6.py` | — |
-| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.7.py` | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py` |
+| Crypto AI Agent | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.py` | `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.6_BACKTESTER.py` |
 | Forex / MT5 | `UniversalForexBot_MT5.py` | `UniversalForexBot_MT5_BACKTESTER.py` |
 
 ### Tests
@@ -72,6 +72,7 @@ This repository is intentionally kept clean: the main branch contains the **curr
 - `tests/test_forex_engine.py`
 - `tests/test_forex_ai_agent_r6_5_contract.py`
 - `tests/test_crypto_ai_agent_r6_7_protection_contract.py`
+- `tests/test_crypto_ai_agent_r6_8_contract.py`
 
 ### Build scripts
 
