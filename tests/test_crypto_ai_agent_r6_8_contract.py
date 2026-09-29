@@ -127,3 +127,43 @@ def test_r68_ai_block_diagnostics_include_family_confidence():
     source = _source()
     assert 'FAMILY_DETAIL=' in source
     assert "data['confidence']:.2f" in source
+
+
+def test_r68_fixed_hotfix_contracts_are_present():
+    source = _source()
+    assert "risk_ceiling = min(float(AI_AGENT_MAX_RISK_PCT), float(base_risk_pct))" in source
+    assert "SL_LIQUIDATION_SAFETY_FRACTION / float(leverage)" in source
+    assert 'liq_safe_limit = SL_LIQUIDATION_SAFETY_FRACTION / float(leverage)' in source
+    assert "TP CLOSE = n/a | TP engine OFF: exchange SL only." in source
+    assert 'tp1_txt = f"{tp1:.12g}" if tp1 is not None else "OFF"' in source
+    assert '"protection_contract_version": "R6.8"' in source
+
+
+def test_r68_worker_does_not_touch_tk_from_worker():
+    tree = ast.parse(_source())
+    gui = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "UniversalFuturesBotGUI")
+    worker = next(node for node in gui.body if isinstance(node, ast.FunctionDef) and node.name == "_run_bot_logic")
+    violations = []
+    for node in ast.walk(worker):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            target = node.func.value
+            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                if target.value.id == "self" and target.attr == "root" and node.func.attr == "after":
+                    violations.append("self.root.after")
+                if target.value.id == "self" and (target.attr.startswith("v_") or target.attr.startswith("e_")) and node.func.attr in {"get", "set", "delete", "insert"}:
+                    violations.append(f"self.{target.attr}.{node.func.attr}")
+    assert violations == []
+    assert "_post_ui(" in _source()
+
+
+def test_r68_tp1_reconciliation_distinguishes_filled_tp1_from_missing_tp1():
+    source = _source()
+    assert "tp1_probably_filled = False" in source
+    assert "current_qty <= orig_qty - 0.5 * tp1_qty" in source
+    assert "not tp1_probably_filled" in source
+
+
+def test_r68_no_same_quote_nested_fstring_hazard_in_protection_logs():
+    source = _source()
+    assert 'f"SL={sl:.12g} | TP1={(f"{tp1:.12g}"' not in source
+    assert 'f"TP2={(f"{tp2:.12g}"' not in source
