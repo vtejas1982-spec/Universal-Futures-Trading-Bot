@@ -1,3 +1,30 @@
+## Current Crypto AI-Agent R6.8.7.2.1 release — 2026-09-29
+
+The current audited deterministic Crypto AI-Agent engine is **V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2.1**.
+
+### R6.8.7.2.1 fixes
+- Added actual-fill drift validation after the market entry and before SL/TP installation.
+- The tradeability audit now explicitly distinguishes candle-history gate likelihood from live order-book execution gates.
+- Preserved the R6.8.7.2 active AI ATR trailing stop and post-fill slippage guard.
+- Preserved actual-fill protection, liquidation checks, TP split validation, AI Council 2.0, risk sizing and fail-closed recovery.
+
+### Validation
+- AST parse: PASS
+- Python bytecode compile: PASS
+- Engine import: PASS
+- AI Council smoke test: PASS
+- Static self-call audit: PASS
+- Backtester compile: PASS
+
+### Files
+- `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.2.1.py`
+- `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.2.1_BACKTESTER.py`
+- `backtest.py`
+- `docs/R6.8.7.2.1_FULL_AUDIT.md`
+- `docs/R6.8.7.2.1_CHANGELOG.md`
+
+This is an engineering hardening release, not a profitability guarantee. Run the exact build on Bybit Demo/Testnet before Live.
+
 ## Current Crypto AI-Agent R6.8.7.2 release — 2026-09-29
 
 The current audited deterministic Crypto AI-Agent engine is V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2.
