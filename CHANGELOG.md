@@ -1232,3 +1232,24 @@ AST parse: PASS. Bytecode compile: PASS. Module import: PASS. GUI callback audit
 
 ### Demo verification still required
 Confirm one full-position SL, TP1 and TP2 are visible as active Bybit conditional orders; confirm TP1 closes only its configured quantity and moves the remaining SL to break-even when enabled; confirm TP2 closes the remaining position.
+
+
+## 2026-09-29 — Crypto AI-Agent R6.8
+
+### Fixed / hardened
+- Added 95% Balance x Leverage notional protection for EQUITY_RISK_% sizing.
+- Oversized FIXED_QTY now fails closed instead of silently resizing.
+- Added per-family confidence/direction diagnostics to AI-Agent blocked decisions.
+- Retained R6.7 completed-candle Volume/SR correction and protection validation hardening.
+- Retained actual-fill SL/TP protection and exchange ACK/verification/reconciliation.
+
+### Added
+- Dedicated UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.py
+- Dedicated BUILD_CRYPTO_AI_AGENT_R6.8_EXE.bat
+- Dedicated tests/test_crypto_ai_agent_r6_8_contract.py
+
+### Strategy safety
+R6.8 does not lower AI family, edge, trend, structure, conflict, MTF, ATR, Volume or ADX requirements.
+
+### Validation
+AST parse: PASS; bytecode compile: PASS; static contract checks: PASS. Runtime exchange validation remains required on Bybit Demo.
