@@ -1,3 +1,20 @@
+## R6.8.7.11 R2 Audit Corrections — 2026-09-30
+
+### Fixed
+- High-leverage startup diagnostics now use the authoritative `LEVERAGE_TIERS` cap. The displayed 50x cap is now 0.25% (not the unrelated legacy 0.15% display constant).
+- Post-fill FIXED_QTY risk validation now uses the exchange-reported actual position leverage when available.
+- Updated AI preset/build provenance to R6.8.7.11.
+
+### Added
+- Persisted GUI controls for 2-family fallback edge, family confidence, family participation, structure requirement and independent-family requirement.
+- Persisted GUI controls for Adaptive ATR quantile and absolute floor.
+- Startup range validation for the new strategy controls.
+- Runtime propagation of the new 2F thresholds through the decision wrapper, shadow council, entry-pipeline audit and AI trade manager.
+- Regression coverage for the new configuration/risk contracts.
+
+### Protection / safety
+These changes do not loosen liquidation, cost, risk, TP/SL, execution-quality, or kill-switch gates. The new controls change strategy qualification only; downstream hard safety contracts remain authoritative.
+
 ## Current Crypto AI-Agent R6.8.7.11 — Full Engine Audit — 2026-09-30
 
 The current audited deterministic Crypto AI-Agent engine is **V8.4.2-CRYPTO-AI-AGENT-R6.8.7.11**.
