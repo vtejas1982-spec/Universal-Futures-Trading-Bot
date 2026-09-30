@@ -16,7 +16,7 @@
 - AST parse: PASS
 - Python compile: PASS
 - Stubbed module import: PASS
-- R6.8.7.11 focused contract suite: **12/12 PASS**
+- R6.8.7.11 focused contract suite: **13/13 PASS**
 - Runtime None/blank snapshot helper smoke test: PASS
 
 ## Live-log finding
@@ -1052,7 +1052,7 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 - Python compilation: PASS.
 - GUI attribute/callback audit: PASS.
 - Save/load coverage audit: PASS.
-- V8.2.4 regression suite: 12/12 PASS locally.
+- V8.2.4 regression suite: 13/13 PASS locally.
 - Full live exchange order lifecycle: not claimed by this audit.
 
 ### User-visible signal behavior
