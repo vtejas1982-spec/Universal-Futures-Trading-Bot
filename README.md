@@ -1,57 +1,37 @@
 # V8.4.2 Crypto AI-Agent R6.8.7.14 — Multi-Bot Hub HOTFIX5 Full Audit — 2026-09-30
 
-## Current audited Hub build
+## HOTFIX5 summary
 
-- **Local audited engine:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.14_MULTIBOT_HUB_HOTFIX5_LOG_PERSISTENCE_EXACT_LEVERAGE_FULL_AUDIT.py`
-- **Build:** `V8.4.2-CRYPTO-AI-AGENT-R6.8.7.14-FIBONACCI-OPTIONAL-HOTFIX8-DIAGNOSTIC-CLEANUP-FULL-AUDIT-MULTIBOT-HUB-HOTFIX5`
-- **Config schema:** 36
-- **Runtime schema:** 24
-- **Launch mode:** Multi-Bot Hub by default; `--single-bot` remains explicit legacy editor mode.
+- **COPY RUNNING LOGS fixed:** it now copies to the clipboard **and saves a timestamped TXT file** in `hub_combined_logs`.
+- Combined filenames include microseconds and collision protection.
+- Combined log writes use temp-file + fsync + atomic replace.
+- Hub status reports the full saved path.
+- Clipboard failure no longer loses the saved snapshot.
+- Removed the dormant live automatic-leverage-recovery branch; GUI-selected leverage remains authoritative and unsafe AI minimum stops fail closed.
 
-### HOTFIX5 — Combined running-log persistence + exact-leverage cleanup
+### Audit status
 
-**Fixed**
-- **COPY RUNNING LOGS** now copies the combined snapshot to the clipboard **and saves the same snapshot to disk** under `hub_combined_logs`.
-- Combined export filenames include microseconds and collision protection.
-- Combined log writes use temporary-file + `fsync` + atomic `os.replace`.
-- Hub status reports the **full saved path**.
-- Clipboard failure no longer discards an already-persisted log snapshot.
-- Retired the dormant automatic-leverage-recovery branch from the live entry pipeline. GUI-selected leverage is enforced directly by the exact-leverage fail-closed contract.
-
-**Added / modified**
-- Added `_write_combined_running_log_file()` as the single persistence path for combined running logs.
-- `SAVE RUNNING LOGS` uses the same atomic writer as COPY.
-- Version/build provenance bumped to HOTFIX5.
-- Existing Multi-Bot Hub architecture, profile ownership lock, watchdog, per-profile logs, Fibonacci protection and hard safety gates remain unchanged.
-
-### Full audit results
-
-- Python bytecode compile: **PASS**
+- Python compile: **PASS**
 - AST parse: **PASS**
-- Stubbed module import: **PASS**
-- StrategyEngine self-call audit: **PASS**
-- UniversalFuturesBotGUI self-call audit: **PASS**
-- MultiBotHub self-call audit: **PASS**
+- Stubbed import: **PASS**
+- StrategyEngine / GUI / Hub self-call audits: **PASS**
 - GUI callback audit: **PASS**
-- Config save/load coverage: **PASS**; `ai_leverage_adaptive_enabled` is an internal constant, not a GUI setting.
-- AI preset coverage: **PASS**; 157 preset fields remain wired through preset application/save/load.
-- Hub log-drain timer audit: **PASS**; no duplicate drain chain from status refresh.
-- Retired live leverage-recovery references: **0**
-- Combined-log writer atomic-file smoke test: **PASS**
+- Config save/load audit: **PASS**
+- AI preset coverage: **157/157**
+- Hub timer audit: **PASS**
+- Retired leverage-recovery references: **0**
+- Atomic combined-log writer smoke test: **PASS**
+- Config/runtime schema: **36 / 24**
 - Source: **19,315 lines / 944,638 bytes**
 - SHA-256: `62e43f87f31f81c6ce3e29770437076e2716cb0eb8e8a45b2f17e6a230f326ad`
 
-### Runtime-log observation
-
-The supplied running logs show the Hub functioning and recording BOT-02/BOT-03 startup, AI decision, Fibonacci protection and liquidation-buffer diagnostics. BOT-03 correctly rejects a Fibonacci SL whose resolved distance exceeds the selected 50x safety envelope instead of tightening the Fibonacci stop or lowering leverage.
-
-See `docs/R6.8.7.14_MULTIBOT_HUB_HOTFIX5_FULL_AUDIT.md`.
+See the appended HOTFIX5 section in `docs/R6.8.7.14_MULTIBOT_HUB_HOTFIX3_FULL_AUDIT.md`.
 
 > Engineering/safety hardening only; continue Bybit Demo/Testnet validation before Live.
 
 ### GitHub source synchronization status
 
-The HOTFIX5 source was fully audited locally and is available as the generated downloadable file. Repository documentation is synchronized to HOTFIX5. The connected GitHub file-write action cannot transfer the complete ~945 KB / 19k-line source through its current interface in this session, so the existing large production source file has **not** been falsely reported as replaced.
+README/CHANGELOG/audit documentation are synchronized to HOTFIX5. The connected GitHub file-write interface cannot transfer the complete ~945 KB source replacement in this session, so the existing large production source file has not been falsely reported as replaced.
 
 # V8.4.2 Crypto AI-Agent R6.8.7.14 — AI Leverage Recovery + Liquidation-Boundary Hotfix — 2026-09-30
 
