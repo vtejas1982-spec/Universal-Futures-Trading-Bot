@@ -1,3 +1,29 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.11 R3 — Live-Log Runtime Hardening — 2026-09-30
+
+## Fixed
+- Repaired the live worker crash class `float() argument must be a string or a real number, not 'NoneType'` observed in the supplied BOT logs.
+- Hardened runtime GUI snapshot ingestion with safe float/int/bool/text conversion helpers.
+- Boolean controls now fall back to their declared safety defaults when a snapshot is temporarily `None` or blank.
+- Added `CYCLE ERROR TRACE` diagnostics using the Python traceback so the exact failing call path is retained in the bot log.
+- Removed duplicate 2F fallback entries from the recommended preset.
+
+## Modified
+- Propagated all profile-controlled 2F fallback thresholds and requirements into the live AI trade-management re-evaluation path.
+- Preserved the same AI decision thresholds and downstream hard protection contracts; this patch does not loosen entry safety.
+- Runtime settings ingestion is now fail-safe against transient GUI/profile loading states.
+
+## Validation
+- AST parse: PASS
+- Python compile: PASS
+- Stubbed module import: PASS
+- R6.8.7.11 focused contract suite: **12/12 PASS**
+- Runtime None/blank snapshot helper smoke test: PASS
+
+## Live-log finding
+The supplied BOT-01 and BOT-03 logs repeatedly reported the same `float(None)` execution-cycle error, while BOT-02 reached the entry-pipeline audit before the same cycle error. The patch therefore hardens the common worker settings boundary and adds exact traceback capture for any remaining non-exchange exception.
+
+---
+
 # V8.4.2 Crypto AI-Agent R6.8.7.11 R2 — Full Engine Audit Correction — 2026-09-30
 
 ## Fixed
