@@ -156,15 +156,44 @@ from pathlib import Path
 #  8. Persisted 2F fallback thresholds and adaptive-ATR parameters as profile-controlled settings.
 #  9. Added startup validation for 2F/adaptive-ATR ranges and post-fill FIXED_QTY risk uses actual exchange leverage.
 # 10. Updated AI preset/build provenance to R6.8.7.11.
+# R6.8.7.13 HOTFIX1: corrected the diagnostic leverage-cap reference table to match the
+# authoritative runtime LEVERAGE_TIERS (30x=0.25%, not 0.35%) and added explicit
+# handling/logging for Bybit retCode 110123 Trading-Terms account prerequisites.
+# R6.8.7.13 AI LEVERAGE-ADAPTIVE PROTECTION:
+#  1. Selected leverage explicitly caps AI effective risk using the authoritative leverage tiers.
+#  2. AI diagnostics expose effective liquidation buffer, maximum safe SL move, safe ATR capacity,
+#     and minimum cooldown for the selected leverage.
+#  3. TP1/TP2 remain R-multiples of the final safe stop, so leverage-constrained stops contract
+#     absolute TP price distance automatically.
+#  4. Added deterministic leverage-protection calculator logic for diagnostics and regression tests.
+#  5. No liquidation, cost, fixed-quantity, execution, or post-fill protection gate is weakened.
+#
 # R6.8.7.11 R4 LIVE-LOG + FULL RUNTIME INPUT AUDIT:
 #  1. Hardened worker GUI-snapshot numeric/text reads against transient None/blank values.
 #  2. Added exact cycle traceback diagnostics so non-exchange worker failures expose their call site.
 #  3. Propagated all persisted 2F fallback thresholds/requirements into AI trade-management re-evaluation.
 #  4. Preserved fail-closed validation: missing/invalid critical settings resolve to validated defaults
 #     and are still subject to the normal risk/liquidation/cost/protection gates.
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.12-FULL-AUDIT-R5-FIXED"
-APP_TITLE = "Universal Futures Bot V8.4.2-AI-AGENT-R6.8.7.12 - Full Engine Audit R5 Fixed + 2F Fallback + Adaptive ATR"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.12-FULL-ENGINE-AUDIT-R5-FIXED"
+# R6.8.7.14 AI LEVERAGE RECOVERY + LIQUIDATION-BOUNDARY HOTFIX:
+#  1. When an otherwise qualified AI entry is blocked solely because the selected
+#     leverage cannot safely accommodate the minimum 1.50 ATR stop, the flat bot
+#     may lower leverage for the current session to the highest integer leverage
+#     that makes the minimum ATR stop liquidation-safe.
+#  2. Recovery only lowers leverage; it never raises leverage, never bypasses the
+#     liquidation guard, cost gate, fixed-quantity risk guard, execution gates,
+#     post-fill protection, or exchange market maximum.
+#  3. The user's saved GUI leverage is not overwritten by this recovery. The
+#     session-effective leverage is logged explicitly and re-evaluated on restart.
+#  4. If no integer leverage can make the minimum ATR stop safe, the original
+#     fail-closed rejection remains unchanged.
+AI_AGENT_AUTO_LOWER_LEVERAGE_ON_SL_BLOCK = True
+AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_ATR_MULT = 1.50
+AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_X = 1
+AI_AGENT_AUTO_LOWER_LEVERAGE_PERSIST = False
+
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.14-AI-LEVERAGE-ADAPTIVE-FULL-AUDIT"
+APP_TITLE = "Universal Futures Bot V8.4.2-AI-AGENT-R6.8.7.14 - AI Leverage Adaptive Protection + Full Audit"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.14-AI-LEVERAGE-ADAPTIVE-FULL-AUDIT-HOTFIX4-LIQ-BOUNDARY"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -179,7 +208,7 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 33  # R6.8.7.11 audited 2F/adaptive-ATR controls persisted.
+CONFIG_SCHEMA_VERSION = 35  # R6.8.7.14 bounded AI lower-leverage recovery contract.
 RUNTIME_SCHEMA_VERSION = 24  # R6.7 runtime checkpoint adds protection reconciliation diagnostics.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
@@ -408,6 +437,110 @@ def effective_liq_buffer(leverage, configured_buffer):
     except Exception:
         return max(float(configured_buffer), 1.0)
 
+def ai_leverage_adaptive_profile(
+    leverage,
+    entry_price,
+    atr_value=None,
+    configured_buffer=DEFAULT_LIQ_BUFFER_MULT,
+    base_risk_pct=None,
+    tp1_r=1.20,
+    tp2_r=2.20,
+):
+    """Deterministic leverage-aware AI protection envelope for diagnostics."""
+    lev = max(float(leverage), 0.1)
+    entry = max(float(entry_price), 1e-12)
+    if base_risk_pct is None:
+        base_risk_pct = 0.35
+    buf = effective_liq_buffer(lev, float(configured_buffer))
+    risk_tier, cooldown = leverage_tier(lev)
+    risk_cap = float(base_risk_pct)
+    if risk_tier is not None:
+        risk_cap = min(risk_cap, float(risk_tier))
+    safe_move = liq_safe_move(lev, buf)
+    atr_frac = None
+    safe_atr_mult = None
+    if atr_value is not None:
+        try:
+            atr = float(atr_value)
+            if np.isfinite(atr) and atr > 0:
+                atr_frac = abs(atr / entry)
+                safe_atr_mult = safe_move / atr_frac
+        except Exception:
+            pass
+    # Display/fallback only when a completed-candle ATR is unavailable.
+    fallback_sl_move = min(0.30 / lev, safe_move * 0.95)
+    if atr_frac is not None and safe_atr_mult is not None and safe_atr_mult >= AI_AGENT_MIN_ATR_SL_MULT:
+        chosen_sl_move = min(atr_frac * 1.80, safe_move * 0.999)
+        source = "AI-ATR-CAPPED"
+    else:
+        chosen_sl_move = fallback_sl_move
+        source = "ROI-FALLBACK-CAPPED"
+    tp1_move = chosen_sl_move * float(tp1_r)
+    tp2_move = chosen_sl_move * float(tp2_r)
+    return {
+        "leverage": lev, "effective_liq_buffer": buf, "risk_cap_pct": risk_cap,
+        "min_cooldown_min": float(cooldown), "max_safe_sl_move_pct": safe_move * 100.0,
+        "max_safe_sl_price_long": entry * (1.0 - safe_move),
+        "max_safe_sl_price_short": entry * (1.0 + safe_move),
+        "atr_pct": None if atr_frac is None else atr_frac * 100.0,
+        "safe_atr_mult": safe_atr_mult, "sl_move_pct": chosen_sl_move * 100.0,
+        "tp1_move_pct": tp1_move * 100.0, "tp2_move_pct": tp2_move * 100.0,
+        "sl_roi_equiv_pct": chosen_sl_move * lev * 100.0,
+        "tp1_roi_equiv_pct": tp1_move * lev * 100.0,
+        "tp2_roi_equiv_pct": tp2_move * lev * 100.0,
+        "sl_price_long": entry * (1.0 - chosen_sl_move),
+        "tp1_price_long": entry * (1.0 + tp1_move),
+        "tp2_price_long": entry * (1.0 + tp2_move),
+        "sl_price_short": entry * (1.0 + chosen_sl_move),
+        "tp1_price_short": entry * (1.0 - tp1_move),
+        "tp2_price_short": entry * (1.0 - tp2_move),
+        "source": source,
+    }
+
+
+def ai_min_safe_leverage_for_atr(
+    atr_value,
+    entry_price,
+    configured_buffer,
+    min_atr_mult=1.50,
+    current_leverage=None,
+):
+    """Return the highest integer leverage that can fit the minimum ATR stop safely.
+
+    This is a recovery calculator only. It never authorizes an entry by itself;
+    all normal liquidation, cost, quantity/risk, execution and post-fill guards
+    still run after the leverage is lowered.
+    """
+    try:
+        atr = abs(float(atr_value))
+        entry = abs(float(entry_price))
+        buf = max(float(configured_buffer), 1.0)
+        min_mult = max(float(min_atr_mult), 1e-9)
+        if not (math.isfinite(atr) and math.isfinite(entry) and atr > 0 and entry > 0):
+            return None
+        # liq_safe_move = min(0.80, 1/buffer) / leverage.
+        safety_fraction = min(SL_LIQUIDATION_SAFETY_FRACTION, 1.0 / buf)
+        required_move = (atr / entry) * min_mult
+        if required_move <= 0 or safety_fraction <= 0:
+            return None
+        max_float_lev = safety_fraction / required_move
+        if current_leverage is not None:
+            max_float_lev = min(max_float_lev, float(current_leverage))
+        target = int(math.floor(max_float_lev + 1e-12))
+        target = max(int(AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_X), target)
+        # Never return a value above the selected leverage when a current value is supplied.
+        if current_leverage is not None:
+            target = min(target, int(math.floor(float(current_leverage))))
+        if target < int(AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_X):
+            return None
+        # Strict post-check protects against floating-point boundary errors.
+        safe_atr = liq_safe_move(target, buf) / (atr / entry)
+        if not math.isfinite(safe_atr) or safe_atr + 1e-12 < min_mult:
+            return None
+        return target
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return None
+
 
 AI_AGENT_RISK_PER_TRADE = "0.35"
 AI_AGENT_ATR_SL_MULT = 1.8
@@ -422,6 +555,19 @@ AI_AGENT_HOLD_MIN_FAMILIES = 2
 # The deterministic AI council may adapt risk/protection for an accepted trade,
 # but it can never exceed these hard safety envelopes. GUI risk remains the
 # configured baseline; the effective per-trade risk is calculated locally.
+# R6.8.7.13 AI LEVERAGE-ADAPTIVE PROTECTION:
+# Selected leverage is an explicit input to the AI protection envelope.
+# Higher leverage may only LOWER risk and tighten the maximum permitted stop;
+# it never increases account risk. TP1/TP2 remain R-multiples of the final safe
+# stop, so a leverage-constrained stop automatically contracts absolute TP distance.
+AI_AGENT_LEVERAGE_ADAPTIVE_ENABLED = True
+# Reference/diagnostic map kept exactly aligned with the authoritative LEVERAGE_TIERS above.
+# Runtime enforcement always uses leverage_tier(); this map is not a second risk authority.
+AI_AGENT_LEVERAGE_PROFILE_RISK_CAPS = {
+    10: None, 20: 0.35, 30: 0.25, 50: 0.25,
+    80: 0.15, 100: 0.15, 125: 0.10, 150: 0.10,
+}
+AI_AGENT_LEVERAGE_MAX_PROFILE_POINTS = (10, 20, 30, 50, 80, 100, 125, 150)
 AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED = True
 AI_AGENT_MIN_RISK_PCT = 0.10
 AI_AGENT_MAX_RISK_PCT = 0.50
@@ -851,8 +997,7 @@ def _run_kill_switch_watchdog(profile_id, parent_pid):
             return
         if hb_pid and hb_pid != int(parent_pid):
             _kill_switch_log(log_path, f"WATCHDOG EXIT | Heartbeat ownership moved to PID={hb_pid}")
-            return
-        if status in ("STOPPED", "CONFIGURED"):
+            return        if status in ("STOPPED", "CONFIGURED"):
             _kill_switch_log(log_path, f"WATCHDOG EXIT | Clean status={status}")
             return
         if status == "STOPPING":
@@ -998,6 +1143,7 @@ def calculate_supertrend(
     # dn = src + Multiplier * atr
     df["basic_lb"] = src - multiplier * df["atr"]
     df["basic_ub"] = src + multiplier * df["atr"]
+
     final_ub = [np.nan] * len(df)
     final_lb = [np.nan] * len(df)
     trend = [True] * len(df)
@@ -1850,8 +1996,7 @@ def _volume_sr_base_series(df, cfg):
     for a in aligned:
         z=z.join(a,how="left")
     bcols=[c for c in z.columns if c.startswith("sr_bull_")]
-    scols=[c for c in z.columns if c.startswith("sr_bear_")]
-    fbcols=[c for c in z.columns if c.startswith("sr_fresh_bull_")]
+    scols=[c for c in z.columns if c.startswith("sr_bear_")]    fbcols=[c for c in z.columns if c.startswith("sr_fresh_bull_")]
     fscols=[c for c in z.columns if c.startswith("sr_fresh_bear_")]
     mode=str(cfg.get("sr_vote_mode","MAJORITY")).upper()
     bv=z[bcols].fillna(False).sum(axis=1) if bcols else pd.Series(0,index=z.index)
@@ -1996,7 +2141,8 @@ class StrategyEngine:
                     raise ValueError
                 result = float(value)
                 if not math.isfinite(result):
-                    raise ValueError                return result
+                    raise ValueError
+                return result
             except (TypeError, ValueError):
                 return float(default)
 
@@ -2849,7 +2995,6 @@ def calculate_trendline_breakout(
 def calculate_bollinger(df, length=20, std_mult=2.0):
     """Calculate Bollinger middle/upper/lower bands."""
     df = df.copy()
-
     length = int(length)
     std_mult = float(std_mult)
 
@@ -2995,7 +3140,8 @@ class UniversalFuturesBotGUI:
         self._profile_status_refresh_job = None
         self.kill_switch_watchdog = None
         self.kill_switch_watchdog_started = False
-        self.last_kill_switch_heartbeat = 0.0        self._kill_switch_lock = threading.RLock()
+        self.last_kill_switch_heartbeat = 0.0
+        self._kill_switch_lock = threading.RLock()
         self.kill_switch_completed = False
         self.kill_switch_in_progress = False
         self.stop_cleanup_thread = None
@@ -3848,8 +3994,7 @@ class UniversalFuturesBotGUI:
             return ""
 
     def _serializable_protected_position(self):
-        p = self.last_protected_position
-        if not isinstance(p, dict):
+        p = self.last_protected_position        if not isinstance(p, dict):
             return None
         allowed = (
             "side", "qty", "entry", "sl", "tp1", "tp2",
@@ -3994,7 +4139,8 @@ class UniversalFuturesBotGUI:
             ):
                 # A stale lifecycle marker with no saved trading state and no
                 # live process is safe to normalize to STOPPED.  The next
-                # start still performs its normal exchange inventory/order                # preflight; this only prevents a phantom recovery prompt.
+                # start still performs its normal exchange inventory/order
+                # preflight; this only prevents a phantom recovery prompt.
                 state["status"] = "STOPPED"
                 state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
                 state["last_error"] = ""
@@ -4509,14 +4655,41 @@ class UniversalFuturesBotGUI:
         if not path:
             return
         try:
-            if path.exists():
-                old = self._read_json_file(str(path)) or {}
-                if int(old.get("pid") or 0) in (0, os.getpid()):
+            if not path.exists():
+                return
+            old = self._read_json_file(str(path)) or {}
+            owner_pid = int(old.get("pid") or 0)
+            if owner_pid not in (0, os.getpid()):
+                self.log(
+                    f"SYMBOL LOCK RELEASE SKIPPED | lock owner PID={owner_pid} is not this process; "
+                    "lock is retained to prevent unsafe takeover."
+                )
+                return
+
+            # Windows can transiently report WinError 32 when another thread/process
+            # has just closed the lock file. Retry briefly before declaring cleanup
+            # failure so a normal stop does not leave a stale self-owned lock.
+            last_error = None
+            for delay in (0.05, 0.15, 0.30, 0.60):
+                try:
                     path.unlink()
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            self.log(f"SYMBOL LOCK RELEASE WARNING: {e}")
+                    last_error = None
+                    break
+                except FileNotFoundError:
+                    last_error = None
+                    break
+                except PermissionError as e:
+                    last_error = e
+                    time.sleep(delay)
+                except OSError as e:
+                    last_error = e
+                    time.sleep(delay)
+            if last_error is not None and path.exists():
+                self.log(
+                    f"SYMBOL LOCK RELEASE WARNING: {last_error} | "
+                    "self-owned lock could not be removed after retries; "
+                    "it will be revalidated as stale/owned on the next startup."
+                )
         finally:
             self.symbol_lock_path = None
             self.symbol_lock_fd = None
@@ -4820,8 +4993,7 @@ class UniversalFuturesBotGUI:
             f"Grid TP / SL   : {cfg.get('grid_tp', '')}% / {cfg.get('grid_sl', '')}%",
             f"Max Exposure   : {cfg.get('grid_max_exposure', '')} USDT",
             f"Max Grid DD    : {cfg.get('grid_max_dd', '')}%",
-            f"Grid Score Min : {cfg.get('grid_score_min', '')}",
-            f"Trend Filter   : {cfg.get('grid_trend_filter', '')}",
+            f"Grid Score Min : {cfg.get('grid_score_min', '')}",            f"Trend Filter   : {cfg.get('grid_trend_filter', '')}",
             f"Recenter       : {cfg.get('grid_recenter', '')} / {cfg.get('grid_recenter_distance', '')}%",
             f"Cooldown       : {cfg.get('grid_cooldown', '')} sec",
             "",
@@ -4993,7 +5165,8 @@ class UniversalFuturesBotGUI:
 
         profile = self._sanitize_profile_id(profile)
 
-        if self._profile_lock_is_active(profile):            messagebox.showerror(
+        if self._profile_lock_is_active(profile):
+            messagebox.showerror(
                 "Delete Profile",
                 f"Profile {profile} is currently active in another bot process.\n\n"
                 "Stop that bot first, then delete the profile.",
@@ -5819,8 +5992,7 @@ class UniversalFuturesBotGUI:
         for col in profile_columns:
             self.profile_tree.heading(col, text=headings[col])
             self.profile_tree.column(col, width=widths[col], minwidth=45, anchor="w")
-        profile_scroll = ttk.Scrollbar(
-            profile_tree_frame, orient="horizontal", command=self.profile_tree.xview
+        profile_scroll = ttk.Scrollbar(            profile_tree_frame, orient="horizontal", command=self.profile_tree.xview
         )
         self.profile_tree.configure(xscrollcommand=profile_scroll.set)
         self.profile_tree.pack(fill="x", expand=True)
@@ -5992,7 +6164,8 @@ class UniversalFuturesBotGUI:
                 *values,
                 **option_kwargs,
             ).grid(
-                row=row,                column=col + 1,
+                row=row,
+                column=col + 1,
                 columnspan=colspan,
                 sticky="w",
                 padx=2,
@@ -6818,8 +6991,7 @@ class UniversalFuturesBotGUI:
         self.e_tele_token.grid(
             row=1,
             column=1,
-            padx=5,
-        )
+            padx=5,        )
 
         tk.Label(
             f_tele,
@@ -6991,7 +7163,8 @@ class UniversalFuturesBotGUI:
                 self.stop_started_at = 0.0
                 self._release_symbol_lock()
                 self._release_profile_lock()
-                self._ui_queue_shutdown = True                try:
+                self._ui_queue_shutdown = True
+                try:
                     self.root.destroy()
                 except Exception:
                     pass
@@ -7406,6 +7579,7 @@ class UniversalFuturesBotGUI:
             "ai_require_structure": self.v_ai_require_structure.get(),
             "ai_agent_preset_name": self.ai_agent_preset_name,
             "ai_agent_preset_applied": self.ai_agent_preset_applied,
+            "ai_leverage_adaptive_enabled": bool(AI_AGENT_LEVERAGE_ADAPTIVE_ENABLED),
 
             "size_mode": self.v_size_mode.get(),
             "risk_sizing_enabled": self.v_risk_sizing_enabled.get(),
@@ -7816,8 +7990,7 @@ class UniversalFuturesBotGUI:
                 cfg.get(
                     "stoch_k",
                     "14",
-                ),
-            )
+                ),            )
 
             self.e_stoch_smooth.delete(0, tk.END)
             self.e_stoch_smooth.insert(
@@ -7990,7 +8163,8 @@ class UniversalFuturesBotGUI:
                 tk.END,
             )
             self.e_adx_thresh.insert(
-                0,                cfg.get(
+                0,
+                cfg.get(
                     "adx_thresh",
                     "20",
                 ),
@@ -8815,8 +8989,7 @@ class UniversalFuturesBotGUI:
             except Exception:
                 contracts = 0.0
 
-            if contracts <= 0:
-                continue
+            if contracts <= 0:                continue
 
             side = str(
                 pos.get("side") or ""
@@ -8989,7 +9162,8 @@ class UniversalFuturesBotGUI:
                 {"orderId": oid, "orderFilter": "StopOrder"},
                 {"orderId": oid},
             )
-            for params in queries:                try:
+            for params in queries:
+                try:
                     rows = self.exchange.fetch_open_orders(
                         symbol,
                         limit=50,
@@ -9814,7 +9988,6 @@ class UniversalFuturesBotGUI:
             conflicts / max(1.0, float(max_conflicting_families) + 1.0),
             0.0, 1.0,
         )
-
         conviction = (
             0.45 * float(edge_strength)
             + 0.30 * float(family_strength)
@@ -9846,6 +10019,14 @@ class UniversalFuturesBotGUI:
         # 0.20%) and conviction/low-vol could push it ~30% above the setting.
         # The AI may only scale risk DOWN from the configured baseline.
         risk_ceiling = min(float(AI_AGENT_MAX_RISK_PCT), float(base_risk_pct))
+        leverage_profile = None
+        if AI_AGENT_LEVERAGE_ADAPTIVE_ENABLED and leverage is not None:
+            leverage_profile = ai_leverage_adaptive_profile(
+                float(leverage), entry_price, atr_value=atr_value,
+                configured_buffer=(float(liq_buffer) if liq_buffer is not None else DEFAULT_LIQ_BUFFER_MULT),
+                base_risk_pct=base_risk_pct, tp1_r=base_tp1_r_mult, tp2_r=base_tp2_r_mult,
+            )
+            risk_ceiling = min(risk_ceiling, float(leverage_profile["risk_cap_pct"]))
         risk_floor = min(float(AI_AGENT_MIN_RISK_PCT), risk_ceiling)
         effective_risk = float(np.clip(
             effective_risk,
@@ -9902,8 +10083,14 @@ class UniversalFuturesBotGUI:
                             f"safe max {ai_sl_safe_max_mult:.3f} ATR < AI minimum "
                             f"{AI_AGENT_MIN_ATR_SL_MULT:.2f} ATR"
                         )
-                    elif ai_sl_mult > ai_sl_safe_max_mult:
-                        ai_sl_mult = float(ai_sl_safe_max_mult)
+                    elif ai_sl_mult >= ai_sl_safe_max_mult:
+                        # Never hand the downstream liquidation guard its exact
+                        # mathematical boundary.  The entry guard is deliberately
+                        # fail-closed with >=, so applying the exact safe maximum
+                        # can make AI management reject its own stop due to floating-
+                        # point rounding.  Keep a tiny inward margin while preserving
+                        # the same liquidation-safety contract.
+                        ai_sl_mult = float(ai_sl_safe_max_mult) * 0.999
                         ai_sl_adjusted = True
                         ai_sl_safety_reason = (
                             f"tightened from {ai_sl_requested_mult:.2f} ATR to "
@@ -9943,6 +10130,12 @@ class UniversalFuturesBotGUI:
 
         return {
             "risk_pct": effective_risk,
+            "leverage_adaptive_enabled": bool(AI_AGENT_LEVERAGE_ADAPTIVE_ENABLED),
+            "leverage_risk_cap_pct": (float(leverage_profile["risk_cap_pct"]) if leverage_profile else None),
+            "leverage_effective_buffer": (float(leverage_profile["effective_liq_buffer"]) if leverage_profile else liq_buffer),
+            "leverage_max_safe_sl_pct": (float(leverage_profile["max_safe_sl_move_pct"]) if leverage_profile else None),
+            "leverage_safe_atr_mult": (float(leverage_profile["safe_atr_mult"]) if leverage_profile and leverage_profile["safe_atr_mult"] is not None else None),
+            "leverage_min_cooldown_min": (float(leverage_profile["min_cooldown_min"]) if leverage_profile else None),
             "atr_sl_mult": ai_sl_mult,
             "atr_sl_requested_mult": ai_sl_requested_mult,
             "atr_sl_safe_max_mult": ai_sl_safe_max_mult,
@@ -9988,7 +10181,8 @@ class UniversalFuturesBotGUI:
 
         if str(sl_mode).upper() == "RISK_%":
             if position_qty is None or float(position_qty) <= 0:
-                raise RuntimeError("RISK_% SL requires a valid actual position quantity.")            if account_balance is None or float(account_balance) <= 0:
+                raise RuntimeError("RISK_% SL requires a valid actual position quantity.")
+            if account_balance is None or float(account_balance) <= 0:
                 raise RuntimeError("RISK_% SL requires a valid account balance.")
             if risk_pct is None or float(risk_pct) <= 0:
                 raise RuntimeError("RISK_% SL requires Risk Per Trade (%) greater than 0.")
@@ -10793,7 +10987,6 @@ class UniversalFuturesBotGUI:
             "PROTECTION WARNING: Live position has missing exchange order(s): "
             + ", ".join(label for label, _ in missing)
         )
-
         # First priority: restore a missing SL immediately.  Never leave a
         # live position relying only on TP orders.
         if sl_id and not _is_open(sl_id):
@@ -10987,7 +11180,8 @@ class UniversalFuturesBotGUI:
     def _grid_reset_state(self):
         self.grid_state = {"active": False, "mode": "OFF", "center": 0.0, "entry_orders": {}, "filled_levels": set(), "tp_order_id": None, "sl_order_id": None, "last_position_qty": 0.0, "last_position_entry": 0.0, "last_grid_reset": 0.0, "session_start_balance": 0.0, "peak_equity": 0.0, "paused_until": 0.0, "auto_direction": None}
 
-    def _grid_order_qty(self, symbol, price, usdt_size):        """Convert a Grid USDT notional into exchange quantity, honoring contractSize."""
+    def _grid_order_qty(self, symbol, price, usdt_size):
+        """Convert a Grid USDT notional into exchange quantity, honoring contractSize."""
         if price <= 0 or usdt_size <= 0:
             return 0.0
         contract_size = self.contract_size(symbol)
@@ -11792,7 +11986,6 @@ class UniversalFuturesBotGUI:
                 cfg["cooldown"],
             )
             return True
-
         if cfg["mode"] == "SHORT_GRID" and pos and pos["side"] != "SHORT":
             self._grid_stop(
                 symbol,
@@ -11986,7 +12179,8 @@ class UniversalFuturesBotGUI:
             f"BestBid={best_bid:.12g} BestAsk={best_ask:.12g}"
         )
         if not result:
-            raise RuntimeError("EXECUTION QUALITY BLOCK: " + "; ".join(failures))        return {"ok": True, **self.execution_quality_last}
+            raise RuntimeError("EXECUTION QUALITY BLOCK: " + "; ".join(failures))
+        return {"ok": True, **self.execution_quality_last}
 
     def _validate_actual_fill_execution(self, symbol, side, actual_entry, reference_price):
         """Validate the actual average fill against the pre-entry executable market snapshot.
@@ -12791,8 +12985,7 @@ class UniversalFuturesBotGUI:
             )
 
             self.log(
-                f"{APP_VERSION} MODULAR ENGINE: "
-                f"{exchange_id.upper()} | "
+                f"{APP_VERSION} MODULAR ENGINE: "                f"{exchange_id.upper()} | "
                 "CCXT unified futures/swap API"
             )
             self.log(
@@ -12985,7 +13178,8 @@ class UniversalFuturesBotGUI:
                             str(order.get("id"))
                             for order in existing_orders
                             if order.get("id")
-                        }                        orphan_bot_orders = open_ids & checkpoint_ids
+                        }
+                        orphan_bot_orders = open_ids & checkpoint_ids
                         unknown_orders = open_ids - checkpoint_ids
 
                         if orphan_bot_orders and not unknown_orders:
@@ -13790,8 +13984,7 @@ class UniversalFuturesBotGUI:
         if tp1_order is None:
             return
 
-        status = str(tp1_order.get("status") or "").lower()
-        filled = float(tp1_order.get("filled") or 0.0)
+        status = str(tp1_order.get("status") or "").lower()        filled = float(tp1_order.get("filled") or 0.0)
 
         if status not in ("closed", "filled") or filled <= 0:
             return
@@ -13985,6 +14178,7 @@ class UniversalFuturesBotGUI:
         counts = grouped["close"].count()
         agg["base_count"] = counts
         agg = agg.dropna(subset=["open", "high", "low", "close", "vol"])
+
         # The newest bucket can be in progress. Keep it so the main strategy
         # can use closed_idx=-2 and therefore trade only a fully completed 45m bar.
         # All older buckets must contain exactly 3 base candles.
@@ -14789,8 +14983,7 @@ class UniversalFuturesBotGUI:
                 self.log(
                     "AI_AGENT CONFIG NOTICE: Recommended R6.2 preset is not marked as applied; "
                     "current saved GUI settings are being used unchanged. "
-                    "Select AI_AGENT and confirm YES to apply the full AI-Agent preset."
-                )
+                    "Select AI_AGENT and confirm YES to apply the full AI-Agent preset."                )
 
             # A family-based mode can never fire if too few evidence families have an enabled
             # module (or a REQUIRED family has none). Fail loudly at start instead of idling forever.
@@ -14983,7 +15176,8 @@ class UniversalFuturesBotGUI:
             if not use_legacy_protection:
                 liq_roi_limit = min(SL_LIQUIDATION_SAFETY_FRACTION, 1.0 / liq_buffer) * 100.0
                 for _lbl, _on, _val in (
-                    ("Normal ROI SL", simple_roi_sl_enabled, roi_sl_target),                    ("Fallback SL ROI", fallback_sl_enabled, fallback_sl_roi),
+                    ("Normal ROI SL", simple_roi_sl_enabled, roi_sl_target),
+                    ("Fallback SL ROI", fallback_sl_enabled, fallback_sl_roi),
                     ("Hold-SL ROI", hold_all_reverse, hold_sl_roi_pct),
                 ):
                     if _on and _val >= liq_roi_limit:
@@ -15788,8 +15982,7 @@ class UniversalFuturesBotGUI:
                     # BREAK_RETEST: require a later retest of the broken line
                     # and a close back in the breakout direction.
                     if use_trendline:
-                        tl_up_break = bool(df["trendline_break_up"].iloc[-2])
-                        tl_down_break = bool(df["trendline_break_down"].iloc[-2])
+                        tl_up_break = bool(df["trendline_break_up"].iloc[-2])                        tl_down_break = bool(df["trendline_break_down"].iloc[-2])
                         tl_up_retest = bool(df["trendline_retest_up"].iloc[-2])
                         tl_down_retest = bool(df["trendline_retest_down"].iloc[-2])
                         tl_state = int(df["trendline_state"].iloc[-2])
@@ -15982,7 +16175,8 @@ class UniversalFuturesBotGUI:
 
                     if use_macd:
                         directional_modules.append(
-                            ("MACD", macd_bull, macd_bear)                        )
+                            ("MACD", macd_bull, macd_bear)
+                        )
 
                     if use_rsi:
                         directional_modules.append(
@@ -16787,8 +16981,7 @@ class UniversalFuturesBotGUI:
                                 time.sleep(max(0.5, poll_seconds - cycle_elapsed))
                                 continue
                             try:
-                                reversal_balance = self.fetch_balance_total()
-                            except Exception:
+                                reversal_balance = self.fetch_balance_total()                            except Exception:
                                 reversal_balance = None
                             self._finalize_performance_trade(
                                 reason="REVERSAL",
@@ -16913,6 +17106,49 @@ class UniversalFuturesBotGUI:
                                 fallback_2f_require_independent=self._safe_runtime_bool("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT),
                             )
                             if not ai_mgr.get("atr_sl_safety_ok", True):
+                                # R6.8.7.14: if the only failure is that the selected
+                                # leverage is too high for the minimum AI ATR stop,
+                                # lower leverage for this session rather than forcing
+                                # an unsafe sub-1.50 ATR stop. This path is only allowed
+                                # while the bot is flat and never raises leverage.
+                                if (
+                                    AI_AGENT_AUTO_LOWER_LEVERAGE_ON_SL_BLOCK
+                                    and position is None
+                                    and float(leverage) > float(AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_X)
+                                    and float(ai_mgr.get("atr_sl_safe_max_mult", 0.0) or 0.0) < float(AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_ATR_MULT)
+                                ):
+                                    try:
+                                        _atr_for_recovery = float(df["atr"].iloc[-2])
+                                        _entry_for_recovery = float(close)
+                                        _target_lev = ai_min_safe_leverage_for_atr(
+                                            _atr_for_recovery,
+                                            _entry_for_recovery,
+                                            configured_liq_buffer,
+                                            min_atr_mult=AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_ATR_MULT,
+                                            current_leverage=leverage,
+                                        )
+                                        if _target_lev is not None and _target_lev < int(leverage):
+                                            _old_lev = int(leverage)
+                                            self.configure_leverage(self.symbol, int(_target_lev))
+                                            leverage = int(_target_lev)
+                                            liq_buffer = effective_liq_buffer(leverage, configured_liq_buffer)
+                                            tier_risk_cap, tier_cooldown = leverage_tier(leverage)
+                                            if tier_cooldown is not None:
+                                                cooldown_min = max(float(cooldown_min), float(tier_cooldown))
+                                            self.log(
+                                                f"AI LEVERAGE RECOVERY: {_old_lev}x -> {leverage}x for current session | "
+                                                f"ATR={_atr_for_recovery / max(_entry_for_recovery, 1e-12) * 100.0:.3f}% | "
+                                                f"MinimumSL={AI_AGENT_AUTO_LOWER_LEVERAGE_MIN_ATR_MULT:.2f} ATR | "
+                                                f"EffectiveBuffer={liq_buffer:g}x | "
+                                                "Saved GUI leverage unchanged; all downstream safety gates remain active."
+                                            )
+                                            # Re-run the AI manager on the next polling
+                                            # cycle with the lower leverage and fresh data.
+                                            cycle_elapsed = time.time() - cycle_start
+                                            time.sleep(max(0.5, poll_seconds - cycle_elapsed))
+                                            continue
+                                    except Exception as _lev_recovery_exc:
+                                        self.log(f"AI LEVERAGE RECOVERY NOTICE: {_lev_recovery_exc}")
                                 self.log(
                                     f"AI SL SAFETY REJECT: requested={ai_mgr.get('atr_sl_requested_mult', ai_mgr.get('atr_sl_mult', 0.0)):.2f} ATR | "
                                     f"safe_max={ai_mgr.get('atr_sl_safe_max_mult', float('nan')):.3f} ATR | "
@@ -16945,7 +17181,17 @@ class UniversalFuturesBotGUI:
                                 f"Risk={ai_effective_risk_pct:.3f}% | "
                                 f"SL={ai_effective_atr_sl_mult:.2f} ATR | "
                                 f"TP1={ai_effective_atr_tp1_mult:.2f}R | "
-                                f"TP2={ai_effective_atr_tp2_mult:.2f}R"
+                                f"TP2={ai_effective_atr_tp2_mult:.2f}R | "
+                                f"LevCapRisk={ai_mgr.get('leverage_risk_cap_pct', float('nan')):.3f}% | "
+                                f"LevSafeSL={ai_mgr.get('leverage_max_safe_sl_pct', float('nan')):.4f}%"
+                            )
+                            self.log(
+                                f"AI LEVERAGE PROFILE: {float(leverage):g}x | "
+                                f"RiskCap={ai_mgr.get('leverage_risk_cap_pct', float('nan')):.3f}% | "
+                                f"EffectiveBuffer={ai_mgr.get('leverage_effective_buffer', float(liq_buffer)):.2f}x | "
+                                f"MaxSafeSL={ai_mgr.get('leverage_max_safe_sl_pct', float('nan')):.4f}% | "
+                                f"SafeATR={ai_mgr.get('leverage_safe_atr_mult', float('nan')):.3f} | "
+                                f"MinCooldown={ai_mgr.get('leverage_min_cooldown_min', float('nan')):.0f}m"
                             )
                         elif (
                             signal_mode == "AI_AGENT"
@@ -16981,7 +17227,8 @@ class UniversalFuturesBotGUI:
                                     entry_sl_price_fraction = self.target_to_price_fraction(roi_sl_target, "ROI_%", leverage)
                                     self.log("ATR SL unavailable: using configured normal ROI SL for entry sizing.")
                                 elif not use_legacy_protection and fallback_sl_enabled:
-                                    entry_sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)                                    self.log("ATR SL unavailable: using configured fallback ROI SL for entry sizing.")
+                                    entry_sl_price_fraction = self.target_to_price_fraction(fallback_sl_roi, "ROI_%", leverage)
+                                    self.log("ATR SL unavailable: using configured fallback ROI SL for entry sizing.")
                                 else:
                                     raise RuntimeError("ATR_DYNAMIC_SL_UNAVAILABLE")
                             else:
@@ -17590,6 +17837,23 @@ class UniversalFuturesBotGUI:
                             )
 
                         except Exception as trade_error:
+                            # Bybit may reject a contract before an order is created when
+                            # the account has not accepted the exchange Trading Terms.
+                            # This is an account/contract prerequisite, not a strategy or
+                            # protection failure; keep the existing fail-closed recovery path.
+                            _trade_error_text = str(trade_error)
+                            _trade_error_lower = _trade_error_text.lower()
+                            if (
+                                "110123" in _trade_error_text
+                                or "trading terms" in _trade_error_lower
+                                or "agree to the trading terms" in _trade_error_lower
+                            ):
+                                self.log(
+                                    "BYBIT TRADING TERMS REQUIRED: Bybit rejected the order because "
+                                    "Trading Terms for this contract have not been accepted on the account. "
+                                    "Accept the applicable Bybit Trading Terms for the XAG/USDT contract, "
+                                    "then restart the bot. No strategy/risk setting can bypass this exchange prerequisite."
+                                )
                             self.log(
                                 f"TRADE/PROTECTION ERROR: "
                                 f"{trade_error}"
@@ -17716,7 +17980,6 @@ class UniversalFuturesBotGUI:
                             self.log("CRITICAL: consecutive cycle error limit reached; bot halted fail-closed.")
                             self.is_running = False
                             break
-
                 # ------------------------------------------------
                 # 9. Persistent checkpoint + 30-second scan
                 # ------------------------------------------------

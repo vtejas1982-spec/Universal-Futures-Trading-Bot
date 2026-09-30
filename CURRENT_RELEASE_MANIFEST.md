@@ -1,51 +1,28 @@
-# Current Release Manifest — R6.8.7.12
+# Current Release Manifest — R6.8.7.14 HOTFIX4
 
 ## Active Crypto AI-Agent release
-- Release: **V8.4.2-CRYPTO-AI-AGENT-R6.8.7.12**
-- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12.py`
-- Backtester: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12_BACKTESTER.py`
-- Windows build: `BUILD_CRYPTO_AI_AGENT_R6.8.7.12_EXE.bat`
-- Convenience launcher: `backtest.py`
-- Config schema: **33**
+- Release: **V8.4.2-CRYPTO-AI-AGENT-R6.8.7.14**
+- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.14.py`
+- Config schema: **35**
 - Runtime schema: **24**
 - Signal mode: **AI_AGENT**
-- Full audit: `docs/R6.8.7.12_FULL_AUDIT_R5.md`
-- Contract tests: `tests/test_crypto_ai_agent_r6_8_7_12_contract.py`
+- Audit build: `V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.14-AI-LEVERAGE-ADAPTIVE-FULL-AUDIT-HOTFIX4-LIQ-BOUNDARY`
 
-## AI-Agent contract
-- Minimum families: 3
-- Edge: 0.20
-- Family confidence: 0.55
-- Family participation: 0.35
-- Trend required: ON
-- Structure required: ON
-- Maximum family conflicts: 1
-- 2-family fallback: ON
-- 2-family edge: 0.65
-- 2-family confidence: 0.65
-- 2-family participation: 0.40
-- Adaptive ATR: ON
-- Adaptive ATR quantile: 0.30
-- Adaptive ATR floor: 0.10%
-- AI SL: 1.95 ATR
-- AI TP1: 1.35R
-- AI TP2: 2.70R
+## R6.8.7.14 HOTFIX4 changes
+- Automatic session-only leverage recovery for qualified entries blocked solely by the minimum 1.50 ATR liquidation-safety requirement.
+- Recovery chooses the highest safe integer leverage and can only lower leverage.
+- GUI/saved leverage remains unchanged.
+- Strict post-check prevents floating-point boundary violations.
+- All downstream liquidation, cost, fixed-quantity risk, execution-quality and protection gates remain mandatory.
 
-## R6.8.7.12 R5 fixes
-- 2F `None` runtime crash fixed.
-- Divergence zero-source fatal startup fixed with fail-closed optional-module disable.
-- `div_use_all` preset/profile synchronization fixed.
-- Final worker runtime snapshot refresh added after startup leverage mutations.
-- Backtester now has a real AI_AGENT decision path, causal adaptive ATR and leverage-tier risk caps.
+## Demo validation
+- Bybit Demo SOON/USDT.
+- Configured leverage: 25x.
+- Recovered session leverage: 7x.
+- AI stop: 1.626 ATR after safety adjustment.
+- Actual fill: LONG 0.4536, Qty 1400.
+- Protection verified: SL 0.4322, TP1 0.4795, TP2 0.5055.
+- Position protection verification: PASS.
 
-## Validation
-- Live engine compile: PASS
-- Backtester compile: PASS
-- Backtester AST parse: PASS
-- AI council smoke test: PASS
-- 150x risk-cap smoke test: PASS
-- Synthetic OHLCV end-to-end backtest: PASS
-- Bybit Demo remains required for final exchange-side validation.
-
-## Repository cleanup
-Superseded Crypto AI-Agent root copies and build scripts through R6.8.7.11 were removed from the active tree. They remain recoverable through Git history. The only currently active Crypto AI-Agent root release is R6.8.7.12.
+## Repository policy
+This main branch keeps one active Crypto AI-Agent root engine: **R6.8.7.14**. Superseded R6.8.7.12 root source/build/backtester/test artifacts are removed from the active tree and remain recoverable through Git history.

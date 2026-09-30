@@ -1,3 +1,34 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.14 HOTFIX4 — AI Leverage Recovery + Liquidation Boundary — 2026-09-30
+
+## Fixed
+- Fixed the leverage-recovery safety-boundary path so automatic recovery can lower an unsafe configured leverage without weakening any downstream protection gate.
+- Added strict floating-point post-validation to the minimum-safe-leverage calculator.
+- Preserved fail-closed behavior when no safe integer leverage can accommodate the minimum 1.50 ATR stop.
+
+## Added
+- Session-only automatic leverage recovery.
+- Explicit runtime recovery diagnostics showing old leverage, new leverage, ATR, minimum stop multiplier and effective liquidation buffer.
+- Full recovery-to-entry/protection Demo validation evidence for SOON/USDT.
+
+## Modified
+- Config schema advanced to 35.
+- HOTFIX4 audit provenance: `V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.14-AI-LEVERAGE-ADAPTIVE-FULL-AUDIT-HOTFIX4-LIQ-BOUNDARY`.
+- Saved GUI leverage is never overwritten by automatic recovery.
+
+## Safety preserved
+- Recovery only lowers leverage.
+- Liquidation guard, cost gate, fixed-quantity risk guard, execution-quality gates, actual-fill checks, exchange-side SL/TP verification and mandatory kill switch remain authoritative.
+- No profitability claim is made.
+
+## Bybit Demo validation
+- 25x configured leverage recovered to 7x.
+- AI SL constrained to 1.626 ATR within the 7x/3x liquidation envelope.
+- LONG fill at 0.4536 with quantity 1400.
+- SL 0.4322, TP1 0.4795 and TP2 0.5055 were acknowledged and verified active.
+- Final state: POSITION PROTECTED / TRADE OPENED.
+
+---
+
 # V8.4.2 Crypto AI-Agent R6.8.7.12 R5 — Full Audit + Backtester — 2026-09-30
 
 ## Fixed

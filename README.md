@@ -1,50 +1,40 @@
-# V8.4.2 Crypto AI-Agent R6.8.7.12 — Full Audit R5 — 2026-09-30
+# V8.4.2 Crypto AI-Agent R6.8.7.14 — AI Leverage Recovery + Liquidation-Boundary Hotfix — 2026-09-30
 
 ## Current release
 
-- **Live engine:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12.py`
-- **Backtester:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12_BACKTESTER.py`
-- **Build:** `BUILD_CRYPTO_AI_AGENT_R6.8.7.12_EXE.bat`
-- **Audit:** `docs/R6.8.7.12_FULL_AUDIT_R5.md`
-- **Contract test:** `tests/test_crypto_ai_agent_r6_8_7_12_contract.py`
+- **Live engine:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.14.py`
 - **Signal mode:** AI_AGENT
-- **Config schema:** 33
+- **Config schema:** 35
 - **Runtime schema:** 24
+- **Audit build:** `V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.14-AI-LEVERAGE-ADAPTIVE-FULL-AUDIT-HOTFIX4-LIQ-BOUNDARY`
 
-### R6.8.7.12 fixes
+### R6.8.7.14 HOTFIX4
 
-- Fixed the live 2F `None` conversion crash.
-- Hardened the pure AI decision engine against missing 2F settings.
-- Divergence with zero selected sources now fails closed by disabling only the optional Divergence module.
-- `div_use_all` now actually enables all divergence sources.
-- Profile-load divergence state is synchronized.
-- Final runtime GUI snapshot is refreshed after startup/exchange leverage mutations.
+- Added automatic **session-only leverage recovery** when a qualified AI entry is blocked because the selected leverage cannot safely accommodate the minimum **1.50 ATR** stop.
+- Recovery selects the **highest integer leverage that makes the minimum ATR stop liquidation-safe**, and can only lower leverage.
+- Saved GUI leverage is **never overwritten**; the effective session leverage is logged and recalculated after restart.
+- After recovery, the complete normal pipeline still runs: AI qualification, liquidation guard, cost gate, fixed-quantity risk guard, execution-quality checks, actual-fill checks, and exchange-side protection verification.
+- Added strict floating-point boundary protection so the recovery calculator cannot return a leverage value that fails its own safety test.
+- If no safe integer leverage exists, the original fail-closed rejection remains active.
 
-### R6.8.7.12 backtester
+### Bybit Demo validation
 
-The current backtester now models the deterministic AI-Agent strategy contract used by the audited engine:
+The supplied HOTFIX4 Bybit Demo run demonstrated the full recovery-to-entry path on SOON/USDT:
 
-- 3-family AI council
-- Edge >= 0.20
-- Family confidence >= 0.55
-- Family participation >= 0.35
-- Trend + Structure requirements
-- Maximum 1 family conflict
-- Bounded soft ADX/Volume regime
-- Explicit 2-family high-conviction fallback
-- Causal adaptive ATR floor
-- AI ATR SL 1.95x
-- AI TP1 1.35R
-- AI TP2 2.70R
-- High-leverage risk-tier caps including 50x / 100x / 150x
+- GUI leverage: 25x.
+- AI leverage recovery: **25x → 7x**.
+- AI SL adjusted from requested 2.08 ATR to a liquidation-safe **1.626 ATR**.
+- Fixed-quantity risk check passed.
+- Execution-quality gate passed.
+- Actual LONG fill: **0.4536**, quantity **1400**, leverage **7x**.
+- Actual-fill SL/TP protection was created and verified: SL + TP1 + TP2.
+- Position reached the final **POSITION PROTECTED** state.
 
-The backtester continues to use completed candles and next-candle-open entries and keeps the conservative SL-first rule when a single candle touches both SL and TP.
+This is exchange-demo evidence for the recovery/protection lifecycle, not a profitability guarantee.
 
-### R6.8.7.12 safety note
+### Safety contract
 
-Live-only execution checks remain live-only: order-book spread/slippage/depth, actual exchange fills, exchange trigger semantics, mark/liquidation responses, websocket/recovery state and kill-switch exchange operations are not fabricated as historical backtest signals.
-
-See [R6.8.7.12 Full Audit R5](docs/R6.8.7.12_FULL_AUDIT_R5.md).
+The recovery path never raises leverage and never bypasses liquidation, cost, quantity/risk, execution-quality, protection or kill-switch controls. The deterministic AI-Agent engine remains rule-based; it is not an external LLM.
 
 ---
 
