@@ -927,3 +927,8 @@ Blocked AI logs can now expose FAMILY_DETAIL=TREND:SELL:0.82|MOMENTUM:SELL:0.67|
 
 ### Validation
 AST parse: PASS. py_compile: PASS. Static strategy/protection/configuration audit: PASS. Bare-container import was not available because ccxt is not installed there. Bybit Demo remains the final exchange-side validation environment.
+
+
+### R6.8.7.11 R4 runtime audit
+
+R4 fixes the live decision_reason() 2F-parameter propagation defect that caused float(None) in all three Bybit Demo bots, and hardens remaining worker-thread GUI input reads. Local regression audit: 15/15 PASS.
