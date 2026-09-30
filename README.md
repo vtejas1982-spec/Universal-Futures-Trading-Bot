@@ -1,3 +1,53 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.12 — Full Audit R5 — 2026-09-30
+
+## Current release
+
+- **Live engine:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12.py`
+- **Backtester:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12_BACKTESTER.py`
+- **Build:** `BUILD_CRYPTO_AI_AGENT_R6.8.7.12_EXE.bat`
+- **Audit:** `docs/R6.8.7.12_FULL_AUDIT_R5.md`
+- **Contract test:** `tests/test_crypto_ai_agent_r6_8_7_12_contract.py`
+- **Signal mode:** AI_AGENT
+- **Config schema:** 33
+- **Runtime schema:** 24
+
+### R6.8.7.12 fixes
+
+- Fixed the live 2F `None` conversion crash.
+- Hardened the pure AI decision engine against missing 2F settings.
+- Divergence with zero selected sources now fails closed by disabling only the optional Divergence module.
+- `div_use_all` now actually enables all divergence sources.
+- Profile-load divergence state is synchronized.
+- Final runtime GUI snapshot is refreshed after startup/exchange leverage mutations.
+
+### R6.8.7.12 backtester
+
+The current backtester now models the deterministic AI-Agent strategy contract used by the audited engine:
+
+- 3-family AI council
+- Edge >= 0.20
+- Family confidence >= 0.55
+- Family participation >= 0.35
+- Trend + Structure requirements
+- Maximum 1 family conflict
+- Bounded soft ADX/Volume regime
+- Explicit 2-family high-conviction fallback
+- Causal adaptive ATR floor
+- AI ATR SL 1.95x
+- AI TP1 1.35R
+- AI TP2 2.70R
+- High-leverage risk-tier caps including 50x / 100x / 150x
+
+The backtester continues to use completed candles and next-candle-open entries and keeps the conservative SL-first rule when a single candle touches both SL and TP.
+
+### R6.8.7.12 safety note
+
+Live-only execution checks remain live-only: order-book spread/slippage/depth, actual exchange fills, exchange trigger semantics, mark/liquidation responses, websocket/recovery state and kill-switch exchange operations are not fabricated as historical backtest signals.
+
+See [R6.8.7.12 Full Audit R5](docs/R6.8.7.12_FULL_AUDIT_R5.md).
+
+---
+
 ## R6.8.7.11 R3 — Live-Log Runtime Hardening — 2026-09-30
 
 ### Fixed
