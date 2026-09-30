@@ -1,3 +1,46 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.14 — Multi-Bot Hub HOTFIX3 Full Audit — 2026-09-30
+
+## Current audited Hub build
+
+- **Local audited engine:** `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.14_MULTIBOT_HUB_MEMORY_OPTIMIZED_HOTFIX3_FULL_AUDIT.py`
+- **Internal build:** `V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.14-FIBONACCI-OPTIONAL-HOTFIX8-DIAGNOSTIC-CLEANUP-FULL-AUDIT-MULTIBOT-HUB-HOTFIX3`
+- **Config schema:** 36
+- **Runtime schema:** 24
+- **Launch mode:** Multi-Bot Hub by default; `--single-bot` remains explicit legacy editor mode.
+
+### HOTFIX3 — Full audit / liquidation data hardening
+
+**Fixed**
+- Added exchange `liqPrice` sanity classification. Missing, non-finite, wrong-side, or absurd liquidation distances are treated as unusable exchange data.
+- If exchange liquidation data is unusable, the engine falls back to the deterministic leverage/buffer safety envelope.
+- GUI-selected leverage remains authoritative; automatic leverage lowering remains disabled.
+- Retired misleading documentation that implied automatic leverage recovery was active in the exact-leverage production build.
+
+**Added / retained**
+- One-process Multi-Bot Hub with independent profile workers.
+- Per-profile COPY / CLEAR VIEW / AUTO-SCROLL controls.
+- COPY RUNNING LOGS / SAVE RUNNING LOGS / AUTO-SCROLL ALL.
+- Timestamped persistent profile logs and combined running-log export.
+- Hub watchdog and exclusive exchange/account/symbol ownership.
+- Fibonacci OFF-by-default protection with exact-leverage fail-closed behavior.
+
+**Audit checks**
+- AST parse: PASS
+- Python compile: PASS
+- Stubbed import: PASS
+- GUI callback binding: PASS
+- StrategyEngine self-call audit: PASS
+- GUI self-call audit: PASS
+- Multi-Bot Hub self-call audit: PASS
+- AI preset persistence coverage: 157/157 PASS
+- AI council smoke test: PASS
+- 2F fallback smoke test: PASS
+- Ambiguous SINGLE_SIGNAL smoke test: PASS
+
+See `docs/R6.8.7.14_MULTIBOT_HUB_HOTFIX3_FULL_AUDIT.md`.
+
+> This is an engineering/safety hardening release, not a profitability guarantee. Continue Bybit Demo/Testnet validation before Live.
+
 # V8.4.2 Crypto AI-Agent R6.8.7.14 — AI Leverage Recovery + Liquidation-Boundary Hotfix — 2026-09-30
 
 ## Current release
