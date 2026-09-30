@@ -1,3 +1,42 @@
+## Current Crypto AI-Agent R6.8.7.11 — Full Engine Audit — 2026-09-30
+
+The current audited deterministic Crypto AI-Agent engine is **V8.4.2-CRYPTO-AI-AGENT-R6.8.7.11**.
+
+### Fixed
+- Fixed the VWAP Delta bearish-state assignment bug.
+- Unified AI 2-family fallback and soft-regime settings across live decision, shadow, pipeline audit and AI trade management.
+- Preserved the corrected `decide_signal()` keyword contract from HOTFIX1/HOTFIX2.
+- Made Grid quantity and current exposure contract-size aware.
+- Added a hard Grid liquidation-safety check for the global Grid SL.
+- Made the tradeability audit report/evaluate the effective adaptive ATR threshold.
+- Corrected stale Soft-Regime GUI documentation.
+
+### Protection / risk contract
+- One normal SL owner: HOLD-SL > ATR > ROI > fallback.
+- TP2 must remain farther than TP1.
+- Fixed Qty remains literal and is risk-checked before entry and after fill.
+- Equity-risk sizing uses the resolved stop distance.
+- Cost, liquidation, execution-quality and protection-coverage gates remain hard.
+- TP1/TP2 use the actual filled position quantity and configured split.
+- TP1 break-even creates/verifies replacement protection before removing the old SL.
+- AI trailing only tightens the active stop and remains liquidation-safe.
+
+### Validation
+- AST parse: PASS
+- Python compile: PASS
+- AI council smoke test: PASS
+- 2-family fallback smoke test: PASS
+- Grid contract-size quantity test: PASS
+- Unsafe Grid-SL rejection test: PASS
+- Full focused contract tests added at `tests/test_crypto_ai_agent_r6_8_7_11_contract.py`
+
+### Demo evidence
+The supplied Bybit Demo run reached an actual OP/USDT order and verified SL + TP1 + TP2 after the real fill. A SOON/USDT setup was correctly rejected because its AI-selected stop was incompatible with the 20x liquidation-safe envelope.
+
+See `docs/R6.8.7.11_FULL_ENGINE_AUDIT.md`.
+
+This is an engineering hardening release, not a profitability guarantee. Run the exact build on Bybit Demo/Testnet before Live.
+
 ## Current Crypto AI-Agent R6.8.7.2.1 release — 2026-09-29
 
 The current audited deterministic Crypto AI-Agent engine is **V8.4.2-CRYPTO-AI-AGENT-R6.8.7.2.1**.
