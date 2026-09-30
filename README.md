@@ -41,6 +41,10 @@ See `docs/R6.8.7.14_MULTIBOT_HUB_HOTFIX3_FULL_AUDIT.md`.
 
 > This is an engineering/safety hardening release, not a profitability guarantee. Continue Bybit Demo/Testnet validation before Live.
 
+### GitHub source synchronization status
+
+The HOTFIX3 source was fully audited and generated locally as the downloadable `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.14_MULTIBOT_HUB_MEMORY_OPTIMIZED_HOTFIX3_FULL_AUDIT.py`. The GitHub README, CHANGELOG and audit report are synchronized to HOTFIX3. The current 943 KB source replacement itself could not be serialized through the connected GitHub file-write action in this session, so the repository source file was not falsely reported as replaced.
+
 # V8.4.2 Crypto AI-Agent R6.8.7.14 — AI Leverage Recovery + Liquidation-Boundary Hotfix — 2026-09-30
 
 ## Current release
