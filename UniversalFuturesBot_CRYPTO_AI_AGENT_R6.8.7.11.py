@@ -19,6 +19,7 @@ import requests
 import sys
 import shutil
 import subprocess
+import traceback
 from pathlib import Path
 
 
@@ -155,9 +156,15 @@ from pathlib import Path
 #  8. Persisted 2F fallback thresholds and adaptive-ATR parameters as profile-controlled settings.
 #  9. Added startup validation for 2F/adaptive-ATR ranges and post-fill FIXED_QTY risk uses actual exchange leverage.
 # 10. Updated AI preset/build provenance to R6.8.7.11.
-APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.11-FULL-AUDIT"
+# R6.8.7.11 R3 LIVE-LOG AUDIT:
+#  1. Hardened worker GUI-snapshot numeric/text reads against transient None/blank values.
+#  2. Added exact cycle traceback diagnostics so non-exchange worker failures expose their call site.
+#  3. Propagated all persisted 2F fallback thresholds/requirements into AI trade-management re-evaluation.
+#  4. Preserved fail-closed validation: missing/invalid critical settings resolve to validated defaults
+#     and are still subject to the normal risk/liquidation/cost/protection gates.
+APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.11-FULL-AUDIT-R3"
 APP_TITLE = "Universal Futures Bot V8.4.2-AI-AGENT-R6.8.7.11 - Full Engine Audit + 2F Fallback + Adaptive ATR"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.11-FULL-ENGINE-AUDIT-R2"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.11-FULL-ENGINE-AUDIT-R3"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -459,9 +466,6 @@ AI_AGENT_PRESET = {
     "ai_adaptive_atr_enabled": True,
     "ai_adaptive_atr_quantile": 0.30,
     "ai_adaptive_atr_floor_pct": 0.10,
-    "ai_2f_min_edge": 0.65,
-    "ai_2f_min_family_confidence": 0.65,
-    "ai_2f_min_participation": 0.40,
     # Execution / market regime.
     "timeframe": "15m",
     "leverage": "5",
@@ -997,7 +1001,8 @@ def calculate_supertrend(
 
     final_ub = [np.nan] * len(df)
     final_lb = [np.nan] * len(df)
-    trend = [True] * len(df)    supertrend = [np.nan] * len(df)
+    trend = [True] * len(df)
+    supertrend = [np.nan] * len(df)
 
     for i in range(len(df)):
         # Pine has na values until ATR becomes available. Keep those bars
@@ -1996,7 +2001,8 @@ class StrategyEngine:
         bear_total=sum(v["bear"] for v in families.values())
         total=bull_total+bear_total
         raw_edge=abs(bull_total-bear_total)/total if total else 0.0
-        family_scores = {            f: ((v["bull"] - v["bear"]) / (v["bull"] + v["bear"]) if (v["bull"] + v["bear"]) > 0 else 0.0)
+        family_scores = {
+            f: ((v["bull"] - v["bear"]) / (v["bull"] + v["bear"]) if (v["bull"] + v["bear"]) > 0 else 0.0)
             for f, v in families.items()
         }
         voting_scores = [family_scores[f] for f, v in families.items() if (v["bull"] + v["bear"]) > 0]
@@ -2996,6 +3002,7 @@ class UniversalFuturesBotGUI:
         self.volume_sr_cache_time = 0.0
         self.last_advanced_signal_log = None
         self.last_strategy_signal_log_key = None
+
         self._init_csv_log()
         self._init_master_db()
         self._build_ui()
@@ -3994,7 +4001,8 @@ class UniversalFuturesBotGUI:
             state.get("daily_start_balance") or self.start_balance
         )
         self.daily_peak_equity = float(state.get("daily_peak_equity") or self.daily_start_balance or 0.0)
-        self.session_peak_equity = float(state.get("session_peak_equity") or self.start_balance or 0.0)        self.consecutive_cycle_errors = int(state.get("consecutive_cycle_errors") or 0)
+        self.session_peak_equity = float(state.get("session_peak_equity") or self.start_balance or 0.0)
+        self.consecutive_cycle_errors = int(state.get("consecutive_cycle_errors") or 0)
         self.last_market_data_ts = int(state.get("last_market_data_ts") or 0)
         saved_date = state.get("daily_start_date")
         try:
@@ -4994,6 +5002,7 @@ class UniversalFuturesBotGUI:
                 raise RuntimeError(
                     f"Profile {profile} became active before deletion."
                 )
+
             removed = []
             if profile_dir.exists():
                 shutil.rmtree(profile_dir)
@@ -5993,6 +6002,7 @@ class UniversalFuturesBotGUI:
             ("SMA", "EMA", "WMA"), 1, 4
         )
         _entry(fr, "MA Period", "e_rsi_ma_len", "9", 1, 6)
+
         _check(fr, "Stochastic", "v_use_stoch", False, 2, 0)
         _entry(fr, "K", "e_stoch_k", "14", 2, 2, 5)
         _entry(fr, "Smooth", "e_stoch_smooth", "3", 2, 4, 5)
@@ -6991,8 +7001,32 @@ class UniversalFuturesBotGUI:
             return result
         except (TypeError, ValueError):
             try:
-                return int(default)            except (TypeError, ValueError):
+                return int(default)
+            except (TypeError, ValueError):
                 return 0
+
+    def _safe_runtime_text(self, attr, default=""):
+        """Read a text GUI snapshot without allowing a transient None/blank value to crash the worker."""
+        value = self._runtime_gui_value(attr, default)
+        if value is None:
+            return str(default)
+        text_value = str(value).strip()
+        return text_value if text_value else str(default)
+
+    def _safe_runtime_bool(self, attr, default=False):
+        """Read a BooleanVar snapshot safely; None/blank values fall back to the declared default."""
+        value = self._runtime_gui_value(attr, default)
+        if value is None:
+            return bool(default)
+        if isinstance(value, str):
+            text_value = value.strip().lower()
+            if text_value in ("", "none", "null"):
+                return bool(default)
+            if text_value in ("1", "true", "yes", "on", "enabled"):
+                return True
+            if text_value in ("0", "false", "no", "off", "disabled"):
+                return False
+        return bool(value)
 
     def _on_size_mode_changed(self, selected=None):
         """Keep sizing mode independent from SL mode. Fixed Qty is literal quantity."""
@@ -7990,7 +8024,8 @@ class UniversalFuturesBotGUI:
             self.e_adaptive_min_weight.delete(0, tk.END)
             self.e_adaptive_min_weight.insert(0, cfg.get("adaptive_min_weight", DEFAULT_ADAPTIVE_MIN_WEIGHT))
             self.e_evidence_min_families.delete(0, tk.END)
-            self.e_evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))            self.e_evidence_family_min_score.delete(0, tk.END)
+            self.e_evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
+            self.e_evidence_family_min_score.delete(0, tk.END)
             self.e_evidence_family_min_score.insert(0, cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
             self.v_evidence_require_trend.set(bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)))
             self.v_evidence_require_independent.set(bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
@@ -8990,6 +9025,7 @@ class UniversalFuturesBotGUI:
         for meta in (gs.get("entry_orders") or {}).values():
             if isinstance(meta, dict) and meta.get("id"):
                 ids.add(str(meta["id"]))
+
         return ids
 
     @staticmethod
@@ -9300,10 +9336,10 @@ class UniversalFuturesBotGUI:
         if mode == "FIXED_QTY":
             protection_mode = (
                 "LEGACY_R9.3"
-                if bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+                if self._safe_runtime_bool("v_legacy_protection_enabled", False)
                 else (
                     "HOLD_ALL_REVERSE"
-                    if bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+                    if self._safe_runtime_bool("v_hold_until_all_reverse", False)
                     else "SIMPLE_ROI"
                 )
             )
@@ -9989,6 +10025,7 @@ class UniversalFuturesBotGUI:
         if last is None:
             raise RuntimeError("Exchange returned no current market price.")
         return float(last)
+
     def _manage_hold_sl_wait_reversal(self, position):
         """Monitor the Hold-All-Reverse ROI threshold without an exchange SL.
 
@@ -10355,16 +10392,16 @@ class UniversalFuturesBotGUI:
         if qty <= 0:
             raise RuntimeError("Actual position quantity is invalid.")
 
-        hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
-        legacy_mode = bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
+        hold_all_reverse = self._safe_runtime_bool("v_hold_until_all_reverse", False)
+        legacy_mode = self._safe_runtime_bool("v_legacy_protection_enabled", False)
         if legacy_mode:
             tp_engine_enabled = True
             tp1_enabled = tp1 is not None
             tp2_enabled = tp2 is not None
         else:
-            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
-            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
-            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
+            tp_engine_enabled = self._safe_runtime_bool("v_tp_enabled", True)
+            tp1_enabled = self._safe_runtime_bool("v_tp1_enabled", True)
+            tp2_enabled = self._safe_runtime_bool("v_tp2_enabled", True)
 
         tp1_qty = 0.0
         tp2_qty = 0.0
@@ -10633,7 +10670,7 @@ class UniversalFuturesBotGUI:
         # When Hold-All-Reverse is ON, strategy reversal is the profit exit.
         # Remove any TP orders that may have been created before the setting was
         # enabled, and make SL the only exchange-side protection order.
-        if bool(self._runtime_gui_value("v_hold_until_all_reverse", False)):
+        if self._safe_runtime_bool("v_hold_until_all_reverse", False):
             for label, oid in (("TP1", tp1_id), ("TP2", tp2_id)):
                 if oid and _is_open(oid):
                     try:
@@ -10979,21 +11016,22 @@ class UniversalFuturesBotGUI:
 
     def _grid_validate_settings(self):
         """Validate Grid settings before startup and before any order is placed."""
-        mode = self._runtime_gui_value("v_grid_mode").strip().upper()
+        mode = self._safe_runtime_text("v_grid_mode", "").upper()
         if mode not in ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID"):
             raise ValueError("Invalid Grid Mode.")
 
-        levels = int(self._runtime_gui_value("e_grid_levels"))
-        spacing_pct = float(self._runtime_gui_value("e_grid_spacing"))
-        order_size = float(self._runtime_gui_value("e_grid_order_size"))
-        size_inc_pct = float(self._runtime_gui_value("e_grid_size_increase"))
-        tp_pct = float(self._runtime_gui_value("e_grid_tp"))        sl_pct = float(self._runtime_gui_value("e_grid_sl"))
-        max_exp = float(self._runtime_gui_value("e_grid_max_exposure"))
-        max_dd_pct = float(self._runtime_gui_value("e_grid_max_dd"))
-        grid_score_min = int(self._runtime_gui_value("e_grid_score_min"))
-        rec_pct = float(self._runtime_gui_value("e_grid_recenter"))
-        cooldown = float(self._runtime_gui_value("e_grid_cooldown"))
-        filt = self._runtime_gui_value("v_grid_trend_filter").strip().upper()
+        levels = self._safe_runtime_int("e_grid_levels", 0)
+        spacing_pct = self._safe_runtime_float("e_grid_spacing", 0.0)
+        order_size = self._safe_runtime_float("e_grid_order_size", 0.0)
+        size_inc_pct = self._safe_runtime_float("e_grid_size_increase", 0.0)
+        tp_pct = self._safe_runtime_float("e_grid_tp", 0.0)
+        sl_pct = self._safe_runtime_float("e_grid_sl", 0.0)
+        max_exp = self._safe_runtime_float("e_grid_max_exposure", 0.0)
+        max_dd_pct = self._safe_runtime_float("e_grid_max_dd", 0.0)
+        grid_score_min = self._safe_runtime_int("e_grid_score_min", 0)
+        rec_pct = self._safe_runtime_float("e_grid_recenter", 0.0)
+        cooldown = self._safe_runtime_float("e_grid_cooldown", 0.0)
+        filt = self._safe_runtime_text("v_grid_trend_filter", "").upper()
 
         if not 1 <= levels <= 50:
             raise ValueError("Grid Levels must be 1-50.")
@@ -11117,7 +11155,7 @@ class UniversalFuturesBotGUI:
         #
         # LONG_GRID / SHORT_GRID keep their existing behavior unchanged.
         if mode == "NEUTRAL_GRID":
-            if filt == "SUPERTREND" and not bool(self._runtime_gui_value("v_use_st")):
+            if filt == "SUPERTREND" and not self._safe_runtime_bool("v_use_st", False):
                 raise ValueError(
                     "NEUTRAL_GRID + SUPERTREND requires Supertrend to be enabled in Section 3."
                 )
@@ -11139,7 +11177,7 @@ class UniversalFuturesBotGUI:
             "tp_pct": tp_pct / 100.0, "sl_pct": sl_pct / 100.0,
             "max_exposure": max_exp, "max_dd": max_dd_pct / 100.0,
             "score_min": grid_score_min,
-            "trend_filter": filt, "recenter": bool(self._runtime_gui_value("v_grid_recenter")),
+            "trend_filter": filt, "recenter": self._safe_runtime_bool("v_grid_recenter", False),
             "recenter_distance": rec_pct / 100.0, "cooldown": cooldown * 60.0,
         }
 
@@ -11986,7 +12024,8 @@ class UniversalFuturesBotGUI:
                     continue
                 ids = self._known_managed_order_ids(symbol)
                 if ids:
-                    try:                        self._cancel_known_managed_orders_from_ids(symbol, ids)
+                    try:
+                        self._cancel_known_managed_orders_from_ids(symbol, ids)
                     except Exception as e:
                         last_error = e
                         time.sleep(CLOSE_VERIFY_POLL_SECONDS)
@@ -12725,7 +12764,7 @@ class UniversalFuturesBotGUI:
             # legacy 3x buffer untouched, uses a 2x buffer so extreme leverage
             # can remain economically feasible without bypassing the hard
             # liquidation or cost gates.
-            configured_liq_buffer = float(self._runtime_gui_value("e_liq_buffer", DEFAULT_LIQ_BUFFER_MULT) or DEFAULT_LIQ_BUFFER_MULT)
+            configured_liq_buffer = self._safe_runtime_float("e_liq_buffer", float(DEFAULT_LIQ_BUFFER_MULT))
             effective_buffer, _hl_profile = high_leverage_profile(leverage, configured_liq_buffer)
             liq_buffer = float(effective_buffer)
             if effective_buffer != float(configured_liq_buffer):
@@ -12985,7 +13024,8 @@ class UniversalFuturesBotGUI:
                     f"MACD {self.e_macd_fast.get().strip()}/{self.e_macd_slow.get().strip()}/{self.e_macd_signal.get().strip()}"
                 )
             if self.v_use_rsi.get():
-                enabled_modules.append(                    f"RSI {self.e_rsi_len.get().strip()} "
+                enabled_modules.append(
+                    f"RSI {self.e_rsi_len.get().strip()} "
                     f"({self.v_rsi_logic.get()} | {self.v_rsi_ma_type.get()} {self.e_rsi_ma_len.get().strip()} | "
                     f"OS {self.e_rsi_os.get().strip()} / OB {self.e_rsi_ob.get().strip()})"
                 )
@@ -13620,9 +13660,9 @@ class UniversalFuturesBotGUI:
         existing SL is cancelled and replaced with a reduce-only trigger at
         the actual filled entry price. TP2 is left untouched.
         """
-        if bool(self._runtime_gui_value("v_hold_until_all_reverse", False)):
+        if self._safe_runtime_bool("v_hold_until_all_reverse", False):
             return
-        if not bool(self._runtime_gui_value("v_tp1_be", True)):
+        if not self._safe_runtime_bool("v_tp1_be", True):
             return
         if self.tp1_be_done:
             return
@@ -13910,7 +13950,7 @@ class UniversalFuturesBotGUI:
         """
         if not AI_AGENT_TRAILING_ENABLED or not position or not self.last_protected_position:
             return False
-        if bool(self._runtime_gui_value("v_hold_until_all_reverse", False)) or self.hold_sl_wait_reversal:
+        if self._safe_runtime_bool("v_hold_until_all_reverse", False) or self.hold_sl_wait_reversal:
             return False
         if not self.tp1_be_done:
             return False
@@ -13984,7 +14024,8 @@ class UniversalFuturesBotGUI:
             # New SL is live before old SL is cancelled, avoiding an unprotected gap.
             if old_id and old_id != new_id:
                 try:
-                    self.exchange.cancel_order(old_id, self.symbol)                except Exception as e:
+                    self.exchange.cancel_order(old_id, self.symbol)
+                except Exception as e:
                     self.log(f"AI TRAIL OLD SL CANCEL NOTICE | ID={old_id} | {e}")
             protected["sl_id"] = new_id or protected.get("sl_id")
             protected["sl"] = candidate
@@ -14156,29 +14197,29 @@ class UniversalFuturesBotGUI:
     ):
         """Compatibility wrapper around the V8.4 evidence-family engine."""
         if evidence_min_families is None:
-            evidence_min_families = int(self._runtime_gui_value("e_evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
+            evidence_min_families = self._safe_runtime_int("e_evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES)
         if evidence_family_min_score is None:
-            evidence_family_min_score = float(self._runtime_gui_value("e_evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
+            evidence_family_min_score = self._safe_runtime_float("e_evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE)
         if evidence_require_trend is None:
-            evidence_require_trend = bool(self._runtime_gui_value("v_evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND))
+            evidence_require_trend = self._safe_runtime_bool("v_evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)
         if evidence_require_independent is None:
-            evidence_require_independent = bool(self._runtime_gui_value("v_evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT))
+            evidence_require_independent = self._safe_runtime_bool("v_evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)
         if ai_min_families is None:
-            ai_min_families = int(self._runtime_gui_value("e_ai_min_families", AI_AGENT_MIN_FAMILIES))
+            ai_min_families = self._safe_runtime_int("e_ai_min_families", AI_AGENT_MIN_FAMILIES)
         if ai_min_edge is None:
-            ai_min_edge = float(self._runtime_gui_value("e_ai_min_edge", AI_AGENT_MIN_EDGE))
+            ai_min_edge = self._safe_runtime_float("e_ai_min_edge", AI_AGENT_MIN_EDGE)
         if ai_family_confidence is None:
-            ai_family_confidence = float(self._runtime_gui_value("e_ai_family_confidence", AI_AGENT_MIN_FAMILY_CONFIDENCE))
+            ai_family_confidence = self._safe_runtime_float("e_ai_family_confidence", AI_AGENT_MIN_FAMILY_CONFIDENCE)
         if ai_require_trend is None:
-            ai_require_trend = bool(self._runtime_gui_value("v_ai_require_trend", AI_AGENT_REQUIRE_TREND))
+            ai_require_trend = self._safe_runtime_bool("v_ai_require_trend", AI_AGENT_REQUIRE_TREND)
         if ai_require_structure is None:
-            ai_require_structure = bool(self._runtime_gui_value("v_ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE))
+            ai_require_structure = self._safe_runtime_bool("v_ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE)
         if ai_max_conflicts is None:
-            ai_max_conflicts = int(self._runtime_gui_value("e_ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES))
+            ai_max_conflicts = self._safe_runtime_int("e_ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES)
         if ai_min_family_participation is None:
             ai_min_family_participation = self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION)
         if ai_soft_regime is None:
-            ai_soft_regime = bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED))
+            ai_soft_regime = self._safe_runtime_bool("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)
         if ai_soft_edge is None:
             ai_soft_edge = self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE)
         if ai_soft_min_families is None:
@@ -14186,7 +14227,7 @@ class UniversalFuturesBotGUI:
         if ai_soft_max_regime_misses is None:
             ai_soft_max_regime_misses = self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES)
         if ai_2f_fallback_enabled is None:
-            ai_2f_fallback_enabled = bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED))
+            ai_2f_fallback_enabled = self._safe_runtime_bool("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED)
         if ai_2f_min_edge is None:
             ai_2f_min_edge = self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE)
         if ai_2f_min_family_confidence is None:
@@ -14194,9 +14235,9 @@ class UniversalFuturesBotGUI:
         if ai_2f_min_participation is None:
             ai_2f_min_participation = self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION)
         if ai_2f_require_structure is None:
-            ai_2f_require_structure = bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE))
+            ai_2f_require_structure = self._safe_runtime_bool("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)
         if ai_2f_require_independent is None:
-            ai_2f_require_independent = bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT))
+            ai_2f_require_independent = self._safe_runtime_bool("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)
         # R6.8.7.10 HOTFIX2: align the AI family-confidence keyword with the
         # decide_signal() parameter name (ai_min_family_confidence).
         # R6.8.7.10 HOTFIX1: use keyword arguments for the expanded AI-agent
@@ -14328,7 +14369,7 @@ class UniversalFuturesBotGUI:
         try:
             if self._kill_switch_latched(self.bot_profile_id, self.session_id):
                 raise RuntimeError("PERSISTENT KILL SWITCH LATCH ACTIVE: trading session is disarmed.")
-            timeframe = str(self._runtime_gui_value("v_tf")).strip().lower()
+            timeframe = self._safe_runtime_text("v_tf", "15m").lower()
             supported_timeframes = {"1m", "3m", "5m", "15m", "30m", "45m", "1h", "4h"}
             if timeframe not in supported_timeframes:
                 raise ValueError(
@@ -14336,13 +14377,13 @@ class UniversalFuturesBotGUI:
                 )
 
             try:
-                max_trades = int(self._runtime_gui_value("e_max_trades").strip())
+                max_trades = int(self._safe_runtime_text("e_max_trades", ""))
             except Exception:
                 raise ValueError("Max Trades must be a whole number. Use 1 for this single-symbol engine.")
             if max_trades < 0:
                 raise ValueError("Max Trades cannot be negative.")
             try:
-                max_open_trades = int(self._runtime_gui_value("e_max_open_trades").strip())
+                max_open_trades = int(self._safe_runtime_text("e_max_open_trades", ""))
             except Exception:
                 raise ValueError("Max Open Trades must be a whole number. Use 1 for this single-symbol engine.")
             if max_open_trades < 0:
@@ -14355,7 +14396,7 @@ class UniversalFuturesBotGUI:
             self.log(f"MAX OPEN TRADES: {max_open_trades} net position per bot/symbol.")
             no_same_candle = self._runtime_gui_value("v_no_same_candle")
             try:
-                cooldown_min = float(self._runtime_gui_value("e_cooldown_min").strip())
+                cooldown_min = float(self._safe_runtime_text("e_cooldown_min", ""))
             except Exception:
                 raise ValueError("Cooldown must be a number of minutes.")
             if cooldown_min < 0:
@@ -14368,8 +14409,8 @@ class UniversalFuturesBotGUI:
             st_mult = float(
                 self._runtime_gui_value("e_st_mult")
             )
-            st_source = self._runtime_gui_value("v_st_source").strip().upper()
-            st_change_atr = bool(self._runtime_gui_value("v_st_change_atr"))
+            st_source = self._safe_runtime_text("v_st_source", "").upper()
+            st_change_atr = self._safe_runtime_bool("v_st_change_atr", False)
 
             if st_source not in ("CLOSE", "HL2"):
                 raise ValueError("Supertrend Source must be CLOSE or HL2.")
@@ -14401,16 +14442,16 @@ class UniversalFuturesBotGUI:
                     "EMA crossover Fast and Slow periods must be different."
                 )
 
-            ema_cross_entry_mode = self._runtime_gui_value("v_ema_cross_entry_mode").strip().upper()
+            ema_cross_entry_mode = self._safe_runtime_text("v_ema_cross_entry_mode", "").upper()
             if ema_cross_entry_mode not in ("FRESH_CROSS", "CURRENT_TREND"):
                 raise ValueError(
                     "EMA crossover Entry mode must be FRESH_CROSS or CURRENT_TREND."
                 )
 
             use_macd = self._runtime_gui_value("v_use_macd")
-            macd_fast_len = int(self._runtime_gui_value("e_macd_fast"))
-            macd_slow_len = int(self._runtime_gui_value("e_macd_slow"))
-            macd_signal_len = int(self._runtime_gui_value("e_macd_signal"))
+            macd_fast_len = self._safe_runtime_int("e_macd_fast", 0)
+            macd_slow_len = self._safe_runtime_int("e_macd_slow", 0)
+            macd_signal_len = self._safe_runtime_int("e_macd_signal", 0)
 
             if macd_fast_len <= 0 or macd_slow_len <= 0 or macd_signal_len <= 0:
                 raise ValueError("MACD periods must be greater than 0.")
@@ -14418,12 +14459,12 @@ class UniversalFuturesBotGUI:
                 raise ValueError("MACD Fast period must be smaller than Slow period.")
 
             use_rsi = self._runtime_gui_value("v_use_rsi")
-            rsi_len = int(self._runtime_gui_value("e_rsi_len"))
-            rsi_ob = float(self._runtime_gui_value("e_rsi_ob"))
-            rsi_os = float(self._runtime_gui_value("e_rsi_os"))
-            rsi_logic = self._runtime_gui_value("v_rsi_logic").strip().upper()
-            rsi_ma_type = self._runtime_gui_value("v_rsi_ma_type").strip().upper()
-            rsi_ma_len = int(self._runtime_gui_value("e_rsi_ma_len"))
+            rsi_len = self._safe_runtime_int("e_rsi_len", 0)
+            rsi_ob = self._safe_runtime_float("e_rsi_ob", 0.0)
+            rsi_os = self._safe_runtime_float("e_rsi_os", 0.0)
+            rsi_logic = self._safe_runtime_text("v_rsi_logic", "").upper()
+            rsi_ma_type = self._safe_runtime_text("v_rsi_ma_type", "").upper()
+            rsi_ma_len = self._safe_runtime_int("e_rsi_ma_len", 0)
 
             if rsi_len <= 0 or rsi_ma_len <= 0:
                 raise ValueError("RSI and RSI MA periods must be greater than 0.")
@@ -14435,60 +14476,60 @@ class UniversalFuturesBotGUI:
                 raise ValueError("RSI MA Type must be SMA, EMA, or WMA.")
 
             use_bb = self._runtime_gui_value("v_use_bb")
-            bb_len = int(self._runtime_gui_value("e_bb_len"))
-            bb_std = float(self._runtime_gui_value("e_bb_std"))
+            bb_len = self._safe_runtime_int("e_bb_len", 0)
+            bb_std = self._safe_runtime_float("e_bb_std", 0.0)
 
             if bb_len <= 0 or bb_std <= 0:
                 raise ValueError("Bollinger period and StdDev must be greater than 0.")
 
             use_stoch = self._runtime_gui_value("v_use_stoch")
-            stoch_k_len = int(self._runtime_gui_value("e_stoch_k"))
-            stoch_smooth_len = int(self._runtime_gui_value("e_stoch_smooth"))
-            stoch_d_len = int(self._runtime_gui_value("e_stoch_d"))
+            stoch_k_len = self._safe_runtime_int("e_stoch_k", 0)
+            stoch_smooth_len = self._safe_runtime_int("e_stoch_smooth", 0)
+            stoch_d_len = self._safe_runtime_int("e_stoch_d", 0)
 
             if stoch_k_len <= 0 or stoch_smooth_len <= 0 or stoch_d_len <= 0:
                 raise ValueError("Stochastic periods must be greater than 0.")
 
             use_vwap = self._runtime_gui_value("v_use_vwap")
-            vwap_len = int(self._runtime_gui_value("e_vwap_len"))
+            vwap_len = self._safe_runtime_int("e_vwap_len", 0)
             if vwap_len <= 0:
                 raise ValueError("VWAP period must be greater than 0.")
 
             use_vwap_delta = self._runtime_gui_value("v_use_vwap_delta")
             vwap_delta_smooth = self._runtime_gui_value("v_vwap_delta_smooth")
-            vwap_delta_smooth_len = int(self._runtime_gui_value("e_vwap_delta_smooth_len"))
-            vwap_delta_baseline_len = int(self._runtime_gui_value("e_vwap_delta_baseline"))
-            vwap_delta_logic = self._runtime_gui_value("v_vwap_delta_logic").strip().upper()
+            vwap_delta_smooth_len = self._safe_runtime_int("e_vwap_delta_smooth_len", 0)
+            vwap_delta_baseline_len = self._safe_runtime_int("e_vwap_delta_baseline", 0)
+            vwap_delta_logic = self._safe_runtime_text("v_vwap_delta_logic", "").upper()
             if vwap_delta_smooth_len <= 0 or vwap_delta_baseline_len <= 0:
                 raise ValueError("VWAP Delta lengths must be greater than 0.")
             if vwap_delta_logic not in ("CURRENT_TREND", "CROSS_BASELINE"):
                 raise ValueError("VWAP Delta Logic must be CURRENT_TREND or CROSS_BASELINE.")
 
             use_vidya = self._runtime_gui_value("v_use_vidya")
-            vidya_len = int(self._runtime_gui_value("e_vidya_len"))
-            vidya_momentum = int(self._runtime_gui_value("e_vidya_momentum"))
-            vidya_band = float(self._runtime_gui_value("e_vidya_band"))
-            vidya_entry_mode = self._runtime_gui_value("v_vidya_entry_mode").strip().upper()
+            vidya_len = self._safe_runtime_int("e_vidya_len", 0)
+            vidya_momentum = self._safe_runtime_int("e_vidya_momentum", 0)
+            vidya_band = self._safe_runtime_float("e_vidya_band", 0.0)
+            vidya_entry_mode = self._safe_runtime_text("v_vidya_entry_mode", "").upper()
             if vidya_len <= 0 or vidya_momentum <= 0 or vidya_band <= 0:
                 raise ValueError("VIDYA Length, Momentum and Band must be greater than 0.")
             if vidya_entry_mode not in ("CURRENT_TREND", "FRESH_FLIP"):
                 raise ValueError("VIDYA Entry must be CURRENT_TREND or FRESH_FLIP.")
 
             use_nwe = self._runtime_gui_value("v_use_nwe")
-            nwe_bandwidth = float(self._runtime_gui_value("e_nwe_bandwidth"))
-            nwe_mult = float(self._runtime_gui_value("e_nwe_mult"))
-            nwe_entry_mode = self._runtime_gui_value("v_nwe_entry_mode").strip().upper()
+            nwe_bandwidth = self._safe_runtime_float("e_nwe_bandwidth", 0.0)
+            nwe_mult = self._safe_runtime_float("e_nwe_mult", 0.0)
+            nwe_entry_mode = self._safe_runtime_text("v_nwe_entry_mode", "").upper()
             nwe_repaint = self._runtime_gui_value("v_nwe_repaint")
             if nwe_bandwidth <= 0 or nwe_mult < 0:
                 raise ValueError("NWE Bandwidth must be > 0 and Mult cannot be negative.")
             if nwe_entry_mode not in ("CURRENT_TREND", "FRESH_CROSS"):
                 raise ValueError("NWE Entry must be CURRENT_TREND or FRESH_CROSS.")
             use_liq_swings = self._runtime_gui_value("v_use_liq_swings")
-            liq_length = int(self._runtime_gui_value("e_liq_length"))
-            liq_area = self._runtime_gui_value("v_liq_area").strip()
-            liq_filter = self._runtime_gui_value("v_liq_filter").strip().title()
-            liq_filter_value = float(self._runtime_gui_value("e_liq_filter_value"))
-            liq_entry_mode = self._runtime_gui_value("v_liq_entry_mode").strip().upper()
+            liq_length = self._safe_runtime_int("e_liq_length", 0)
+            liq_area = self._safe_runtime_text("v_liq_area", "")
+            liq_filter = self._safe_runtime_text("v_liq_filter", "").title()
+            liq_filter_value = self._safe_runtime_float("e_liq_filter_value", 0.0)
+            liq_entry_mode = self._safe_runtime_text("v_liq_entry_mode", "").upper()
             if liq_length <= 0:
                 raise ValueError("Liquidity Swing Pivot Lookback must be greater than 0.")
             if liq_area not in ("Wick Extremity", "Full Range"):
@@ -14501,11 +14542,11 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Liquidity Swing Entry must be FRESH_BREAK or CURRENT_TREND.")
 
             use_trendline = self._runtime_gui_value("v_use_trendline")
-            trendline_length = int(self._runtime_gui_value("e_trendline_length"))
-            trendline_min_distance = int(self._runtime_gui_value("e_trendline_min_distance"))
-            trendline_entry_mode = self._runtime_gui_value("v_trendline_entry_mode").strip().upper()
-            trendline_buffer = float(self._runtime_gui_value("e_trendline_buffer"))
-            trendline_retest_candles = int(self._runtime_gui_value("e_trendline_retest"))
+            trendline_length = self._safe_runtime_int("e_trendline_length", 0)
+            trendline_min_distance = self._safe_runtime_int("e_trendline_min_distance", 0)
+            trendline_entry_mode = self._safe_runtime_text("v_trendline_entry_mode", "").upper()
+            trendline_buffer = self._safe_runtime_float("e_trendline_buffer", 0.0)
+            trendline_retest_candles = self._safe_runtime_int("e_trendline_retest", 0)
             if trendline_length <= 0:
                 raise ValueError("Trendline Pivot Lookback must be greater than 0.")
             if trendline_min_distance <= 0:
@@ -14519,14 +14560,14 @@ class UniversalFuturesBotGUI:
             if trendline_entry_mode not in ("FRESH_BREAK", "CURRENT_TREND", "BREAK_RETEST"):
                 raise ValueError("Trendline Entry must be FRESH_BREAK, CURRENT_TREND, or BREAK_RETEST.")
 
-            use_divergence = bool(self._runtime_gui_value("v_use_divergence"))
-            div_pivot = int(self._runtime_gui_value("e_div_pivot"))
-            div_source = self._runtime_gui_value("v_div_source").strip()
-            div_type = self._runtime_gui_value("v_div_type").strip()
-            div_min_count = int(self._runtime_gui_value("e_div_min_count"))
-            div_max_pivots = int(self._runtime_gui_value("e_div_max_pivots"))
-            div_max_bars = int(self._runtime_gui_value("e_div_max_bars"))
-            div_entry_mode = self._runtime_gui_value("v_div_entry_mode").strip().upper()
+            use_divergence = self._safe_runtime_bool("v_use_divergence", False)
+            div_pivot = self._safe_runtime_int("e_div_pivot", 0)
+            div_source = self._safe_runtime_text("v_div_source", "")
+            div_type = self._safe_runtime_text("v_div_type", "")
+            div_min_count = self._safe_runtime_int("e_div_min_count", 0)
+            div_max_pivots = self._safe_runtime_int("e_div_max_pivots", 0)
+            div_max_bars = self._safe_runtime_int("e_div_max_bars", 0)
+            div_entry_mode = self._safe_runtime_text("v_div_entry_mode", "").upper()
             if div_pivot < 1 or div_pivot > 50:
                 raise ValueError("Divergence Pivot Period must be 1-50.")
             if div_source not in ("Close", "High/Low"):
@@ -14558,19 +14599,19 @@ class UniversalFuturesBotGUI:
             div_cfg = {
                 "div_pivot": div_pivot, "div_source": div_source, "div_type": div_type,
                 "div_max_pivots": div_max_pivots, "div_max_bars": div_max_bars,
-                "div_cci_len": int(self._runtime_gui_value("e_div_cci_len")), "div_mom_len": int(self._runtime_gui_value("e_div_mom_len")),
+                "div_cci_len": self._safe_runtime_int("e_div_cci_len", 0), "div_mom_len": self._safe_runtime_int("e_div_mom_len", 0),
                 "div_entry_mode": div_entry_mode, **div_use
             }
             if div_cfg["div_cci_len"] <= 0 or div_cfg["div_mom_len"] <= 0:
                 raise ValueError("Divergence CCI/Momentum lengths must be greater than 0.")
 
-            use_vol_sr = bool(self._runtime_gui_value("v_use_vol_sr"))
-            sr_volume_ma = int(self._runtime_gui_value("e_sr_volume_ma"))
-            sr_vote_mode = self._runtime_gui_value("v_sr_vote_mode").strip().upper()
-            sr_entry_mode = self._runtime_gui_value("v_sr_entry_mode").strip().upper()
+            use_vol_sr = self._safe_runtime_bool("v_use_vol_sr", False)
+            sr_volume_ma = self._safe_runtime_int("e_sr_volume_ma", 0)
+            sr_vote_mode = self._safe_runtime_text("v_sr_vote_mode", "").upper()
+            sr_entry_mode = self._safe_runtime_text("v_sr_entry_mode", "").upper()
             sr_tfs = [
-                self._runtime_gui_value("v_sr_tf1").strip(), self._runtime_gui_value("v_sr_tf2").strip(),
-                self._runtime_gui_value("v_sr_tf3").strip(), self._runtime_gui_value("v_sr_tf4").strip()
+                self._safe_runtime_text("v_sr_tf1", ""), self._safe_runtime_text("v_sr_tf2", ""),
+                self._safe_runtime_text("v_sr_tf3", ""), self._safe_runtime_text("v_sr_tf4", "")
             ]
             if sr_volume_ma <= 0:
                 raise ValueError("Volume S/R Volume MA threshold must be greater than 0.")
@@ -14582,7 +14623,7 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Volume S/R requires at least one enabled timeframe.")
 
             use_atr = self._runtime_gui_value("v_use_atr")
-            atr_min_pct = float(self._runtime_gui_value("e_atr_min_pct"))
+            atr_min_pct = self._safe_runtime_float("e_atr_min_pct", 0.0)
             if atr_min_pct < 0:
                 raise ValueError("Minimum ATR % cannot be negative.")
 
@@ -14594,7 +14635,7 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Volume MA period must be greater than 0.")
 
             use_adx = self._runtime_gui_value("v_use_adx")
-            adx_len = int(self._runtime_gui_value("e_adx_len"))
+            adx_len = self._safe_runtime_int("e_adx_len", 0)
             if adx_len <= 0:
                 raise ValueError("ADX period must be greater than 0.")
             adx_thresh = float(
@@ -14605,7 +14646,7 @@ class UniversalFuturesBotGUI:
 
             use_mtf = self._runtime_gui_value("v_use_mtf")
 
-            signal_mode = self._runtime_gui_value("v_signal_mode").strip().upper()
+            signal_mode = self._safe_runtime_text("v_signal_mode", "").upper()
 
             # Preset modes directly mean "how many directional indicators
             # must agree for this trade". SCORE keeps the existing custom
@@ -14621,10 +14662,10 @@ class UniversalFuturesBotGUI:
             if signal_mode in preset_scores:
                 min_score = preset_scores[signal_mode]
             else:
-                min_score = int(self._runtime_gui_value("e_min_score").strip())
+                min_score = int(self._safe_runtime_text("e_min_score", ""))
 
-            adaptive_edge = float(self._runtime_gui_value("e_adaptive_edge"))
-            adaptive_min_weight = float(self._runtime_gui_value("e_adaptive_min_weight"))
+            adaptive_edge = self._safe_runtime_float("e_adaptive_edge", 0.0)
+            adaptive_min_weight = self._safe_runtime_float("e_adaptive_min_weight", 0.0)
             if not 0.0 < adaptive_edge < 1.0 or adaptive_min_weight <= 0:
                 raise ValueError("Adaptive strategy settings are invalid.")
 
@@ -14632,16 +14673,16 @@ class UniversalFuturesBotGUI:
             # worker cycle.  Previously decision_reason() referenced the names
             # without initializing them in _run_bot_logic(), causing:
             # "name 'evidence_min_families' is not defined".
-            evidence_min_families = int(self._runtime_gui_value("e_evidence_min_families"))
-            evidence_family_min_score = float(self._runtime_gui_value("e_evidence_family_min_score"))
-            evidence_require_trend = bool(self._runtime_gui_value("v_evidence_require_trend"))
-            evidence_require_independent = bool(self._runtime_gui_value("v_evidence_require_independent"))
-            ai_min_families = int(self._runtime_gui_value("e_ai_min_families", AI_AGENT_MIN_FAMILIES))
-            ai_min_edge = float(self._runtime_gui_value("e_ai_min_edge", AI_AGENT_MIN_EDGE))
-            ai_family_confidence = float(self._runtime_gui_value("e_ai_family_confidence", AI_AGENT_MIN_FAMILY_CONFIDENCE))
-            ai_max_conflicts = int(self._runtime_gui_value("e_ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES))
-            ai_require_trend = bool(self._runtime_gui_value("v_ai_require_trend", AI_AGENT_REQUIRE_TREND))
-            ai_require_structure = bool(self._runtime_gui_value("v_ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE))
+            evidence_min_families = self._safe_runtime_int("e_evidence_min_families", 0)
+            evidence_family_min_score = self._safe_runtime_float("e_evidence_family_min_score", 0.0)
+            evidence_require_trend = self._safe_runtime_bool("v_evidence_require_trend", False)
+            evidence_require_independent = self._safe_runtime_bool("v_evidence_require_independent", False)
+            ai_min_families = self._safe_runtime_int("e_ai_min_families", AI_AGENT_MIN_FAMILIES)
+            ai_min_edge = self._safe_runtime_float("e_ai_min_edge", AI_AGENT_MIN_EDGE)
+            ai_family_confidence = self._safe_runtime_float("e_ai_family_confidence", AI_AGENT_MIN_FAMILY_CONFIDENCE)
+            ai_max_conflicts = self._safe_runtime_int("e_ai_max_conflicts", AI_AGENT_MAX_CONFLICTING_FAMILIES)
+            ai_require_trend = self._safe_runtime_bool("v_ai_require_trend", AI_AGENT_REQUIRE_TREND)
+            ai_require_structure = self._safe_runtime_bool("v_ai_require_structure", AI_AGENT_REQUIRE_STRUCTURE)
             if not 1 <= evidence_min_families <= len(EVIDENCE_FAMILY_ORDER):
                 raise ValueError("Evidence Minimum Families must be between 1 and 4.")
             if not 0.0 < evidence_family_min_score <= 1.0:
@@ -14711,44 +14752,40 @@ class UniversalFuturesBotGUI:
             # Keep Risk Per Trade in GUI units (percentage points) throughout
             # the worker. calculate_entry_qty() performs the single /100
             # conversion where it needs a fraction.
-            risk_pct = float(self._runtime_gui_value("e_risk_pct"))
-            fixed_qty = float(self._runtime_gui_value("e_fixed_qty"))
+            risk_pct = self._safe_runtime_float("e_risk_pct", float(AI_AGENT_RISK_PER_TRADE))
+            fixed_qty = self._safe_runtime_float("e_fixed_qty", 0.001)
             if risk_pct <= 0 or risk_pct >= 100.0:
                 raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
             if fixed_qty <= 0:
                 raise ValueError("Fixed Qty must be greater than 0.")
 
-            max_dd_enabled = bool(self._runtime_gui_value("v_max_dd_enabled", True))
-            emergency_enabled = bool(self._runtime_gui_value("v_emergency_enabled", True))
+            max_dd_enabled = self._safe_runtime_bool("v_max_dd_enabled", True)
+            emergency_enabled = self._safe_runtime_bool("v_emergency_enabled", True)
             max_dd = (
-                float(
-                    self._runtime_gui_value("e_max_dd")
-                ) / 100.0
+                self._safe_runtime_float("e_max_dd", 5.0) / 100.0
             )
             if not 0.0 <= max_dd < 1.0:
                 raise ValueError("Max Daily Drawdown must be between 0% and less than 100%. Use 0% to disable it.")
-            emergency_capital_loss = float(self._runtime_gui_value("e_emergency_capital_pct")) / 100.0
-            emergency_scope = self._runtime_gui_value("v_emergency_scope").strip().upper()
+            emergency_capital_loss = self._safe_runtime_float("e_emergency_capital_pct", 10.0) / 100.0
+            emergency_scope = self._safe_runtime_text("v_emergency_scope", "BOT_SYMBOL").upper()
             if emergency_scope not in ("BOT_SYMBOL", "ALL_ACCOUNT"):
                 raise ValueError("Emergency Scope must be BOT_SYMBOL or ALL_ACCOUNT.")
             if not 0.0 <= emergency_capital_loss < 1.0:
                 raise ValueError("Emergency Capital Loss Stop must be between 0% and less than 100%.")
 
-            leverage = int(
-                self._runtime_gui_value("e_lev").strip()
-            )
+            leverage = self._safe_runtime_int("e_lev", 1)
 
             # ----------------------------------------------------------------
             # R9.6 UNIFIED PROTECTION CONTRACT
             # ----------------------------------------------------------------
-            leverage = int(self._runtime_gui_value("e_lev").strip())
+            leverage = self._safe_runtime_int("e_lev", 1)
             if leverage <= 0:
                 raise ValueError("Leverage must be greater than 0.")
 
-            use_legacy_protection = bool(self._runtime_gui_value("v_legacy_protection_enabled", False))
-            hold_all_reverse = bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+            use_legacy_protection = self._safe_runtime_bool("v_legacy_protection_enabled", False)
+            hold_all_reverse = self._safe_runtime_bool("v_hold_until_all_reverse", False)
             hold_wait_reversal = bool(hold_all_reverse and self._runtime_gui_value("v_hold_sl_wait_reversal", False))
-            reverse_exit_mode = str(self._runtime_gui_value("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE)).strip().upper()
+            reverse_exit_mode = self._safe_runtime_text("v_reverse_exit_mode", DEFAULT_REVERSAL_EXIT_MODE).upper()
             min_reverse_families = int(self._runtime_gui_value("e_min_reverse_families", DEFAULT_MIN_REVERSE_FAMILIES) or DEFAULT_MIN_REVERSE_FAMILIES)
             if reverse_exit_mode not in REVERSAL_EXIT_MODES:
                 raise ValueError("Reverse Exit Rule must be ALL_ACTIVE or MIN_FAMILIES.")
@@ -14758,23 +14795,23 @@ class UniversalFuturesBotGUI:
                 raise ValueError("Hold-SL WAIT requires Hold Position Until Reverse to be ON.")
 
             # Risk sizing toggle is authoritative for NORMAL strategy entry sizing.
-            risk_sizing_enabled = bool(self._runtime_gui_value("v_risk_sizing_enabled", True))
+            risk_sizing_enabled = self._safe_runtime_bool("v_risk_sizing_enabled", True)
             size_mode = "EQUITY_RISK_%" if risk_sizing_enabled else "FIXED_QTY"
-            risk_pct = float(self._runtime_gui_value("e_risk_pct"))
-            fixed_qty = float(self._runtime_gui_value("e_fixed_qty"))
+            risk_pct = self._safe_runtime_float("e_risk_pct", float(AI_AGENT_RISK_PER_TRADE))
+            fixed_qty = self._safe_runtime_float("e_fixed_qty", 0.001)
             if not 0 < risk_pct < 100:
                 raise ValueError("Risk Per Trade must be greater than 0% and less than 100%.")
             if fixed_qty <= 0:
                 raise ValueError("Fixed Qty must be greater than 0.")
 
-            tp_qty_mode = str(self._runtime_gui_value("v_tp_qty_mode", "PERCENT_%")).strip().upper()
-            tp1_close_value = float(self._runtime_gui_value("e_tp1_close", 50))
-            tp2_close_value = float(self._runtime_gui_value("e_tp2_close", 50))
+            tp_qty_mode = self._safe_runtime_text("v_tp_qty_mode", "PERCENT_%").upper()
+            tp1_close_value = self._safe_runtime_float("e_tp1_close", 50.0)
+            tp2_close_value = self._safe_runtime_float("e_tp2_close", 50.0)
             if tp_qty_mode not in ("PERCENT_%", "FIXED_QTY"):
                 raise ValueError(f"Unknown TP quantity mode: {tp_qty_mode}")
-            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
-            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
-            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
+            tp_engine_enabled = self._safe_runtime_bool("v_tp_enabled", True)
+            tp1_enabled = self._safe_runtime_bool("v_tp1_enabled", True)
+            tp2_enabled = self._safe_runtime_bool("v_tp2_enabled", True)
             if tp_engine_enabled and (tp1_enabled or tp2_enabled):
                 if tp1_enabled and tp2_enabled:
                     if tp1_close_value <= 0 or tp2_close_value <= 0:
@@ -14787,21 +14824,21 @@ class UniversalFuturesBotGUI:
                         raise ValueError("The enabled TP close value must be greater than 0.")
 
             # New simple fields. Legacy fields remain stored and validated only when legacy mode is selected.
-            simple_sl_enabled = bool(self._runtime_gui_value("v_sl_enabled", True))
-            simple_roi_sl_enabled = bool(self._runtime_gui_value("v_roi_sl_enabled", True))
-            roi_sl_target = float(self._runtime_gui_value("e_roi_sl", DEFAULT_SIMPLE_SL_ROI))
-            simple_atr_sl_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED))
-            fallback_sl_enabled = bool(self._runtime_gui_value("v_fallback_sl_enabled", True))
-            fallback_sl_roi = float(self._runtime_gui_value("e_fallback_sl_roi", DEFAULT_SIMPLE_FALLBACK_SL_ROI))
-            tp_engine_enabled = bool(self._runtime_gui_value("v_tp_enabled", True))
-            tp1_enabled = bool(self._runtime_gui_value("v_tp1_enabled", True))
-            tp2_enabled = bool(self._runtime_gui_value("v_tp2_enabled", True))
-            tp1_roi = float(self._runtime_gui_value("e_roi_tp1", DEFAULT_SIMPLE_TP1_ROI))
-            tp2_roi = float(self._runtime_gui_value("e_roi_tp2", DEFAULT_SIMPLE_TP2_ROI))
-            atr_tp_enabled = bool(self._runtime_gui_value("v_simple_atr_tp_enabled", DEFAULT_SIMPLE_ATR_TP_ENABLED))
-            atr_sl_mult = float(self._runtime_gui_value("e_atr_sl_mult", 1.8))
-            atr_tp1_mult = float(self._runtime_gui_value("e_atr_tp1_mult", 1.2))
-            atr_tp2_mult = float(self._runtime_gui_value("e_atr_tp2_mult", 2.2))
+            simple_sl_enabled = self._safe_runtime_bool("v_sl_enabled", True)
+            simple_roi_sl_enabled = self._safe_runtime_bool("v_roi_sl_enabled", True)
+            roi_sl_target = self._safe_runtime_float("e_roi_sl", DEFAULT_SIMPLE_SL_ROI)
+            simple_atr_sl_enabled = self._safe_runtime_bool("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED)
+            fallback_sl_enabled = self._safe_runtime_bool("v_fallback_sl_enabled", True)
+            fallback_sl_roi = self._safe_runtime_float("e_fallback_sl_roi", DEFAULT_SIMPLE_FALLBACK_SL_ROI)
+            tp_engine_enabled = self._safe_runtime_bool("v_tp_enabled", True)
+            tp1_enabled = self._safe_runtime_bool("v_tp1_enabled", True)
+            tp2_enabled = self._safe_runtime_bool("v_tp2_enabled", True)
+            tp1_roi = self._safe_runtime_float("e_roi_tp1", DEFAULT_SIMPLE_TP1_ROI)
+            tp2_roi = self._safe_runtime_float("e_roi_tp2", DEFAULT_SIMPLE_TP2_ROI)
+            atr_tp_enabled = self._safe_runtime_bool("v_simple_atr_tp_enabled", DEFAULT_SIMPLE_ATR_TP_ENABLED)
+            atr_sl_mult = self._safe_runtime_float("e_atr_sl_mult", 1.8)
+            atr_tp1_mult = self._safe_runtime_float("e_atr_tp1_mult", 1.2)
+            atr_tp2_mult = self._safe_runtime_float("e_atr_tp2_mult", 2.2)
             # R6.1 AI manager values are per-cycle locals. GUI values remain the
             # user-visible baseline; AI_AGENT may adapt the effective values for
             # an accepted trade inside hard safety envelopes.
@@ -14812,13 +14849,13 @@ class UniversalFuturesBotGUI:
             ai_management_active = False
 
             # Legacy values for explicit advanced mode.
-            sl_mode = self._runtime_gui_value("v_sl_mode").strip().upper()
-            tp_mode = self._runtime_gui_value("v_tp_mode").strip().upper()
-            sl_target_pct = float(self._runtime_gui_value("e_sl_pct"))
-            tp1_target_pct = float(self._runtime_gui_value("e_tp1_pct"))
-            tp2_target_pct = float(self._runtime_gui_value("e_tp2_pct"))
-            hold_sl_roi_pct = float(self._runtime_gui_value("e_hold_sl_roi"))
-            legacy_atr_enabled = bool(self._runtime_gui_value("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED))
+            sl_mode = self._safe_runtime_text("v_sl_mode", "ROI_%").upper()
+            tp_mode = self._safe_runtime_text("v_tp_mode", "ROI_%").upper()
+            sl_target_pct = self._safe_runtime_float("e_sl_pct", 0.1)
+            tp1_target_pct = self._safe_runtime_float("e_tp1_pct", 0.1)
+            tp2_target_pct = self._safe_runtime_float("e_tp2_pct", 0.2)
+            hold_sl_roi_pct = self._safe_runtime_float("e_hold_sl_roi", 5.0)
+            legacy_atr_enabled = self._safe_runtime_bool("v_simple_atr_sl_enabled", DEFAULT_SIMPLE_ATR_SL_ENABLED)
             if sl_mode not in ("PRICE_%", "ROI_%", "RISK_%") or tp_mode not in ("PRICE_%", "ROI_%"):
                 raise ValueError(f"Unknown legacy SL/TP mode: SL={sl_mode} TP={tp_mode}")
             if min(roi_sl_target, fallback_sl_roi, tp1_roi, tp2_roi, hold_sl_roi_pct, sl_target_pct, tp1_target_pct, tp2_target_pct) <= 0:
@@ -14856,11 +14893,11 @@ class UniversalFuturesBotGUI:
                 raise ValueError(
                     f"Legacy TP2 ({tp2_target_pct:g}) must be greater than TP1 ({tp1_target_pct:g})."
                 )
-            configured_liq_buffer = float(self._runtime_gui_value("e_liq_buffer", DEFAULT_LIQ_BUFFER_MULT) or DEFAULT_LIQ_BUFFER_MULT)
-            leverage_for_validation = float(self._runtime_gui_value("e_lev", 1.0) or 1.0)
+            configured_liq_buffer = self._safe_runtime_float("e_liq_buffer", float(DEFAULT_LIQ_BUFFER_MULT))
+            leverage_for_validation = self._safe_runtime_float("e_lev", 1.0)
             liq_buffer = effective_liq_buffer(leverage_for_validation, configured_liq_buffer)
-            taker_fee_pct = float(self._runtime_gui_value("e_taker_fee_pct", DEFAULT_TAKER_FEE_PCT) or 0.0)
-            cost_gate_enabled = bool(self._runtime_gui_value("v_cost_gate_enabled", DEFAULT_COST_GATE_ENABLED))
+            taker_fee_pct = self._safe_runtime_float("e_taker_fee_pct", float(DEFAULT_TAKER_FEE_PCT))
+            cost_gate_enabled = self._safe_runtime_bool("v_cost_gate_enabled", DEFAULT_COST_GATE_ENABLED)
             if not 1.25 <= liq_buffer <= 50.0:
                 raise ValueError("Liquidation Buffer must be between 1.25 and 50 (x stop distance).")
             if not 0.0 <= taker_fee_pct < 1.0:
@@ -14983,7 +15020,8 @@ class UniversalFuturesBotGUI:
             if not use_legacy_protection:
                 self.log(
                     f"ROI->PRICE @{leverage}x: SL {roi_sl_target:g}% ROI = {roi_sl_target / leverage:.3f}% price | "
-                    f"TP1 {tp1_roi:g}% = {tp1_roi / leverage:.3f}% | TP2 {tp2_roi:g}% = {tp2_roi / leverage:.3f}% "                    "(ATR SL/TP override these when ATR mode is ON)"
+                    f"TP1 {tp1_roi:g}% = {tp1_roi / leverage:.3f}% | TP2 {tp2_roi:g}% = {tp2_roi / leverage:.3f}% "
+                    "(ATR SL/TP override these when ATR mode is ON)"
                 )
             self.log(
                 f"EXECUTION SAFETY: Spread<={self._safe_runtime_float("e_max_entry_spread_pct", float(DEFAULT_MAX_ENTRY_SPREAD_PCT)):g}% | Slippage<={self._safe_runtime_float("e_max_entry_slippage_pct", float(DEFAULT_MAX_ENTRY_SLIPPAGE_PCT)):g}% | Depth>={self._safe_runtime_float("e_min_orderbook_depth_mult", float(DEFAULT_MIN_ORDERBOOK_DEPTH_MULT)):g}x | CandleDrift<={self._safe_runtime_float("e_max_entry_candle_drift_pct", float(DEFAULT_MAX_ENTRY_CANDLE_DRIFT_PCT)):g}%"
@@ -15408,7 +15446,7 @@ class UniversalFuturesBotGUI:
                         )
                     )
 
-                    st_entry_mode = self._runtime_gui_value("v_st_entry_mode").strip().upper()
+                    st_entry_mode = self._safe_runtime_text("v_st_entry_mode", "").upper()
 
                     # FRESH_FLIP: only the newly completed candle's flip triggers.
                     # CURRENT_TREND: the current completed Supertrend direction
@@ -15701,7 +15739,7 @@ class UniversalFuturesBotGUI:
                     )
 
                     effective_atr_min_pct = float(atr_min_pct)
-                    ai_adaptive_atr = bool(self._runtime_gui_value("v_ai_adaptive_atr_enabled", AI_AGENT_ADAPTIVE_ATR_ENABLED))
+                    ai_adaptive_atr = self._safe_runtime_bool("v_ai_adaptive_atr_enabled", AI_AGENT_ADAPTIVE_ATR_ENABLED)
                     if signal_mode == "AI_AGENT" and use_atr and ai_adaptive_atr:
                         try:
                             _atr_hist = (df["atr"] / df["close"] * 100.0).iloc[-201:-1].dropna()
@@ -15982,7 +16020,8 @@ class UniversalFuturesBotGUI:
                         )
 
                     # ATR is volatility-only. When the ATR threshold passes,
-                    # its vote follows the completed candle direction.                    if use_atr and atr_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
+                    # its vote follows the completed candle direction.
+                    if use_atr and atr_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
                         directional_modules.append(
                             ("ATR", candle_bull, candle_bear)
                         )
@@ -16052,15 +16091,15 @@ class UniversalFuturesBotGUI:
                         ai_require_structure=ai_require_structure,
                         ai_max_conflicts=ai_max_conflicts,
                          ai_min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
-                        ai_soft_regime=bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)),
+                        ai_soft_regime=self._safe_runtime_bool("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED),
                         ai_soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
                         ai_soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                         ai_soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
                         ai_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
                         ai_2f_min_family_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
                         ai_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
-                        ai_2f_require_structure=bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)),
-                        ai_2f_require_independent=bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)),
+                        ai_2f_require_structure=self._safe_runtime_bool("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE),
+                        ai_2f_require_independent=self._safe_runtime_bool("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT),
                     )
 
                     if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT"):
@@ -16102,7 +16141,7 @@ class UniversalFuturesBotGUI:
                         ai_require_structure=ai_require_structure,
                         ai_max_conflicting_families=ai_max_conflicts,
                          ai_min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
-                        ai_soft_regime=bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)),
+                        ai_soft_regime=self._safe_runtime_bool("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED),
                         ai_soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
                         ai_soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                         ai_soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
@@ -16111,7 +16150,7 @@ class UniversalFuturesBotGUI:
                     # R6.8.4 SHADOW COUNCIL: diagnostic-only relaxed regime evaluation.
                     # It never changes buy_signal/sell_signal and never places an order.
                     ai_shadow = None
-                    if signal_mode == "AI_AGENT" and bool(self._runtime_gui_value("v_ai_shadow_mode", AI_AGENT_SHADOW_MODE)):
+                    if signal_mode == "AI_AGENT" and self._safe_runtime_bool("v_ai_shadow_mode", AI_AGENT_SHADOW_MODE):
                         try:
                             ai_shadow = StrategyEngine.ai_agent_decision(
                                 directional_modules,
@@ -16131,12 +16170,12 @@ class UniversalFuturesBotGUI:
                                 soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
                                 soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                                 soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
-                                fallback_2f_enabled=bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED)),
+                                fallback_2f_enabled=self._safe_runtime_bool("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED),
                                 fallback_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
                                 fallback_2f_min_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
                                 fallback_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
-                                fallback_2f_require_structure=bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)),
-                                fallback_2f_require_independent=bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)),
+                                fallback_2f_require_structure=self._safe_runtime_bool("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE),
+                                fallback_2f_require_independent=self._safe_runtime_bool("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT),
                             )
                             _shadow_ts = int(df["time"].iloc[-2])
                             if getattr(self, "_last_ai_shadow_log_ts", None) != _shadow_ts:
@@ -16204,16 +16243,16 @@ class UniversalFuturesBotGUI:
                                 require_trend=ai_require_trend, require_structure=ai_require_structure,
                                 max_conflicting_families=ai_max_conflicts,
                                 min_family_participation=self._safe_runtime_float("e_ai_min_participation", AI_AGENT_MIN_FAMILY_PARTICIPATION),
-                                soft_regime=bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)),
+                                soft_regime=self._safe_runtime_bool("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED),
                                 soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
                                 soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                                 soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
-                                fallback_2f_enabled=bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED)),
+                                fallback_2f_enabled=self._safe_runtime_bool("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED),
                                 fallback_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
                                 fallback_2f_min_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
                                 fallback_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
-                                fallback_2f_require_structure=bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)),
-                                fallback_2f_require_independent=bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)),
+                                fallback_2f_require_structure=self._safe_runtime_bool("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE),
+                                fallback_2f_require_independent=self._safe_runtime_bool("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT),
                             ) if signal_mode == "AI_AGENT" else None
                             if _pipeline_result:
                                 _qbuy = "+".join(_pipeline_result.get("bull_families", [])) or "NONE"
@@ -16277,7 +16316,7 @@ class UniversalFuturesBotGUI:
                             signal_mode == "AI_AGENT"
                             and AI_AGENT_TRAILING_ENABLED
                             and self.tp1_be_done
-                            and not bool(self._runtime_gui_value("v_hold_until_all_reverse", False))
+                            and not self._safe_runtime_bool("v_hold_until_all_reverse", False)
                             and not self.hold_sl_wait_reversal
                         ):
                             try:
@@ -16411,8 +16450,8 @@ class UniversalFuturesBotGUI:
                                     f"COOLDOWN STARTED: {cooldown_min:g} min after verified live->flat transition."
                                 )
 
-                    post_sl_lock_on = bool(self._runtime_gui_value("v_require_opposite_after_exit"))
-                    hold_all_reverse_log = bool(self._runtime_gui_value("v_hold_until_all_reverse"))
+                    post_sl_lock_on = self._safe_runtime_bool("v_require_opposite_after_exit", False)
+                    hold_all_reverse_log = self._safe_runtime_bool("v_hold_until_all_reverse", False)
                     closed_candle_ts = int(df["time"].iloc[-2])
                     if pos_type == "NONE" and closed_candle_ts != blk_last_ts:
                         blk_last_ts = closed_candle_ts
@@ -16780,11 +16819,16 @@ class UniversalFuturesBotGUI:
                                 adx_pass=adx_pass,
                                 mtf_pass_bull=mtf_pass_bull,
                                 mtf_pass_bear=mtf_pass_bear,
-                                soft_regime=bool(self._runtime_gui_value("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED)),
+                                soft_regime=self._safe_runtime_bool("v_ai_soft_regime", AI_AGENT_SOFT_REGIME_ENABLED),
                                 soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
                                 soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                                 soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
-                                fallback_2f_enabled=bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED)),
+                                fallback_2f_enabled=self._safe_runtime_bool("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED),
+                                fallback_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
+                                fallback_2f_min_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                                fallback_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
+                                fallback_2f_require_structure=self._safe_runtime_bool("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE),
+                                fallback_2f_require_independent=self._safe_runtime_bool("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT),
                             )
                             if not ai_mgr.get("atr_sl_safety_ok", True):
                                 self.log(
@@ -16981,7 +17025,8 @@ class UniversalFuturesBotGUI:
                                 "EXECUTION_QUALITY_GATE",
                                 f"ENTRY BLOCKED: {_exec_gate_error}",
                                 closed_candle_ts,
-                            )                            cycle_elapsed = time.time() - cycle_start
+                            )
+                            cycle_elapsed = time.time() - cycle_start
                             time.sleep(max(0.5, poll_seconds - cycle_elapsed))
                             continue
 
@@ -17253,8 +17298,8 @@ class UniversalFuturesBotGUI:
                                 f"TPQtyMode={tp_qty_mode} | TP1Close={tp1_close_value:g} | TP2Close={tp2_close_value:g}"
                             )
                             hold_wait_reversal = (
-                                bool(self._runtime_gui_value("v_hold_until_all_reverse"))
-                                and bool(self._runtime_gui_value("v_hold_sl_wait_reversal"))
+                                self._safe_runtime_bool("v_hold_until_all_reverse", False)
+                                and self._safe_runtime_bool("v_hold_sl_wait_reversal", False)
                             )
                             self.hold_sl_wait_reversal = hold_wait_reversal
                             self.hold_sl_threshold_hit = False
@@ -17346,7 +17391,7 @@ class UniversalFuturesBotGUI:
                             self._persist_runtime_state(status="RUNNING")
 
                             self.tp1_be_done = False
-                            self.tp1_be_enabled = bool(self._runtime_gui_value("v_tp1_be", True)) and bool(tp_engine_enabled and tp1_enabled and not hold_all_reverse)
+                            self.tp1_be_enabled = self._safe_runtime_bool("v_tp1_be", True) and bool(tp_engine_enabled and tp1_enabled and not hold_all_reverse)
                             # A fresh position is now active; any previous post-exit
                             # lock has already been cleared or satisfied.
                             self.reentry_direction_lock = None
@@ -17578,6 +17623,13 @@ class UniversalFuturesBotGUI:
                             f"{self.consecutive_cycle_errors}/{MAX_CONSECUTIVE_CYCLE_ERRORS}: "
                             f"{cycle_error}"
                         )
+                        # R6.8.7.11 R3: preserve the exact failing source path instead
+                        # of reducing non-exchange bugs to an opaque exception string.
+                        _tb_lines = traceback.format_exc().strip().splitlines()
+                        if _tb_lines:
+                            self.log(
+                                "CYCLE ERROR TRACE: " + " | ".join(_tb_lines[-4:])
+                            )
                         if self.consecutive_cycle_errors >= MAX_CONSECUTIVE_CYCLE_ERRORS:
                             self.runtime_last_error = f"Consecutive cycle safety halt: {cycle_error}"
                             self.log("CRITICAL: consecutive cycle error limit reached; bot halted fail-closed.")
