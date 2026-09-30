@@ -1,3 +1,39 @@
+# Current Release Manifest — R6.8.7.12
+
+## Crypto AI Agent
+- Release: V8.4.2-CRYPTO-AI-AGENT-R6.8.7.12
+- Live engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12.py`
+- Backtester: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.12_BACKTESTER.py`
+- Build: `BUILD_CRYPTO_AI_AGENT_R6.8.7.12_EXE.bat`
+- Config schema: 33
+- Runtime schema: 24
+- Signal mode: AI_AGENT
+- Audit: `docs/R6.8.7.12_FULL_AUDIT_R5.md`
+- Contract tests: `tests/test_crypto_ai_agent_r6_8_7_12_contract.py`
+
+## Release contract
+- AI Min Families: 3
+- AI Edge: 0.20
+- AI Family Confidence: 0.55
+- AI Family Participation: 0.35
+- Trend Required: ON
+- Structure Required: ON
+- Max Conflicting Families: 1
+- 2F fallback: ON, Edge 0.65, Confidence 0.65, Participation 0.40
+- Adaptive ATR: ON, quantile 0.30, floor 0.10%
+- AI protection defaults: SL 1.95 ATR, TP1 1.35R, TP2 2.70R
+
+## Validation
+- Live engine compile: PASS
+- Backtester compile: PASS
+- AST parse: PASS
+- AI council smoke test: PASS
+- 150x risk cap smoke test: PASS
+- Synthetic OHLCV end-to-end backtest: PASS
+- Bybit Demo validation remains required before live use.
+
+---
+
 # Current Release Manifest — R6.8.7.2
 
 ## Crypto AI Agent
