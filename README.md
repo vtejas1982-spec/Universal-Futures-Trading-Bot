@@ -1,33 +1,37 @@
-# V8.4.2 Crypto AI-Agent R6.8.7.21 — Full Config Audit / Contract Hardening — 2026-10-01
+# V8.4.2 Crypto AI-Agent R6.8.7.23 — Config Authority + Viability Diagnostics — 2026-10-01
 
 ## Current audited release
-- Engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.21_FULL_CONFIG_AUDIT_CONTRACT_HARDENED_MULTIBOT_HUB.py
-- Config schema: 42
+- Engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.23_CONFIG_AUTHORITY_VIABILITY_DIAGNOSTICS_MULTIBOT_HUB.py
+- Config schema: 44
 - Runtime schema: 24
 - Signal mode: AI_AGENT
-- Audit build: V8.4.2-AI-AGENT-AUDIT-2026-10-01-R6.8.7.21-FULL-CONFIG-AUDIT-CONTRACT-HARDENED-MULTIBOT-HUB
+- Recommended AI preset: AI_AGENT_RECOMMENDED_R6.8.7.23
+- Audit build: V8.4.2-AI-AGENT-AUDIT-2026-10-01-R6.8.7.23-CONFIG-AUTHORITY-VIABILITY-DIAGNOSTICS-MULTIBOT-HUB
 
-### R6.8.7.21 changes
-- Fixed persisted-boolean type normalization so JSON strings such as "false", "0" and "off" cannot accidentally become Python True.
-- Bumped config schema 41 -> 42.
-- Corrected latent Fibonacci default-unit mismatch to 78.6 / 127.2 / 161.8 percentage units.
-- Re-audited strategy, settings, defaults, callbacks, preset coverage, provenance, Fibonacci ownership, leverage/risk and execution-profile authority.
-- No trading safety gate was weakened.
+### R6.8.7.23 changes
+- Added explicit effective execution-profile startup diagnostics so transient UI/config selection is not confused with runtime authority.
+- Added configured-vs-effective ATR threshold authority diagnostics for AI adaptive ATR.
+- Added CONFIGURATION VIABILITY states while preserving the existing advisory CAN TRADE semantics.
+- Improved cost-gate diagnostics without recommending that the mandatory cost safety gate be disabled.
+- Clarified AI provenance repair wording and divergence configured-vs-effective state.
+- Fixed the adaptive-ATR diagnostic variable mismatch.
+- No trading strategy or hard safety gate was weakened.
 
 ### Validation
 - AST parse: PASS
 - Python compile: PASS
-- Module import: PASS
+- Config schema 44: PASS
+- R6.8.7.23 preset identity: PASS
+- Stale R6.8.7.22 recommended-preset identity: 0
+- Effective execution-profile snapshot: PASS
+- ATR threshold authority diagnostic: PASS
+- Configuration viability diagnostic: PASS
+- Cost-gate messaging audit: PASS
+- Divergence effective-state audit: PASS
+- Adaptive-ATR diagnostic regression: PASS
 - Duplicate class-method audit: PASS
-- Private-call/static symbol audit: PASS
-- Boolean normalization regression: PASS
-- 50x / 2x liquidation envelope test: PASS
-- Execution-profile contract: PASS
 
 ## Source synchronization
-The R6.8.7.21 source was generated and validated locally from the supplied R6.8.7.20 source. Repository documentation is synchronized to R6.8.7.21. The connected GitHub file-write endpoint has a payload/serialization limit for this ~976 KB Python source, so the large source replacement is not falsely represented as uploaded when the endpoint cannot safely accept it.
+The complete R6.8.7.23 source was generated and validated locally. The production Python source is approximately 982 KB; the connected GitHub file-write endpoint cannot safely serialize the large source replacement in this session, so the repository does not falsely claim that the large source blob was replaced. The R6.8.7.23 audit documentation is synchronized.
 
 > Engineering/safety hardening only; continue Bybit Demo/Testnet validation before Live.
-
----
-
