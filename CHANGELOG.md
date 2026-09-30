@@ -24,7 +24,7 @@
 - AI council smoke test: PASS.
 - 2F fallback smoke test: PASS.
 - SL/TP resolver smoke test: PASS.
-- New R6.8.7.11 R2 contract suite: 6/6 PASS.
+- New R6.8.7.11 R2 contract suite: 9/9 PASS.
 - Live exchange lifecycle still requires Bybit Demo/Testnet validation.
 
 # V8.4.2 Crypto AI-Agent R6.8.7.11 — Full Engine Audit — 2026-09-30
@@ -896,7 +896,7 @@ A fixed quantity plus a percentage-of-equity risk target can mathematically requ
 - Live/backtester Adaptive decision parity: PASS.
 - Startup NameError regression: PASS.
 - Per-profile Adaptive isolation: PASS.
-- Regression suite: **6/6 PASS**.
+- Regression suite: **9/9 PASS**.
 
 ---
 
@@ -933,7 +933,7 @@ A fixed quantity plus a percentage-of-equity risk target can mathematically requ
 - Live/backtester Adaptive decision parity: PASS.
 - Synthetic backtest smoke test: PASS.
 - Safety-contract static audit: PASS.
-- Regression suite: **6/6 PASS**.
+- Regression suite: **9/9 PASS**.
 
 ### Important
 V8.3.0 does not claim a guaranteed maximum-profit configuration. The new strategy is designed to improve signal quality and robustness; historical backtests remain OHLC approximations and demo/testnet validation is required before live deployment.
@@ -1000,7 +1000,7 @@ The backtester remains a historical OHLC model and cannot reproduce every exchan
 - Live V8.2.5 source compilation: PASS.
 - Backtester compilation: PASS.
 - Indicator source parity check: all 16 indicator functions match the uploaded V8.2.4 bot implementations.
-- Backtester regression suite: 6/6 PASS.
+- Backtester regression suite: 9/9 PASS.
 - Synthetic normal and Grid simulations: PASS.
 
 ---
