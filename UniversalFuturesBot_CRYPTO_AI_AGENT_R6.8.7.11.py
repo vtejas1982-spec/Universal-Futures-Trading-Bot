@@ -151,9 +151,13 @@ from pathlib import Path
 #  4. Added leverage/liquidation-safe Grid global-SL validation.
 #  5. Added adaptive-ATR-aware tradeability diagnostics and corrected stale GUI documentation.
 #  6. Added deterministic contract/invariant checks for the audited entry/protection pipeline.
+#  7. Fixed high-leverage startup risk-cap diagnostics to use the authoritative leverage tier.
+#  8. Persisted 2F fallback thresholds and adaptive-ATR parameters as profile-controlled settings.
+#  9. Added startup validation for 2F/adaptive-ATR ranges and post-fill FIXED_QTY risk uses actual exchange leverage.
+# 10. Updated AI preset/build provenance to R6.8.7.11.
 APP_VERSION = "V8.4.2-CRYPTO-AI-AGENT-R6.8.7.11-FULL-AUDIT"
 APP_TITLE = "Universal Futures Bot V8.4.2-AI-AGENT-R6.8.7.11 - Full Engine Audit + 2F Fallback + Adaptive ATR"
-AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.11-FULL-ENGINE-AUDIT"
+AUDIT_BUILD = "V8.4.2-AI-AGENT-AUDIT-2026-09-30-R6.8.7.11-FULL-ENGINE-AUDIT-R2"
 # V8.3.3 safety hardening: persist retired managed-order IDs across flat exits and clean only exact checkpoint-proven stale bot orders.\n
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
 # When running the .py directly, keep them beside the script.
@@ -168,7 +172,7 @@ MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
 # R9 lifecycle hardening: cross-process profile STOP control, truthful stale-runtime status,
 # profile heartbeat, and explicit single-symbol max-open-position contract.
 # V8.2 configuration/runtime contracts.
-CONFIG_SCHEMA_VERSION = 32  # R6.8.7.10 controlled 2-family fallback + adaptive ATR gate.
+CONFIG_SCHEMA_VERSION = 33  # R6.8.7.11 audited 2F/adaptive-ATR controls persisted.
 RUNTIME_SCHEMA_VERSION = 24  # R6.7 runtime checkpoint adds protection reconciliation diagnostics.
 OPEN_ORDER_PAGE_LIMIT = 50
 SUPPORTED_GRID_MODES = ("OFF", "DIRECT_SHOT", "LONG_GRID", "SHORT_GRID", "NEUTRAL_GRID")
@@ -221,7 +225,7 @@ AI_AGENT_MAX_CONFLICTING_FAMILIES = 1
 # Adaptive-Evidence "Family Minimum Score"; the GUI value of that field is used at runtime.
 AI_AGENT_MIN_FAMILY_PARTICIPATION = 0.35
 # R6.8.4: evidence-first entry diagnostics. Shadow mode never places orders.
-# Soft regime is optional and defaults OFF; ATR, MTF, cost and liquidation remain hard.
+# Soft regime is optional and defaults ON for new AI-Agent profiles; ATR, MTF, cost and liquidation remain hard.
 AI_AGENT_SHADOW_MODE = False
 AI_AGENT_SOFT_REGIME_ENABLED = True
 AI_AGENT_SOFT_EDGE = 0.35
@@ -236,6 +240,8 @@ AI_AGENT_2F_REQUIRE_INDEPENDENT = True
 AI_AGENT_ADAPTIVE_ATR_ENABLED = True
 AI_AGENT_ADAPTIVE_ATR_QUANTILE = 0.30
 AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT = 0.10
+# R6.8.7.11 audit: previously hard-coded 2F/adaptive-ATR thresholds are now
+# persisted GUI settings so the active profile is fully reproducible.
 RISK_NOTIONAL_UTILIZATION_CAP = 0.95
 # Manual FIXED_QTY remains literal, but cannot bypass the configured per-trade risk ceiling.
 # This is intentionally mandatory and is not user-disableable in the production engine.
@@ -373,7 +379,13 @@ def high_leverage_profile(leverage, configured_buffer):
     if abs(buf - float(DEFAULT_LIQ_BUFFER_MULT)) < 1e-9:
         buf = HIGH_LEVERAGE_DEFAULT_LIQ_BUFFER
     return buf, {
-        "risk_cap": min(HIGH_LEVERAGE_MAX_RISK_PCT, leverage_tier(lev)[0] or HIGH_LEVERAGE_MAX_RISK_PCT),
+        # The leverage tier is authoritative.  HIGH_LEVERAGE_MAX_RISK_PCT is only
+        # a legacy fallback for the impossible case where a tier has no cap.
+        "risk_cap": (
+            float(leverage_tier(lev)[0])
+            if leverage_tier(lev)[0] is not None
+            else HIGH_LEVERAGE_MAX_RISK_PCT
+        ),
         "buffer": buf,
         "utilization": HIGH_LEVERAGE_MAX_POSITION_UTILIZATION,
     }
@@ -423,7 +435,7 @@ DEFAULT_TP_QTY_MODE = "PERCENT_%"
 DEFAULT_TP1_CLOSE_PERCENT = 50.0
 DEFAULT_TP2_CLOSE_PERCENT = 50.0
 
-AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.8.7.10"
+AI_AGENT_PRESET_NAME = "AI_AGENT_RECOMMENDED_R6.8.7.11"
 AI_AGENT_PRESET = {
     # Council / decision engine — the six AI-Agent controls.
     "ai_min_families": 3,
@@ -447,6 +459,9 @@ AI_AGENT_PRESET = {
     "ai_adaptive_atr_enabled": True,
     "ai_adaptive_atr_quantile": 0.30,
     "ai_adaptive_atr_floor_pct": 0.10,
+    "ai_2f_min_edge": 0.65,
+    "ai_2f_min_family_confidence": 0.65,
+    "ai_2f_min_participation": 0.40,
     # Execution / market regime.
     "timeframe": "15m",
     "leverage": "5",
@@ -982,8 +997,7 @@ def calculate_supertrend(
 
     final_ub = [np.nan] * len(df)
     final_lb = [np.nan] * len(df)
-    trend = [True] * len(df)
-    supertrend = [np.nan] * len(df)
+    trend = [True] * len(df)    supertrend = [np.nan] * len(df)
 
     for i in range(len(df)):
         # Pine has na values until ATR becomes available. Keep those bars
@@ -1007,6 +1021,7 @@ def calculate_supertrend(
             trend[i] = True
             supertrend[i] = final_lb[i]
             continue
+
         # Exact Kivanc/Pine recurrence:
         # up := close[1] > up1 ? max(up, up1) : up
         # dn := close[1] < dn1 ? min(dn, dn1) : dn
@@ -1981,8 +1996,7 @@ class StrategyEngine:
         bear_total=sum(v["bear"] for v in families.values())
         total=bull_total+bear_total
         raw_edge=abs(bull_total-bear_total)/total if total else 0.0
-        family_scores = {
-            f: ((v["bull"] - v["bear"]) / (v["bull"] + v["bear"]) if (v["bull"] + v["bear"]) > 0 else 0.0)
+        family_scores = {            f: ((v["bull"] - v["bear"]) / (v["bull"] + v["bear"]) if (v["bull"] + v["bear"]) > 0 else 0.0)
             for f, v in families.items()
         }
         voting_scores = [family_scores[f] for f, v in families.items() if (v["bull"] + v["bear"]) > 0]
@@ -2005,7 +2019,8 @@ class StrategyEngine:
             details = [families[f] for f in fams]
             if any(float(d.get("confidence", 0.0)) < float(fallback_2f_min_confidence) for d in details):
                 return False
-            if any(float(d.get("participation", 0.0)) < float(fallback_2f_min_participation) for d in details):                return False
+            if any(float(d.get("participation", 0.0)) < float(fallback_2f_min_participation) for d in details):
+                return False
             scores = []
             for d in details:
                 voting = float(d.get("bull", 0.0)) + float(d.get("bear", 0.0))
@@ -2068,7 +2083,10 @@ class StrategyEngine:
                       ai_require_trend=None, ai_require_structure=None, ai_max_conflicting_families=None,
                        ai_min_family_participation=None,
                       ai_soft_regime=None, ai_soft_edge=None, ai_soft_min_families=None,
-                      ai_soft_max_regime_misses=None, ai_2f_fallback_enabled=None):
+                      ai_soft_max_regime_misses=None, ai_2f_fallback_enabled=None,
+                       ai_2f_min_edge=None, ai_2f_min_family_confidence=None,
+                       ai_2f_min_participation=None, ai_2f_require_structure=None,
+                       ai_2f_require_independent=None):
         signal_mode = str(signal_mode).strip().upper()
         min_score = int(min_score)
         if min_score < 1:
@@ -2139,11 +2157,11 @@ class StrategyEngine:
                 soft_min_families=AI_AGENT_SOFT_MIN_FAMILIES if ai_soft_min_families is None else int(ai_soft_min_families),
                 soft_max_regime_misses=AI_AGENT_SOFT_MAX_REGIME_MISSES if ai_soft_max_regime_misses is None else int(ai_soft_max_regime_misses),
                 fallback_2f_enabled=AI_AGENT_2F_FALLBACK_ENABLED if ai_2f_fallback_enabled is None else bool(ai_2f_fallback_enabled),
-                fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
-                fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
-                fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
-                fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
-                fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
+                fallback_2f_min_edge=float(ai_2f_min_edge),
+                fallback_2f_min_confidence=float(ai_2f_min_family_confidence),
+                fallback_2f_min_participation=float(ai_2f_min_participation),
+                fallback_2f_require_structure=bool(ai_2f_require_structure),
+                fallback_2f_require_independent=bool(ai_2f_require_independent),
             )
             return result["buy_ok"], result["sell_ok"], result["bull_total"], result["bear_total"]
 
@@ -2192,7 +2210,10 @@ class StrategyEngine:
                         ai_require_trend=None, ai_require_structure=None, ai_max_conflicting_families=None,
                          ai_min_family_participation=None,
                         ai_soft_regime=None, ai_soft_edge=None, ai_soft_min_families=None,
-                        ai_soft_max_regime_misses=None, ai_2f_fallback_enabled=None):
+                        ai_soft_max_regime_misses=None, ai_2f_fallback_enabled=None,
+                       ai_2f_min_edge=None, ai_2f_min_family_confidence=None,
+                       ai_2f_min_participation=None, ai_2f_require_structure=None,
+                       ai_2f_require_independent=None):
         """Explain why the centralized strategy engine did or did not emit a side."""
         mode = str(signal_mode).strip().upper()
         modules = list(directional_modules or [])
@@ -2261,11 +2282,11 @@ class StrategyEngine:
                 soft_min_families=AI_AGENT_SOFT_MIN_FAMILIES if ai_soft_min_families is None else int(ai_soft_min_families),
                 soft_max_regime_misses=AI_AGENT_SOFT_MAX_REGIME_MISSES if ai_soft_max_regime_misses is None else int(ai_soft_max_regime_misses),
                 fallback_2f_enabled=AI_AGENT_2F_FALLBACK_ENABLED if ai_2f_fallback_enabled is None else bool(ai_2f_fallback_enabled),
-                fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
-                fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
-                fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
-                fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
-                fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
+                fallback_2f_min_edge=float(ai_2f_min_edge),
+                fallback_2f_min_confidence=float(ai_2f_min_family_confidence),
+                fallback_2f_min_participation=float(ai_2f_min_participation),
+                fallback_2f_require_structure=bool(ai_2f_require_structure),
+                fallback_2f_require_independent=bool(ai_2f_require_independent),
             )
             bulls = "+".join(result["bull_families"]) if result["bull_families"] else "NONE"
             bears = "+".join(result["bear_families"]) if result["bear_families"] else "NONE"
@@ -2975,7 +2996,6 @@ class UniversalFuturesBotGUI:
         self.volume_sr_cache_time = 0.0
         self.last_advanced_signal_log = None
         self.last_strategy_signal_log_key = None
-
         self._init_csv_log()
         self._init_master_db()
         self._build_ui()
@@ -3004,7 +3024,8 @@ class UniversalFuturesBotGUI:
             exchange_id = str(selected_exchange or self.v_exchange.get()).strip().lower()
             allowed = {
                 "bybit": ("BYBIT_DEMO", "BYBIT_TESTNET", "LIVE"),
-                "binance": ("TESTNET", "LIVE"),                "gate": ("TESTNET", "LIVE"),
+                "binance": ("TESTNET", "LIVE"),
+                "gate": ("TESTNET", "LIVE"),
                 "bitget": ("DEMO", "LIVE"),
                 "weex": ("DEMO", "LIVE"),
             }
@@ -3153,6 +3174,11 @@ class UniversalFuturesBotGUI:
             "ai_soft_edge": "e_ai_soft_edge",
             "ai_soft_min_families": "e_ai_soft_min_families",
             "ai_soft_max_regime_misses": "e_ai_soft_max_regime_misses",
+            "ai_2f_min_edge": "e_ai_2f_min_edge",
+            "ai_2f_min_family_confidence": "e_ai_2f_min_family_confidence",
+            "ai_2f_min_participation": "e_ai_2f_min_participation",
+            "ai_adaptive_atr_quantile": "e_ai_adaptive_atr_quantile",
+            "ai_adaptive_atr_floor_pct": "e_ai_adaptive_atr_floor_pct",
             "evidence_min_families": "e_evidence_min_families",
             "evidence_family_min_score": "e_evidence_family_min_score",
         }
@@ -3194,7 +3220,10 @@ class UniversalFuturesBotGUI:
             "hold_sl_wait_reversal": "v_hold_sl_wait_reversal",
             "ai_require_trend": "v_ai_require_trend", "ai_require_structure": "v_ai_require_structure",
             "ai_shadow_mode": "v_ai_shadow_mode", "ai_soft_regime": "v_ai_soft_regime",
-            "ai_2f_fallback_enabled": "v_ai_2f_fallback_enabled", "ai_adaptive_atr_enabled": "v_ai_adaptive_atr_enabled",
+            "ai_2f_fallback_enabled": "v_ai_2f_fallback_enabled",
+            "ai_2f_require_structure": "v_ai_2f_require_structure",
+            "ai_2f_require_independent": "v_ai_2f_require_independent",
+            "ai_adaptive_atr_enabled": "v_ai_adaptive_atr_enabled",
         }
         for key, attr in var_map.items():
             if key in p:
@@ -3216,6 +3245,13 @@ class UniversalFuturesBotGUI:
         self._set_entry_value("e_ai_soft_edge", p.get("ai_soft_edge", AI_AGENT_SOFT_EDGE))
         self._set_entry_value("e_ai_soft_min_families", p.get("ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES))
         self._set_entry_value("e_ai_soft_max_regime_misses", p.get("ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES))
+        self._set_entry_value("e_ai_2f_min_edge", p.get("ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE))
+        self._set_entry_value("e_ai_2f_min_family_confidence", p.get("ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE))
+        self._set_entry_value("e_ai_2f_min_participation", p.get("ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION))
+        self._set_entry_value("e_ai_adaptive_atr_quantile", p.get("ai_adaptive_atr_quantile", AI_AGENT_ADAPTIVE_ATR_QUANTILE))
+        self._set_entry_value("e_ai_adaptive_atr_floor_pct", p.get("ai_adaptive_atr_floor_pct", AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT))
+        self._set_var_value("v_ai_2f_require_structure", p.get("ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE))
+        self._set_var_value("v_ai_2f_require_independent", p.get("ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT))
         self._set_var_value("v_sl_mode", "ROI_%")
         self._set_var_value("v_tp_mode", "ROI_%")
         # Mark the entire preset application as a pending configuration change.
@@ -3958,8 +3994,7 @@ class UniversalFuturesBotGUI:
             state.get("daily_start_balance") or self.start_balance
         )
         self.daily_peak_equity = float(state.get("daily_peak_equity") or self.daily_start_balance or 0.0)
-        self.session_peak_equity = float(state.get("session_peak_equity") or self.start_balance or 0.0)
-        self.consecutive_cycle_errors = int(state.get("consecutive_cycle_errors") or 0)
+        self.session_peak_equity = float(state.get("session_peak_equity") or self.start_balance or 0.0)        self.consecutive_cycle_errors = int(state.get("consecutive_cycle_errors") or 0)
         self.last_market_data_ts = int(state.get("last_market_data_ts") or 0)
         saved_date = state.get("daily_start_date")
         try:
@@ -4003,7 +4038,8 @@ class UniversalFuturesBotGUI:
         gs.setdefault("last_position_entry", 0.0)
         gs.setdefault("last_grid_reset", 0.0)
         gs.setdefault("session_start_balance", self.start_balance)
-        gs.setdefault("peak_equity", 0.0)        gs.setdefault("paused_until", 0.0)
+        gs.setdefault("peak_equity", 0.0)
+        gs.setdefault("paused_until", 0.0)
         gs.setdefault("auto_direction", None)
         gs["filled_levels"] = set(str(x) for x in gs.get("filled_levels", []))
         gs["entry_orders"] = dict(gs.get("entry_orders") or {})
@@ -4958,7 +4994,6 @@ class UniversalFuturesBotGUI:
                 raise RuntimeError(
                     f"Profile {profile} became active before deletion."
                 )
-
             removed = []
             if profile_dir.exists():
                 shutil.rmtree(profile_dir)
@@ -5002,7 +5037,8 @@ class UniversalFuturesBotGUI:
         except Exception as e:
             self.log(f"PROFILE DELETE ERROR: {e}")
             messagebox.showerror(
-                "Delete Profile",                f"Could not delete profile {profile}:\n\n{e}",
+                "Delete Profile",
+                f"Could not delete profile {profile}:\n\n{e}",
                 parent=self.root,
             )
 
@@ -5957,7 +5993,6 @@ class UniversalFuturesBotGUI:
             ("SMA", "EMA", "WMA"), 1, 4
         )
         _entry(fr, "MA Period", "e_rsi_ma_len", "9", 1, 6)
-
         _check(fr, "Stochastic", "v_use_stoch", False, 2, 0)
         _entry(fr, "K", "e_stoch_k", "14", 2, 2, 5)
         _entry(fr, "Smooth", "e_stoch_smooth", "3", 2, 4, 5)
@@ -6001,7 +6036,8 @@ class UniversalFuturesBotGUI:
             for key, _label in div_names:
                 getattr(self, key).set(enabled)
 
-        tk.Checkbutton(            fr,
+        tk.Checkbutton(
+            fr,
             text="Use all divergence sources",
             variable=self.v_div_use_all,
             command=_toggle_divergence_all,
@@ -6325,11 +6361,46 @@ class UniversalFuturesBotGUI:
         tk.Checkbutton(fr, text="2F High-Conviction Fallback", variable=self.v_ai_2f_fallback_enabled).grid(row=7, column=2, columnspan=2, sticky="w", padx=2)
         self.v_ai_adaptive_atr_enabled = tk.BooleanVar(value=AI_AGENT_ADAPTIVE_ATR_ENABLED)
         tk.Checkbutton(fr, text="AI Adaptive ATR Floor", variable=self.v_ai_adaptive_atr_enabled).grid(row=7, column=4, columnspan=2, sticky="w", padx=2)
+
+        # R6.8.7.11 audit: make the previously hard-coded 2F/adaptive-ATR
+        # thresholds editable and persistent.  These are strategy thresholds,
+        # never safety overrides; downstream liquidation/cost/risk gates remain hard.
+        tk.Label(fr, text="2F Min Edge:").grid(row=8, column=0, sticky="e", padx=2, pady=2)
+        self.e_ai_2f_min_edge = tk.Entry(fr, width=6)
+        self.e_ai_2f_min_edge.insert(0, str(AI_AGENT_2F_MIN_EDGE))
+        self.e_ai_2f_min_edge.grid(row=8, column=1, padx=2, pady=2)
+
+        tk.Label(fr, text="2F Family Conf:").grid(row=8, column=2, sticky="e", padx=2, pady=2)
+        self.e_ai_2f_min_family_confidence = tk.Entry(fr, width=6)
+        self.e_ai_2f_min_family_confidence.insert(0, str(AI_AGENT_2F_MIN_FAMILY_CONFIDENCE))
+        self.e_ai_2f_min_family_confidence.grid(row=8, column=3, padx=2, pady=2)
+
+        tk.Label(fr, text="2F Participation:").grid(row=8, column=4, sticky="e", padx=2, pady=2)
+        self.e_ai_2f_min_participation = tk.Entry(fr, width=6)
+        self.e_ai_2f_min_participation.insert(0, str(AI_AGENT_2F_MIN_PARTICIPATION))
+        self.e_ai_2f_min_participation.grid(row=8, column=5, padx=2, pady=2)
+
+        self.v_ai_2f_require_structure = tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_STRUCTURE)
+        tk.Checkbutton(fr, text="2F Require Structure", variable=self.v_ai_2f_require_structure).grid(row=8, column=6, sticky="w", padx=2)
+
+        self.v_ai_2f_require_independent = tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_INDEPENDENT)
+        tk.Checkbutton(fr, text="2F Independent", variable=self.v_ai_2f_require_independent).grid(row=8, column=7, sticky="w", padx=2)
+
+        tk.Label(fr, text="Adaptive ATR Quantile:").grid(row=9, column=0, sticky="e", padx=2, pady=2)
+        self.e_ai_adaptive_atr_quantile = tk.Entry(fr, width=6)
+        self.e_ai_adaptive_atr_quantile.insert(0, str(AI_AGENT_ADAPTIVE_ATR_QUANTILE))
+        self.e_ai_adaptive_atr_quantile.grid(row=9, column=1, padx=2, pady=2)
+
+        tk.Label(fr, text="Adaptive ATR Floor %:").grid(row=9, column=2, sticky="e", padx=2, pady=2)
+        self.e_ai_adaptive_atr_floor_pct = tk.Entry(fr, width=6)
+        self.e_ai_adaptive_atr_floor_pct.insert(0, str(AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT))
+        self.e_ai_adaptive_atr_floor_pct.grid(row=9, column=3, padx=2, pady=2)
+
         tk.Label(
             fr,
-            text="R6.8.7.11: AI family participation is independent from Adaptive-Evidence Family Score. Shadow Mode evaluates relaxed ADX/Volume rules without trading. Soft Regime is configurable and defaults ON for new AI-Agent profiles; ATR, MTF, cost and liquidation remain hard safety gates.",
+            text="R6.8.7.11: AI family participation is independent from Adaptive-Evidence Family Score. Shadow Mode evaluates relaxed ADX/Volume rules without trading. Soft Regime is configurable and defaults ON for new AI-Agent profiles; ATR, MTF, cost and liquidation remain hard safety gates. 2F thresholds and adaptive-ATR parameters are profile-controlled strategy settings.",
             fg="#555555", wraplength=1100, justify="left",
-        ).grid(row=8, column=0, columnspan=8, sticky="w", pady=2)
+        ).grid(row=10, column=0, columnspan=8, sticky="w", pady=2)
 
         tk.Label(
             fr,
@@ -6341,7 +6412,7 @@ class UniversalFuturesBotGUI:
             fg="#444444",
             wraplength=1100,
             justify="left",
-        ).grid(row=9, column=0, columnspan=8, sticky="w", pady=2)
+        ).grid(row=11, column=0, columnspan=8, sticky="w", pady=2)
 
         tk.Label(
             fr,
@@ -6920,8 +6991,7 @@ class UniversalFuturesBotGUI:
             return result
         except (TypeError, ValueError):
             try:
-                return int(default)
-            except (TypeError, ValueError):
+                return int(default)            except (TypeError, ValueError):
                 return 0
 
     def _on_size_mode_changed(self, selected=None):
@@ -7000,7 +7070,8 @@ class UniversalFuturesBotGUI:
             if current_symbol and requested_symbol != current_symbol:
                 raise RuntimeError(
                     f"Symbol cannot be changed while the bot is running "
-                    f"({current_symbol} is active; requested {requested_symbol}). "                    f"Stop the bot first."
+                    f"({current_symbol} is active; requested {requested_symbol}). "
+                    f"Stop the bot first."
                 )
             if current_exchange and requested_exchange != current_exchange:
                 raise RuntimeError(
@@ -7203,12 +7274,14 @@ class UniversalFuturesBotGUI:
             "ai_shadow_mode": self.v_ai_shadow_mode.get(),
             "ai_soft_regime": self.v_ai_soft_regime.get(),
             "ai_2f_fallback_enabled": self.v_ai_2f_fallback_enabled.get(),
-            "ai_2f_min_edge": AI_AGENT_2F_MIN_EDGE,
-            "ai_2f_min_family_confidence": AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
-            "ai_2f_min_participation": AI_AGENT_2F_MIN_PARTICIPATION,
+            "ai_2f_min_edge": self.e_ai_2f_min_edge.get().strip(),
+            "ai_2f_min_family_confidence": self.e_ai_2f_min_family_confidence.get().strip(),
+            "ai_2f_min_participation": self.e_ai_2f_min_participation.get().strip(),
+            "ai_2f_require_structure": self.v_ai_2f_require_structure.get(),
+            "ai_2f_require_independent": self.v_ai_2f_require_independent.get(),
             "ai_adaptive_atr_enabled": self.v_ai_adaptive_atr_enabled.get(),
-            "ai_adaptive_atr_quantile": AI_AGENT_ADAPTIVE_ATR_QUANTILE,
-            "ai_adaptive_atr_floor_pct": AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT,
+            "ai_adaptive_atr_quantile": self.e_ai_adaptive_atr_quantile.get().strip(),
+            "ai_adaptive_atr_floor_pct": self.e_ai_adaptive_atr_floor_pct.get().strip(),
             "ai_soft_edge": self.e_ai_soft_edge.get().strip(),
             "ai_soft_min_families": self.e_ai_soft_min_families.get().strip(),
             "ai_soft_max_regime_misses": self.e_ai_soft_max_regime_misses.get().strip(),
@@ -7888,6 +7961,19 @@ class UniversalFuturesBotGUI:
             self.e_ai_soft_max_regime_misses.delete(0, tk.END)
             self.e_ai_soft_max_regime_misses.insert(0, _cfg_nonblank("ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES))
 
+            self.e_ai_2f_min_edge.delete(0, tk.END)
+            self.e_ai_2f_min_edge.insert(0, _cfg_nonblank("ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE))
+            self.e_ai_2f_min_family_confidence.delete(0, tk.END)
+            self.e_ai_2f_min_family_confidence.insert(0, _cfg_nonblank("ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE))
+            self.e_ai_2f_min_participation.delete(0, tk.END)
+            self.e_ai_2f_min_participation.insert(0, _cfg_nonblank("ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION))
+            self.v_ai_2f_require_structure.set(bool(cfg.get("ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)))
+            self.v_ai_2f_require_independent.set(bool(cfg.get("ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)))
+            self.e_ai_adaptive_atr_quantile.delete(0, tk.END)
+            self.e_ai_adaptive_atr_quantile.insert(0, _cfg_nonblank("ai_adaptive_atr_quantile", AI_AGENT_ADAPTIVE_ATR_QUANTILE))
+            self.e_ai_adaptive_atr_floor_pct.delete(0, tk.END)
+            self.e_ai_adaptive_atr_floor_pct.insert(0, _cfg_nonblank("ai_adaptive_atr_floor_pct", AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT))
+
             self.ai_agent_preset_name = str(cfg.get("ai_agent_preset_name", "")).strip()
             self.ai_agent_preset_applied = bool(cfg.get("ai_agent_preset_applied", False))
 
@@ -7904,8 +7990,7 @@ class UniversalFuturesBotGUI:
             self.e_adaptive_min_weight.delete(0, tk.END)
             self.e_adaptive_min_weight.insert(0, cfg.get("adaptive_min_weight", DEFAULT_ADAPTIVE_MIN_WEIGHT))
             self.e_evidence_min_families.delete(0, tk.END)
-            self.e_evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))
-            self.e_evidence_family_min_score.delete(0, tk.END)
+            self.e_evidence_min_families.insert(0, cfg.get("evidence_min_families", EVIDENCE_DEFAULT_MIN_FAMILIES))            self.e_evidence_family_min_score.delete(0, tk.END)
             self.e_evidence_family_min_score.insert(0, cfg.get("evidence_family_min_score", EVIDENCE_DEFAULT_FAMILY_MIN_SCORE))
             self.v_evidence_require_trend.set(bool(cfg.get("evidence_require_trend", EVIDENCE_DEFAULT_REQUIRE_TREND)))
             self.v_evidence_require_independent.set(bool(cfg.get("evidence_require_independent", EVIDENCE_DEFAULT_REQUIRE_INDEPENDENT)))
@@ -7999,6 +8084,7 @@ class UniversalFuturesBotGUI:
                     "1.5",
                 ),
             )
+
             self.e_tp1_pct.delete(
                 0,
                 tk.END,
@@ -8904,7 +8990,6 @@ class UniversalFuturesBotGUI:
         for meta in (gs.get("entry_orders") or {}).values():
             if isinstance(meta, dict) and meta.get("id"):
                 ids.add(str(meta["id"]))
-
         return ids
 
     @staticmethod
@@ -8998,7 +9083,8 @@ class UniversalFuturesBotGUI:
             try:
                 self.exchange.cancel_all_orders(symbol)
                 cancel_all_ok = True
-                self.log(f"Cancel-all requested for {symbol}.")                time.sleep(0.5)
+                self.log(f"Cancel-all requested for {symbol}.")
+                time.sleep(0.5)
             except Exception as e:
                 self.log(f"Cancel-all request warning for {symbol}: {e}")
 
@@ -9510,6 +9596,11 @@ class UniversalFuturesBotGUI:
         soft_min_families=AI_AGENT_SOFT_MIN_FAMILIES,
         soft_max_regime_misses=AI_AGENT_SOFT_MAX_REGIME_MISSES,
         fallback_2f_enabled=AI_AGENT_2F_FALLBACK_ENABLED,
+        fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
+        fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
+        fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
+        fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
+        fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
     ):
         """Resolve bounded, deterministic AI risk/SL/TP values for one accepted trade.
 
@@ -9555,11 +9646,11 @@ class UniversalFuturesBotGUI:
             soft_min_families=int(soft_min_families),
             soft_max_regime_misses=int(soft_max_regime_misses),
             fallback_2f_enabled=bool(fallback_2f_enabled),
-            fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
-            fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
-            fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
-            fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
-            fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
+            fallback_2f_min_edge=float(fallback_2f_min_edge),
+            fallback_2f_min_confidence=float(fallback_2f_min_confidence),
+            fallback_2f_min_participation=float(fallback_2f_min_participation),
+            fallback_2f_require_structure=bool(fallback_2f_require_structure),
+            fallback_2f_require_independent=bool(fallback_2f_require_independent),
         )
 
         chosen_families = (
@@ -9898,7 +9989,6 @@ class UniversalFuturesBotGUI:
         if last is None:
             raise RuntimeError("Exchange returned no current market price.")
         return float(last)
-
     def _manage_hold_sl_wait_reversal(self, position):
         """Monitor the Hold-All-Reverse ROI threshold without an exchange SL.
 
@@ -10012,6 +10102,7 @@ class UniversalFuturesBotGUI:
             "positionIdx": 0,
             "orderLinkId": self._new_order_link_id(label),
         }
+
         self.log(
             f"{label} SUBMIT | Bybit Conditional Market | "
             f"Side={side.upper()} | Qty={qty:g} | Trigger={trigger_price:.12g} | "
@@ -10896,8 +10987,7 @@ class UniversalFuturesBotGUI:
         spacing_pct = float(self._runtime_gui_value("e_grid_spacing"))
         order_size = float(self._runtime_gui_value("e_grid_order_size"))
         size_inc_pct = float(self._runtime_gui_value("e_grid_size_increase"))
-        tp_pct = float(self._runtime_gui_value("e_grid_tp"))
-        sl_pct = float(self._runtime_gui_value("e_grid_sl"))
+        tp_pct = float(self._runtime_gui_value("e_grid_tp"))        sl_pct = float(self._runtime_gui_value("e_grid_sl"))
         max_exp = float(self._runtime_gui_value("e_grid_max_exposure"))
         max_dd_pct = float(self._runtime_gui_value("e_grid_max_dd"))
         grid_score_min = int(self._runtime_gui_value("e_grid_score_min"))
@@ -10934,34 +11024,34 @@ class UniversalFuturesBotGUI:
                     f"Grid stop remains beyond every possible entry level."
                 )
 
-        # R6.8.7.11: Grid global SL is exchange-side protection too.
-        # Validate its worst-case distance from the deepest possible fill
-        # against the same leverage/liquidation envelope used by normal entries.
-        try:
-            _grid_leverage = float(self._runtime_gui_value("e_lev", 1.0) or 1.0)
-            _grid_configured_buffer = float(self._runtime_gui_value("e_liq_buffer", DEFAULT_LIQ_BUFFER_MULT) or DEFAULT_LIQ_BUFFER_MULT)
-            _grid_buffer = effective_liq_buffer(_grid_leverage, _grid_configured_buffer)
-            _grid_safe_move = liq_safe_move(_grid_leverage, _grid_buffer)
-            _grid_depth = spacing_pct * levels / 100.0
-            _grid_sl = sl_pct / 100.0
-            _grid_long_outer = 1.0 - _grid_depth
-            _grid_short_outer = 1.0 + _grid_depth
-            _grid_long_stop = 1.0 - _grid_sl
-            _grid_short_stop = 1.0 + _grid_sl
-            _grid_long_move = (_grid_long_outer - _grid_long_stop) / max(_grid_long_outer, 1e-12)
-            _grid_short_move = (_grid_short_stop - _grid_short_outer) / max(_grid_short_outer, 1e-12)
-            _grid_worst_move = max(_grid_long_move, _grid_short_move)
-            if _grid_worst_move >= _grid_safe_move:
-                raise ValueError(
-                    f"Grid Global SL is too wide for {_grid_leverage:g}x leverage: "
-                    f"worst-case outer-level SL distance {_grid_worst_move * 100:.3f}% "
-                    f">= liquidation-safe limit {_grid_safe_move * 100:.3f}% "
-                    f"(effective buffer {_grid_buffer:g}x). Lower Grid SL/leverage or reduce Grid depth."
-                )
-        except ValueError:
-            raise
-        except Exception as _grid_liq_exc:
-            raise ValueError(f"Grid liquidation-safety validation failed: {_grid_liq_exc}") from _grid_liq_exc
+            # R6.8.7.11: Grid global SL is exchange-side protection too.
+            # Validate its worst-case distance from the deepest possible fill
+            # against the same leverage/liquidation envelope used by normal entries.
+            try:
+                _grid_leverage = float(self._runtime_gui_value("e_lev", 1.0) or 1.0)
+                _grid_configured_buffer = float(self._runtime_gui_value("e_liq_buffer", DEFAULT_LIQ_BUFFER_MULT) or DEFAULT_LIQ_BUFFER_MULT)
+                _grid_buffer = effective_liq_buffer(_grid_leverage, _grid_configured_buffer)
+                _grid_safe_move = liq_safe_move(_grid_leverage, _grid_buffer)
+                _grid_depth = spacing_pct * levels / 100.0
+                _grid_sl = sl_pct / 100.0
+                _grid_long_outer = 1.0 - _grid_depth
+                _grid_short_outer = 1.0 + _grid_depth
+                _grid_long_stop = 1.0 - _grid_sl
+                _grid_short_stop = 1.0 + _grid_sl
+                _grid_long_move = (_grid_long_outer - _grid_long_stop) / max(_grid_long_outer, 1e-12)
+                _grid_short_move = (_grid_short_stop - _grid_short_outer) / max(_grid_short_outer, 1e-12)
+                _grid_worst_move = max(_grid_long_move, _grid_short_move)
+                if _grid_worst_move >= _grid_safe_move:
+                    raise ValueError(
+                        f"Grid Global SL is too wide for {_grid_leverage:g}x leverage: "
+                        f"worst-case outer-level SL distance {_grid_worst_move * 100:.3f}% "
+                        f">= liquidation-safe limit {_grid_safe_move * 100:.3f}% "
+                        f"(effective buffer {_grid_buffer:g}x). Lower Grid SL/leverage or reduce Grid depth."
+                    )
+            except ValueError:
+                raise
+            except Exception as _grid_liq_exc:
+                raise ValueError(f"Grid liquidation-safety validation failed: {_grid_liq_exc}") from _grid_liq_exc
 
         if max_exp <= 0:
             raise ValueError("Grid Max Exposure must be greater than 0 USDT.")
@@ -11046,7 +11136,8 @@ class UniversalFuturesBotGUI:
         return {
             "mode": mode, "levels": levels, "spacing": spacing_pct / 100.0,
             "order_size": order_size, "size_inc": size_inc_pct / 100.0,
-            "tp_pct": tp_pct / 100.0, "sl_pct": sl_pct / 100.0,            "max_exposure": max_exp, "max_dd": max_dd_pct / 100.0,
+            "tp_pct": tp_pct / 100.0, "sl_pct": sl_pct / 100.0,
+            "max_exposure": max_exp, "max_dd": max_dd_pct / 100.0,
             "score_min": grid_score_min,
             "trend_filter": filt, "recenter": bool(self._runtime_gui_value("v_grid_recenter")),
             "recenter_distance": rec_pct / 100.0, "cooldown": cooldown * 60.0,
@@ -11895,8 +11986,7 @@ class UniversalFuturesBotGUI:
                     continue
                 ids = self._known_managed_order_ids(symbol)
                 if ids:
-                    try:
-                        self._cancel_known_managed_orders_from_ids(symbol, ids)
+                    try:                        self._cancel_known_managed_orders_from_ids(symbol, ids)
                     except Exception as e:
                         last_error = e
                         time.sleep(CLOSE_VERIFY_POLL_SECONDS)
@@ -12048,7 +12138,8 @@ class UniversalFuturesBotGUI:
 
         try:
             result = self.exchange.set_leverage(leverage, symbol)
-            self.log(                f"Leverage set/requested: {leverage}x"
+            self.log(
+                f"Leverage set/requested: {leverage}x"
                 + (f" | Exchange response={result}" if result else "")
             )
         except Exception as e:
@@ -12894,8 +12985,7 @@ class UniversalFuturesBotGUI:
                     f"MACD {self.e_macd_fast.get().strip()}/{self.e_macd_slow.get().strip()}/{self.e_macd_signal.get().strip()}"
                 )
             if self.v_use_rsi.get():
-                enabled_modules.append(
-                    f"RSI {self.e_rsi_len.get().strip()} "
+                enabled_modules.append(                    f"RSI {self.e_rsi_len.get().strip()} "
                     f"({self.v_rsi_logic.get()} | {self.v_rsi_ma_type.get()} {self.e_rsi_ma_len.get().strip()} | "
                     f"OS {self.e_rsi_os.get().strip()} / OB {self.e_rsi_ob.get().strip()})"
                 )
@@ -13047,7 +13137,8 @@ class UniversalFuturesBotGUI:
                 f"ATR Method={'RMA' if startup_st_change_atr else 'SMA(TR)'} | "
                 f"Entry={startup_st_entry_mode}"
             )
-            self.log(                f"EMA CROSS ENTRY MODE: {self.v_ema_cross_entry_mode.get().strip().upper()}"
+            self.log(
+                f"EMA CROSS ENTRY MODE: {self.v_ema_cross_entry_mode.get().strip().upper()}"
             )
 
             if signal_mode == "AI_AGENT":
@@ -13893,8 +13984,7 @@ class UniversalFuturesBotGUI:
             # New SL is live before old SL is cancelled, avoiding an unprotected gap.
             if old_id and old_id != new_id:
                 try:
-                    self.exchange.cancel_order(old_id, self.symbol)
-                except Exception as e:
+                    self.exchange.cancel_order(old_id, self.symbol)                except Exception as e:
                     self.log(f"AI TRAIL OLD SL CANCEL NOTICE | ID={old_id} | {e}")
             protected["sl_id"] = new_id or protected.get("sl_id")
             protected["sl"] = candidate
@@ -14047,7 +14137,8 @@ class UniversalFuturesBotGUI:
         evidence_require_trend=None,
         evidence_require_independent=None,
         ai_min_families=None,
-        ai_min_edge=None,        ai_family_confidence=None,
+        ai_min_edge=None,
+        ai_family_confidence=None,
         ai_require_trend=None,
         ai_require_structure=None,
         ai_max_conflicts=None,
@@ -14057,6 +14148,11 @@ class UniversalFuturesBotGUI:
         ai_soft_min_families=None,
         ai_soft_max_regime_misses=None,
         ai_2f_fallback_enabled=None,
+        ai_2f_min_edge=None,
+        ai_2f_min_family_confidence=None,
+        ai_2f_min_participation=None,
+        ai_2f_require_structure=None,
+        ai_2f_require_independent=None,
     ):
         """Compatibility wrapper around the V8.4 evidence-family engine."""
         if evidence_min_families is None:
@@ -14091,6 +14187,16 @@ class UniversalFuturesBotGUI:
             ai_soft_max_regime_misses = self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES)
         if ai_2f_fallback_enabled is None:
             ai_2f_fallback_enabled = bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED))
+        if ai_2f_min_edge is None:
+            ai_2f_min_edge = self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE)
+        if ai_2f_min_family_confidence is None:
+            ai_2f_min_family_confidence = self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE)
+        if ai_2f_min_participation is None:
+            ai_2f_min_participation = self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION)
+        if ai_2f_require_structure is None:
+            ai_2f_require_structure = bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE))
+        if ai_2f_require_independent is None:
+            ai_2f_require_independent = bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT))
         # R6.8.7.10 HOTFIX2: align the AI family-confidence keyword with the
         # decide_signal() parameter name (ai_min_family_confidence).
         # R6.8.7.10 HOTFIX1: use keyword arguments for the expanded AI-agent
@@ -14124,6 +14230,11 @@ class UniversalFuturesBotGUI:
             ai_soft_min_families=ai_soft_min_families,
             ai_soft_max_regime_misses=ai_soft_max_regime_misses,
             ai_2f_fallback_enabled=ai_2f_fallback_enabled,
+            ai_2f_min_edge=ai_2f_min_edge,
+            ai_2f_min_family_confidence=ai_2f_min_family_confidence,
+            ai_2f_min_participation=ai_2f_min_participation,
+            ai_2f_require_structure=ai_2f_require_structure,
+            ai_2f_require_independent=ai_2f_require_independent,
         )
 
     def _evaluate_reversal_hold(self, position_side, hold_directional_modules):
@@ -14818,11 +14929,33 @@ class UniversalFuturesBotGUI:
             _ai_soft_edge_chk = self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE)
             if not 0.0 < _ai_soft_edge_chk < 1.0:
                 raise ValueError("AI Agent Soft Edge must be greater than 0 and less than 1.")
+
+            _ai_2f_edge_chk = self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE)
+            _ai_2f_conf_chk = self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE)
+            _ai_2f_part_chk = self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION)
+            if not 0.0 < _ai_2f_edge_chk < 1.0:
+                raise ValueError("AI 2F Minimum Edge must be greater than 0 and less than 1.")
+            if not 0.0 < _ai_2f_conf_chk <= 1.0:
+                raise ValueError("AI 2F Family Confidence must be greater than 0 and at most 1.")
+            if not 0.0 < _ai_2f_part_chk <= 1.0:
+                raise ValueError("AI 2F Family Participation must be greater than 0 and at most 1.")
+
+            _ai_atr_q_chk = self._safe_runtime_float("e_ai_adaptive_atr_quantile", AI_AGENT_ADAPTIVE_ATR_QUANTILE)
+            _ai_atr_floor_chk = self._safe_runtime_float("e_ai_adaptive_atr_floor_pct", AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT)
+            if not 0.01 <= _ai_atr_q_chk <= 0.99:
+                raise ValueError("AI Adaptive ATR Quantile must be between 0.01 and 0.99.")
+            if not 0.0 <= _ai_atr_floor_chk <= 100.0:
+                raise ValueError("AI Adaptive ATR Floor must be between 0 and 100 percent.")
+
             self.log(
                 f"AI AGENT COUNCIL: MinFamilies={ai_min_families} | Edge>={ai_min_edge:g} | "
                 f"FamilyConfidence>={ai_family_confidence:g} | FamilyParticipation>={ai_min_participation:g} | MaxConflicts={ai_max_conflicts} | "
                 f"RequireTrend={'ON' if ai_require_trend else 'OFF'} | "
-                f"RequireStructure={'ON' if ai_require_structure else 'OFF'}"
+                f"RequireStructure={'ON' if ai_require_structure else 'OFF'} | "
+                f"2F={'ON' if bool(self._runtime_gui_value('v_ai_2f_fallback_enabled', AI_AGENT_2F_FALLBACK_ENABLED)) else 'OFF'} "
+                f"Edge>={_ai_2f_edge_chk:g} Conf>={_ai_2f_conf_chk:g} Part>={_ai_2f_part_chk:g} "
+                f"Structure={'ON' if bool(self._runtime_gui_value('v_ai_2f_require_structure', AI_AGENT_2F_REQUIRE_STRUCTURE)) else 'OFF'} "
+                f"Independent={'ON' if bool(self._runtime_gui_value('v_ai_2f_require_independent', AI_AGENT_2F_REQUIRE_INDEPENDENT)) else 'OFF'}"
             )
             self.log(
                 f"SIZING MODE: {size_mode} | "
@@ -14850,8 +14983,7 @@ class UniversalFuturesBotGUI:
             if not use_legacy_protection:
                 self.log(
                     f"ROI->PRICE @{leverage}x: SL {roi_sl_target:g}% ROI = {roi_sl_target / leverage:.3f}% price | "
-                    f"TP1 {tp1_roi:g}% = {tp1_roi / leverage:.3f}% | TP2 {tp2_roi:g}% = {tp2_roi / leverage:.3f}% "
-                    "(ATR SL/TP override these when ATR mode is ON)"
+                    f"TP1 {tp1_roi:g}% = {tp1_roi / leverage:.3f}% | TP2 {tp2_roi:g}% = {tp2_roi / leverage:.3f}% "                    "(ATR SL/TP override these when ATR mode is ON)"
                 )
             self.log(
                 f"EXECUTION SAFETY: Spread<={self._safe_runtime_float("e_max_entry_spread_pct", float(DEFAULT_MAX_ENTRY_SPREAD_PCT)):g}% | Slippage<={self._safe_runtime_float("e_max_entry_slippage_pct", float(DEFAULT_MAX_ENTRY_SLIPPAGE_PCT)):g}% | Depth>={self._safe_runtime_float("e_min_orderbook_depth_mult", float(DEFAULT_MIN_ORDERBOOK_DEPTH_MULT)):g}x | CandleDrift<={self._safe_runtime_float("e_max_entry_candle_drift_pct", float(DEFAULT_MAX_ENTRY_CANDLE_DRIFT_PCT)):g}%"
@@ -15046,7 +15178,8 @@ class UniversalFuturesBotGUI:
                     # Optional independent EMA crossover filter.
                     # The crossover is evaluated ONLY on completed candles:
                     # -3 = candle before the latest completed candle
-                    # -2 = latest completed candle                    df["ema_fast"] = (
+                    # -2 = latest completed candle
+                    df["ema_fast"] = (
                         df["close"].ewm(
                             span=ema_fast_len,
                             adjust=False,
@@ -15578,7 +15711,7 @@ class UniversalFuturesBotGUI:
                                 if _adaptive_floor < effective_atr_min_pct:
                                     effective_atr_min_pct = _adaptive_floor
                                     if not getattr(self, "_ai_adaptive_atr_logged", False):
-                                        self.log(f"AI ADAPTIVE ATR: configured min {float(atr_min_pct):.3f}% -> effective {effective_atr_min_pct:.3f}% (Q{AI_AGENT_ADAPTIVE_ATR_QUANTILE:.2f}={_q:.3f}%, floor={AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT:.3f}%). Cost/liquidation gates remain hard.")
+                                        self.log(f"AI ADAPTIVE ATR: configured min {float(atr_min_pct):.3f}% -> effective {effective_atr_min_pct:.3f}% (Q{_adaptive_quantile:.2f}={_q:.3f}%, floor={_adaptive_floor_pct:.3f}%). Cost/liquidation gates remain hard.")
                                         self._ai_adaptive_atr_logged = True
                         except Exception:
                             pass
@@ -15849,8 +15982,7 @@ class UniversalFuturesBotGUI:
                         )
 
                     # ATR is volatility-only. When the ATR threshold passes,
-                    # its vote follows the completed candle direction.
-                    if use_atr and atr_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
+                    # its vote follows the completed candle direction.                    if use_atr and atr_pass and signal_mode not in ("ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT"):
                         directional_modules.append(
                             ("ATR", candle_bull, candle_bear)
                         )
@@ -15924,6 +16056,11 @@ class UniversalFuturesBotGUI:
                         ai_soft_edge=self._safe_runtime_float("e_ai_soft_edge", AI_AGENT_SOFT_EDGE),
                         ai_soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                         ai_soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
+                        ai_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
+                        ai_2f_min_family_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                        ai_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
+                        ai_2f_require_structure=bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)),
+                        ai_2f_require_independent=bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)),
                     )
 
                     if grid_cfg["mode"] not in ("OFF", "DIRECT_SHOT"):
@@ -15995,11 +16132,11 @@ class UniversalFuturesBotGUI:
                                 soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                                 soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
                                 fallback_2f_enabled=bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED)),
-                                fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
-                                fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
-                                fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
-                                fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
-                                fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
+                                fallback_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
+                                fallback_2f_min_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                                fallback_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
+                                fallback_2f_require_structure=bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)),
+                                fallback_2f_require_independent=bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)),
                             )
                             _shadow_ts = int(df["time"].iloc[-2])
                             if getattr(self, "_last_ai_shadow_log_ts", None) != _shadow_ts:
@@ -16052,7 +16189,8 @@ class UniversalFuturesBotGUI:
                         signal = "SELL"
 
                     # R6.8.7.9: authoritative entry-pipeline trace. This is diagnostic only;
-                    # it never changes signal state or bypasses any downstream safety gate.                    _pipeline_ts = int(df["time"].iloc[-2])
+                    # it never changes signal state or bypasses any downstream safety gate.
+                    _pipeline_ts = int(df["time"].iloc[-2])
                     if getattr(self, "_last_entry_pipeline_audit_ts", None) != _pipeline_ts:
                         self._last_entry_pipeline_audit_ts = _pipeline_ts
                         try:
@@ -16071,11 +16209,11 @@ class UniversalFuturesBotGUI:
                                 soft_min_families=self._safe_runtime_int("e_ai_soft_min_families", AI_AGENT_SOFT_MIN_FAMILIES),
                                 soft_max_regime_misses=self._safe_runtime_int("e_ai_soft_max_regime_misses", AI_AGENT_SOFT_MAX_REGIME_MISSES),
                                 fallback_2f_enabled=bool(self._runtime_gui_value("v_ai_2f_fallback_enabled", AI_AGENT_2F_FALLBACK_ENABLED)),
-                                fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
-                                fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
-                                fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
-                                fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
-                                fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
+                                fallback_2f_min_edge=self._safe_runtime_float("e_ai_2f_min_edge", AI_AGENT_2F_MIN_EDGE),
+                                fallback_2f_min_confidence=self._safe_runtime_float("e_ai_2f_min_family_confidence", AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                                fallback_2f_min_participation=self._safe_runtime_float("e_ai_2f_min_participation", AI_AGENT_2F_MIN_PARTICIPATION),
+                                fallback_2f_require_structure=bool(self._runtime_gui_value("v_ai_2f_require_structure", AI_AGENT_2F_REQUIRE_STRUCTURE)),
+                                fallback_2f_require_independent=bool(self._runtime_gui_value("v_ai_2f_require_independent", AI_AGENT_2F_REQUIRE_INDEPENDENT)),
                             ) if signal_mode == "AI_AGENT" else None
                             if _pipeline_result:
                                 _qbuy = "+".join(_pipeline_result.get("bull_families", [])) or "NONE"
@@ -16843,8 +16981,7 @@ class UniversalFuturesBotGUI:
                                 "EXECUTION_QUALITY_GATE",
                                 f"ENTRY BLOCKED: {_exec_gate_error}",
                                 closed_candle_ts,
-                            )
-                            cycle_elapsed = time.time() - cycle_start
+                            )                            cycle_elapsed = time.time() - cycle_start
                             time.sleep(max(0.5, poll_seconds - cycle_elapsed))
                             continue
 
@@ -17062,7 +17199,8 @@ class UniversalFuturesBotGUI:
                                 + (f" | TP2 ROI={resolved_tp2_roi:.2f}%" if resolved_tp2_roi is not None else "")
                             )
 
-                            if self._runtime_gui_value("v_hold_until_all_reverse"):                                self.log(
+                            if self._runtime_gui_value("v_hold_until_all_reverse"):
+                                self.log(
                                     f"PROTECTION CALCULATED FROM ACTUAL ENTRY: SL={sl:.12g} | "
                                     f"Hold SL={hold_sl_roi_pct:g}% ROI | "
                                     "TP1/TP2 DISABLED (Hold-All-Reverse ON)"
@@ -17099,7 +17237,7 @@ class UniversalFuturesBotGUI:
                                     actual_entry,
                                     actual_qty,
                                     sl_move,
-                                    leverage,
+                                    actual_position_leverage or leverage,
                                     risk_pct,
                                 )
 
