@@ -1375,3 +1375,11 @@ R6.8 does not lower AI family, edge, trend, structure, conflict, MTF, ATR, Volum
 
 ### Validation
 AST parse: PASS; bytecode compile: PASS; static contract checks: PASS. Runtime exchange validation remains required on Bybit Demo.
+## R6.8.7.11 R4 — 2026-09-30
+
+- Fixed the live decision_reason() path that omitted all persisted 2-family fallback parameters, causing float(None) before AI evaluation.
+- Added defensive normalization of 2F parameters inside decision_reason() so omitted/None diagnostics cannot crash the worker.
+- Hardened remaining raw GUI snapshot numeric/boolean reads with validated runtime helpers.
+- Removed direct Tk widget .get() reads from the worker path for divergence configuration.
+- Added safe handling for transient None/blank GUI values and preserved fail-closed risk/liquidation/cost/protection gates.
+- Local R4 regression audit: 15/15 PASS; AST parse and compile pass.
