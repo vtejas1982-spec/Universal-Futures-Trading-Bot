@@ -1,3 +1,26 @@
+# R6.8.7.22 — Configuration Viability + Execution Taxonomy + Preset Authority — 2026-10-01
+
+## Fixed / Added
+- Synchronized the recommended AI preset identity to R6.8.7.22.
+- Advanced config schema 42 -> 43.
+- Added configuration-viability diagnostics for cost and liquidation compatibility without changing authorization behavior.
+- Added explicit POSITION/COST/LIQUIDATION/EXECUTION_QUALITY entry-block classifications at audited rejection points.
+- Existing saved profiles remain authoritative; no silent preset application.
+- No strategy threshold or safety gate was loosened.
+
+## Validation
+- AST parse: PASS
+- Python compile: PASS
+- Stale R6.8.7.20 recommended-preset references: 0
+- R6.8.7.22 preset identity: authoritative
+- Entry-block taxonomy static audit: PASS
+- Source SHA-256: `42667fb71abb105fbe64adc952006568ff15ee7c7a4b1a1af0e5bad96532fcc9`
+
+## Source synchronization
+The complete ~979 KB source was generated and validated locally. The connected GitHub file-write endpoint cannot safely serialize the large production source replacement in this session, so documentation is synchronized without falsely claiming the large source blob was replaced.
+
+---
+
 # R6.8.7.21 — Full Config / Engine Audit — 2026-10-01
 
 ## Fixed
