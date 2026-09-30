@@ -1,3 +1,30 @@
+## 2026-09-30 — R6.8.7.14 Multi-Bot Hub HOTFIX3
+
+### Fixed
+- Hardened post-fill liquidation validation against unusable exchange-reported `liqPrice` values.
+- Impossible liquidation geometry now falls back to the deterministic leverage/buffer envelope instead of being accepted as authoritative.
+- Exact GUI leverage remains authoritative; no silent leverage lowering.
+
+### Added / retained
+- Multi-Bot Hub default launch mode.
+- Per-profile COPY / CLEAR VIEW / AUTO-SCROLL controls.
+- Combined running-log copy/save and timestamped persistent session logs.
+- Hub watchdog and exclusive exchange/account/symbol ownership.
+- Fibonacci optional protection with exact-leverage fail-closed contract.
+
+### Full audit
+- AST parse: PASS
+- Python compile: PASS
+- Stubbed import: PASS
+- StrategyEngine / GUI / Hub self-call audits: PASS
+- GUI callback binding: PASS
+- AI preset persistence coverage: 157/157 PASS
+- AI council, ambiguous-signal and 2F fallback smoke tests: PASS
+
+### Documentation
+- `docs/R6.8.7.14_MULTIBOT_HUB_HOTFIX3_FULL_AUDIT.md`
+
+
 # V8.4.2 Crypto AI-Agent R6.8.7.14 HOTFIX4 — AI Leverage Recovery + Liquidation Boundary — 2026-09-30
 
 ## Fixed
