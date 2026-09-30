@@ -1,3 +1,25 @@
+## R6.8.7.11 R3 — Live-Log Runtime Hardening — 2026-09-30
+
+### Fixed
+- Fixed a live worker failure class observed in BOT-01/BOT-03 and BOT-02: direct conversion of a transient GUI snapshot value could raise `float() argument must be a string or a real number, not 'NoneType'`.
+- Hardened the worker settings-ingestion boundary with safe numeric, integer, Boolean and text snapshot readers.
+- Boolean snapshot handling now preserves safety defaults when a GUI value is temporarily `None`/blank instead of interpreting it as `False` and accidentally disabling a safety control.
+- Added exact cycle traceback logging so future non-exchange worker failures expose the failing source path instead of only the exception text.
+- Removed duplicate 2F preset keys so the persisted AI-Agent preset has one authoritative value per control.
+
+### Fixed configuration propagation
+- Live AI trade-management now receives all persisted 2F fallback thresholds and structure/independence requirements, matching the decision, shadow and entry-pipeline paths.
+- Existing R6.8.7.11 profile values remain authoritative; the hard liquidation, cost, risk, TP/SL, execution-quality and kill-switch contracts remain unchanged.
+
+### Validation
+- Python compile: PASS.
+- AST parse: PASS.
+- Stubbed module import: PASS.
+- R6.8.7.11 focused regression suite: **12/12 PASS**.
+- Runtime `None`/blank snapshot safety smoke test: PASS.
+
+This is a runtime reliability/safety hardening patch. It does not guarantee profitability.
+
 ## R6.8.7.11 R2 Audit Corrections — 2026-09-30
 
 ### Fixed
