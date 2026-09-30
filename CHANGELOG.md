@@ -1,3 +1,32 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.11 R2 — Full Engine Audit Correction — 2026-09-30
+
+## Fixed
+- High-leverage startup risk-cap reporting now derives from the authoritative leverage tier rather than the legacy `HIGH_LEVERAGE_MAX_RISK_PCT` display fallback.
+- FIXED_QTY post-fill risk validation now uses actual exchange-reported leverage when available.
+- AI preset/build provenance updated to R6.8.7.11.
+
+## Added
+- Profile-persistent 2F fallback thresholds: minimum edge, family confidence, participation, structure requirement and independent-family requirement.
+- Profile-persistent Adaptive ATR quantile and absolute floor.
+- Startup validation for the new strategy-control ranges.
+- Full runtime propagation of those settings through live decision, shadow, entry-pipeline diagnostics and AI trade management.
+- Additional source-level regression checks.
+
+## Modified
+- Configuration schema: 32 -> 33.
+- AI GUI now exposes the previously hard-coded 2F/adaptive-ATR strategy thresholds.
+- Existing hard liquidation, cost, TP/SL, risk and execution gates are unchanged.
+
+## Validation
+- Python AST parse: PASS.
+- Python bytecode compilation: PASS.
+- Module import with external API stubs: PASS.
+- AI council smoke test: PASS.
+- 2F fallback smoke test: PASS.
+- SL/TP resolver smoke test: PASS.
+- New R6.8.7.11 R2 contract suite: 6/6 PASS.
+- Live exchange lifecycle still requires Bybit Demo/Testnet validation.
+
 # V8.4.2 Crypto AI-Agent R6.8.7.11 — Full Engine Audit — 2026-09-30
 
 ## Fixed
