@@ -1,3 +1,37 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.11 — Full Engine Audit — 2026-09-30
+
+## Fixed
+- Fixed `VWAP_DELTA` so its bearish state is not forced TRUE whenever the module is enabled.
+- Unified AI 2F fallback and soft-regime parameters across live decision, shadow council, entry-pipeline diagnostics and AI trade management.
+- Preserved the HOTFIX1/HOTFIX2 `decide_signal()` keyword contract.
+- Corrected adaptive-ATR tradeability diagnostics to use the effective AI threshold.
+
+## Added
+- Contract-size-aware Grid USDT -> exchange quantity conversion.
+- Contract-size-aware current Grid exposure calculation.
+- Hard Grid global-SL liquidation-safety validation using leverage and the effective liquidation buffer.
+- R6.8.7.11 contract tests.
+- R6.8.7.11 audit report and Windows build script.
+
+## Modified
+- Updated stale AI Soft Regime GUI documentation.
+- Kept normal SL/TP ownership and risk ceilings unchanged; no safety gate was intentionally weakened.
+
+## Live Demo evidence
+- OP/USDT reached the real order stage, filled, and verified SL + TP1 + TP2.
+- SOON/USDT correctly blocked an AI setup whose selected stop could not satisfy the 20x liquidation-safe envelope.
+
+## Validation
+- AST parse: PASS
+- Python compile: PASS
+- AI council and 2F fallback smoke tests: PASS
+- Grid contract-size and liquidation-safety smoke tests: PASS
+- Focused R6.8.7.11 contract tests added
+
+See `docs/R6.8.7.11_FULL_ENGINE_AUDIT.md`.
+
+---
+
 # R6.8.7.2 — 2026-09-29
 
 ## Fixed
