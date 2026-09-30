@@ -93,7 +93,7 @@ def test_cycle_error_records_traceback():
 
 def test_live_ai_trade_manager_receives_profile_2f_controls():
     src = load_source()
-    marker = "fallback_2f_enabled=bool(self._runtime_gui_value"
+    marker = "fallback_2f_min_edge=self._safe_runtime_float"
     pos = src.rfind(marker)
     tail = src[pos:pos + 1800]
     for key in (
