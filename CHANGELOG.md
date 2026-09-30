@@ -1,3 +1,45 @@
+# R6.8.7.14 Multi-Bot Hub HOTFIX5 — 2026-09-30
+
+## Fixed
+- COPY RUNNING LOGS now creates a timestamped combined TXT file in `hub_combined_logs` in addition to copying the same text to the clipboard.
+- Combined export names use microseconds plus collision protection.
+- Combined exports use a temporary file, flush/fsync, then atomic rename.
+- Hub status exposes the complete output path.
+- Clipboard errors no longer discard a successfully persisted snapshot.
+- Removed the dormant live automatic-leverage-recovery branch; exact GUI-selected leverage remains authoritative and unsafe AI minimum stops fail closed.
+
+## Added
+- Central `_write_combined_running_log_file()` persistence helper shared by COPY and SAVE.
+- HOTFIX5 build/audit provenance.
+- Full configuration/strategy/callback/Hub-timer audit results.
+- Atomic combined-log persistence smoke test.
+
+## Modified
+- COPY and SAVE now share one file-writing contract.
+- No strategy indicator formulas were changed.
+- No liquidation, cost, quantity/risk, execution-quality, protection, TP/SL, kill-switch, or post-fill safety gate was weakened.
+- Configuration/runtime schemas remain **36 / 24**.
+
+## Validation
+- Python compile: PASS.
+- AST parse: PASS.
+- Stubbed import: PASS.
+- StrategyEngine self-call audit: PASS.
+- GUI self-call audit: PASS.
+- Multi-Bot Hub self-call audit: PASS.
+- GUI callback audit: PASS.
+- Config save/load coverage: PASS; internal `ai_leverage_adaptive_enabled` is not a GUI setting.
+- AI preset coverage: 157/157.
+- Hub timer audit: PASS.
+- Retired live leverage-recovery references: 0.
+- Combined-log atomic writer smoke test: PASS.
+- Source SHA-256: `62e43f87f31f81c6ce3e29770437076e2716cb0eb8e8a45b2f17e6a230f326ad`.
+
+## Source synchronization note
+The full HOTFIX5 source is generated and audited locally. Repository documentation is synchronized, but the connected GitHub file-write interface cannot serialize the complete ~945 KB source replacement in this session. The existing large production source file was therefore not falsely claimed as replaced.
+
+---
+
 ## 2026-09-30 — R6.8.7.14 Multi-Bot Hub HOTFIX3
 
 ### Fixed
