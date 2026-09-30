@@ -1,4 +1,5 @@
 """R6.8.7.11 focused contract checks."""
+
 import ast
 from pathlib import Path
 
@@ -26,16 +27,14 @@ def test_ai_direct_calls_share_soft_and_2f_contract():
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "ai_agent_decision":
             names = {kw.arg for kw in node.keywords}
-            assert "fallback_2f_enabled" in names
-            assert "fallback_2f_min_edge" in names
-            assert "fallback_2f_min_confidence" in names
-            assert "fallback_2f_min_participation" in names
-            assert "fallback_2f_require_structure" in names
-            assert "fallback_2f_require_independent" in names
-            assert "soft_regime" in names
-            assert "soft_edge" in names
-            assert "soft_min_families" in names
-            assert "soft_max_regime_misses" in names
+            for key in (
+                "fallback_2f_enabled", "fallback_2f_min_edge",
+                "fallback_2f_min_confidence", "fallback_2f_min_participation",
+                "fallback_2f_require_structure", "fallback_2f_require_independent",
+                "soft_regime", "soft_edge", "soft_min_families",
+                "soft_max_regime_misses",
+            ):
+                assert key in names
 
 def test_grid_quantity_uses_contract_size():
     src = load_source()
@@ -61,8 +60,8 @@ def test_decide_signal_uses_keyword_contract():
 
 def test_high_leverage_diagnostic_uses_authoritative_tier():
     src = load_source()
-    assert 'float(leverage_tier(lev)[0])' in src
-    assert 'min(HIGH_LEVERAGE_MAX_RISK_PCT, leverage_tier(lev)[0]' not in src
+    assert "float(leverage_tier(lev)[0])" in src
+    assert "min(HIGH_LEVERAGE_MAX_RISK_PCT, leverage_tier(lev)[0]" not in src
 
 def test_new_ai_controls_are_persisted():
     src = load_source()
@@ -77,3 +76,37 @@ def test_new_ai_controls_are_persisted():
 def test_actual_fixed_qty_check_uses_actual_exchange_leverage():
     src = load_source()
     assert "actual_position_leverage or leverage" in src
+
+def test_runtime_snapshot_numeric_reads_are_hardened():
+    src = load_source()
+    assert "def _safe_runtime_float" in src
+    assert "def _safe_runtime_int" in src
+    assert "def _safe_runtime_bool" in src
+    assert "def _safe_runtime_text" in src
+    assert "risk_pct = self._safe_runtime_float" in src
+    assert "leverage = self._safe_runtime_int" in src
+
+def test_cycle_error_records_traceback():
+    src = load_source()
+    assert "CYCLE ERROR TRACE:" in src
+    assert "traceback.format_exc()" in src
+
+def test_live_ai_trade_manager_receives_profile_2f_controls():
+    src = load_source()
+    marker = "fallback_2f_enabled=bool(self._runtime_gui_value"
+    pos = src.rfind(marker)
+    tail = src[pos:pos + 1800]
+    for key in (
+        "fallback_2f_min_edge",
+        "fallback_2f_min_confidence",
+        "fallback_2f_min_participation",
+        "fallback_2f_require_structure",
+        "fallback_2f_require_independent",
+    ):
+        assert key in tail
+
+def test_no_duplicate_2f_preset_keys():
+    src = load_source()
+    assert src.count('"ai_2f_min_edge": 0.65') == 1
+    assert src.count('"ai_2f_min_family_confidence": 0.65') == 1
+    assert src.count('"ai_2f_min_participation": 0.40') == 1
