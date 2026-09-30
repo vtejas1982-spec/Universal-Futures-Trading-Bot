@@ -1,3 +1,37 @@
+# R6.8.7.21 — Full Config / Engine Audit — 2026-10-01
+
+## Fixed
+- Added authoritative config_bool() normalization for persisted JSON booleans.
+- Prevented legacy string values such as "false", "0", "off" from being interpreted as true.
+- Bumped config schema 41 -> 42.
+- Corrected latent Fibonacci default constants to percentage units 78.6 / 127.2 / 161.8.
+
+## Added / Re-verified
+- Full settings/defaults/callback/configuration audit.
+- Execution-profile authority remains STRICT/BALANCED/ADAPTIVE.
+- AI Require MTF, 2F fallback, soft-regime and provenance paths remain persisted and runtime-connected.
+- Preset coverage remains complete; all preset keys are represented in the profile save contract.
+- Fibonacci ownership remains mutually exclusive with competing protection price sources.
+- Exact GUI leverage and all downstream safety gates remain authoritative.
+
+## Modified
+- Configuration load now normalizes booleans through one parser.
+- Existing user strategy/risk values remain authoritative; schema migration does not replace them.
+- No indicator formula or entry threshold was loosened.
+- No liquidation, cost, quantity/risk, SL/TP, execution-quality, post-fill or kill-switch protection was weakened.
+
+## Validation
+- AST parse: PASS
+- Python compile(): PASS
+- Module import: PASS
+- Duplicate class methods: PASS
+- Private-call/static symbol audit: PASS
+- config_bool regression tests: PASS
+- 50x/2x liquidation envelope: PASS
+- Execution profile contract: PASS
+
+---
+
 # R6.8.7.14 Multi-Bot Hub HOTFIX5 — 2026-09-30
 
 ## Fixed
