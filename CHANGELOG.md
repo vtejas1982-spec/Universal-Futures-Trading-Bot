@@ -1,3 +1,43 @@
+# V8.4.2 Crypto AI-Agent R6.8.7.12 R5 — Full Audit + Backtester — 2026-09-30
+
+## Fixed
+- Fixed the R3/R4 live worker crash class caused by `float(None)` on the persisted AI 2F fallback threshold.
+- Hardened both the pure AI decision engine and the decision wrapper against missing 2F values.
+- Fixed Divergence startup/runtime fatal failure when Divergence was ON but all source indicators were OFF.
+- Fixed AI preset `div_use_all` so the master control and all ten source indicators remain synchronized.
+- Refreshed the final worker runtime GUI snapshot after startup-time exchange leverage adjustments.
+
+## Added
+- R6.8.7.12 fixed Crypto AI-Agent production engine.
+- R6.8.7.12 AI-Agent strategy-parity crypto backtester.
+- AI-Agent historical council, soft-regime path, 2-family fallback and causal adaptive ATR model.
+- High-leverage risk-tier caps in the historical model.
+- R6.8.7.12 contract tests.
+- R6.8.7.12 full audit/release notes and Windows build script.
+
+## Modified
+- Backtester default signal mode is now `AI_AGENT`.
+- Backtester AI protection defaults: SL 1.95 ATR, TP1 1.35R, TP2 2.70R.
+- `backtest.py` now launches the R6.8.7.12 backtester.
+- Current release manifest and README now point to R6.8.7.12.
+
+## Preserved
+- Completed-candle strategy semantics and next-candle-open normal entries.
+- ATR/MTF hard safety behavior.
+- Risk/drawdown/emergency controls, TP1/TP2, break-even, post-SL lock and Grid simulation.
+- Live exchange protection and kill-switch architecture.
+
+## Validation
+- Live engine Python compile: PASS.
+- Backtester Python compile: PASS.
+- Backtester AST parse: PASS.
+- AI council smoke test: PASS.
+- 150x risk-cap smoke test: PASS.
+- Synthetic OHLCV end-to-end backtest: PASS.
+- Bybit Demo remains required for exchange-side validation.
+
+---
+
 # V8.4.2 Crypto AI-Agent R6.8.7.11 R3 — Live-Log Runtime Hardening — 2026-09-30
 
 ## Fixed
