@@ -45,4 +45,13 @@ R6.8.28 is the active crypto engine. The obsolete crypto engine files previously
 
 Historical release notes remain under `docs/` for traceability.
 
+## User manual
+
+- Current R6.8.28 Crypto manual: `docs/USER_MANUAL_V8_4_2_R6_8_28_CRYPTO.md`
+- R6.8.28 release notes: `docs/R6.8.28_RELEASE_NOTES.md`
+
+## Source synchronization status
+
+The repository currently does **not** contain the complete R6.8.28 production Python source at the documented engine path. The local validated source remains outside GitHub until the full source blob can be synchronized without truncation. Do not use the repository as the sole source backup until this is resolved.
+
 > Engineering/safety hardening only. Continue Bybit Demo/Testnet validation before Live deployment.
