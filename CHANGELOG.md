@@ -1,3 +1,36 @@
+# R6.8.32 — Oracle VPS Memory Fail-Closed + Hysteresis — 2026-10-01
+
+## Fixed / Added
+- Linux/Oracle VPS memory admission now fails closed when required RAM or RSS telemetry cannot be measured.
+- Added real low-memory hysteresis: below 180 MB available RAM blocks child admission; after a low-memory block, admission remains paused until available RAM reaches 240 MB.
+- Retained Linux process RSS ceiling at 780 MB.
+- Windows remains available-RAM gated; RSS is diagnostic-only there.
+- Scanner preflight remains sequential and temporary, preserving the normal full strategy/risk/execution pipeline as the only order path.
+- Re-verified child capital/timeframe propagation and rejected-child cleanup.
+- No strategy threshold, leverage boundary, cost gate, liquidation gate, execution-quality gate, protection gate, ownership lock, or kill-switch gate was loosened.
+
+## Full audit
+- AST parse: PASS.
+- Python compile / py_compile: PASS.
+- Memory helper ownership: PASS; GUI scanner dispatch resolves the GUI-scoped helper.
+- Linux `/proc/meminfo` and `/proc/self/status` / `statm` paths: PASS.
+- Fail-closed telemetry path: PASS.
+- 180/240 MB hysteresis path: PASS.
+- 780 MB Linux RSS ceiling: PASS.
+- Scanner dispatch/preflight lifecycle: PASS.
+- Static safety-boundary audit: PASS.
+- Local source SHA-256: `a843dcdec83ac271b361eaec16dddda37d5ca0852ad285fa30f311c8a7ea51d9`.
+
+## Oracle VPS validation
+The 2-minute Oracle run confirmed Linux memory telemetry and scanner admission: TotalRAM 954 MB, AvailableRAM 189 MB, ProcessRSS 178 MB, RSS guard ON, recovery not required. The selected preflight child started normally and was rejected by the existing strategy ADX gate, not by the memory guard. Long-run memory stability remains unproven until a 30–60 minute run.
+
+## Repository audit
+- Repository: `vtejas1982-spec/Universal-Futures-Trading-Bot`
+- Default branch: `main`.
+- The repository did not contain the R6.8.32 production Python source at audit time.
+- This commit therefore synchronizes release metadata and the full audit report only; it does not falsely represent documentation as a source-code replacement.
+
+
 # R6.8.28 — Linux RSS / Low-RAM VPS Memory Hardening — 2026-10-01
 
 ## Added
