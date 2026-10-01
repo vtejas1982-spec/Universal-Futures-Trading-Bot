@@ -542,7 +542,74 @@ This should be synchronized to the repository before relying on GitHub as the ca
 
 ---
 
-## 17. Historical / inherited indicator and protection reference
+## 17. GitHub repository audit — 2026-10-01
+
+The R6.8.28 documentation and release metadata were audited against the current GitHub repository state.
+
+### Confirmed in GitHub
+
+- Repository: `vtejas1982-spec/Universal-Futures-Trading-Bot`
+- Default branch: `main`
+- Current release manifest: **R6.8.28**
+- README: **R6.8.28**
+- R6.8.28 release notes: present
+- This R6.8.28 user manual: present
+- Crypto build script: points to the R6.8.28 engine filename
+- Obsolete R6.8.7.14 and R9.6 root crypto engines: removed
+- Historical release/audit documentation: retained under `docs/`
+
+### Critical source-sync finding
+
+The expected production source file is **not currently present in the GitHub repository**:
+
+```
+UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.28_LINUX_RSS_VPS_MEMORY_HARDENED_FULL_AUDIT.py
+```
+
+This means:
+
+1. The repository documentation correctly identifies R6.8.28 as current.
+2. The repository build script references the correct R6.8.28 source filename.
+3. The repository cannot currently perform a complete source build from a fresh clone because that source file is absent.
+4. GitHub must **not** yet be treated as the complete production-source backup for R6.8.28.
+5. The validated local R6.8.28 source remains the authoritative source until the complete file is synchronized.
+
+This is a **repository completeness issue**, not evidence that the R6.8.28 engine itself is invalid.
+
+### Documentation/implementation consistency
+
+The following R6.8.28 claims are consistent across the current manifest, README, release notes and manual:
+
+- Linux RSS measurement through `/proc/self/status` with `/proc/self/statm` fallback.
+- RAM/swap/RSS diagnostics and RSS delta tracking.
+- Low-memory scanner-child admission guard.
+- Fail-closed behavior when memory telemetry is unavailable.
+- Single authoritative 60-second Hub memory diagnostic.
+- Sequential temporary scanner preflight children.
+- Scanner direct-order path remains zero.
+- Selected scanner timeframe remains authoritative for OHLCV/ATR/momentum discovery and child strategy analysis.
+- Trading-capital allocation remains authoritative and propagates into scanner children.
+- Existing AI, liquidation, cost, risk/quantity, execution-quality, ownership, protection and kill-switch contracts remain in force.
+
+### Current validation boundary
+
+The repository records:
+
+- AST parse: **PASS**
+- Python compile: **PASS**
+- Windows / Bybit Demo startup and scanner discovery: **PASS**
+- Oracle Linux VPS long-run RSS/swap validation: **PENDING**
+- Complete R6.8.28 production source synchronized to GitHub: **PENDING**
+
+Do not describe the R6.8.28 Linux VPS memory objective as fully validated until the planned long-run VPS test is completed.
+
+### Build-script warning
+
+`BUILD_CRYPTO_EXE.bat` invokes the R6.8.28 source filename shown above. Because the source file is currently absent from the repository, a fresh GitHub clone cannot successfully build the R6.8.28 executable until the source is synchronized.
+
+---
+
+## 18. Historical / inherited indicator and protection reference
 
 The detailed R6.7 strategy reference remains applicable to unchanged strategy components, including:
 
