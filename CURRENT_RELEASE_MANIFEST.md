@@ -1,19 +1,25 @@
-# Current Release Manifest — R6.8.7.22
+# Current Release Manifest — R6.8.28
 
 ## Active Crypto AI-Agent release
-- Release: V8.4.2-CRYPTO-AI-AGENT-R6.8.7.22
-- Engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.22_CONFIG_VIABILITY_EXECUTION_TAXONOMY_PRESET_AUTHORITY_MULTIBOT_HUB.py
-- Config schema: 43
-- Runtime schema: 24
+- Release: V8.4.2-CRYPTO-AI-AGENT-R6.8.28
+- Engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.28_LINUX_RSS_VPS_MEMORY_HARDENED_FULL_AUDIT.py`
+- Config schema: 67
 - Signal mode: AI_AGENT
-- Audit build: V8.4.2-AI-AGENT-AUDIT-2026-10-01-R6.8.7.22-CONFIG-VIABILITY-EXECUTION-TAXONOMY-PRESET-AUTHORITY-MULTIBOT-HUB
+- Target environment: Linux/Oracle VPS (~1 GB RAM)
 
-## R6.8.7.22
-- Synchronized recommended AI preset identity to R6.8.7.22.
-- Schema 42 -> 43.
-- Added configuration-viability diagnostics and explicit entry-block taxonomy.
-- Preserved full config/settings/defaults/callback audit contracts and all hard safety gates.
-- No safety gate weakened.
+## R6.8.28
+- Added Linux process RSS measurement using /proc/self/status with statm fallback.
+- Added low-memory scanner admission guard.
+- Added fail-closed memory admission when memory measurement is unavailable.
+- Added RAM/swap/RSS diagnostics.
+- Retained scanner-child resource disposal and bounded queues.
+- No trading strategy or hard safety gate was weakened.
 
-## Repository synchronization
-The large ~976 KB source was generated and validated locally. Repository documentation is synchronized. The connected file-write endpoint cannot safely serialize the complete source replacement in this session, so the repository does not falsely claim that the large source blob was replaced.
+## Validation status
+- Python compile: PASS
+- AST parse: PASS
+- Windows/Bybit DEMO startup + scanner discovery: confirmed.
+- Oracle VPS long-run memory validation: pending; planned VPS run is the final memory validation.
+
+## Repository status
+The obsolete root crypto engine files were removed. Historical release documentation remains under docs/.
