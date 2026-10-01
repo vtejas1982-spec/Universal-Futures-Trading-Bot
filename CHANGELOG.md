@@ -1,3 +1,34 @@
+# R6.8.28 — Linux RSS / Low-RAM VPS Memory Hardening — 2026-10-01
+
+## Added
+- Linux RSS measurement using `/proc/self/status` with `/proc/self/statm` fallback.
+- RAM/swap/RSS diagnostics.
+- RSS delta tracking.
+- Low-memory scanner-child admission guard.
+- Fail-closed scanner-child admission when memory telemetry is unavailable.
+- Single authoritative 60-second Hub memory diagnostic.
+- R6.8.28 current Crypto user manual: `docs/USER_MANUAL_V8_4_2_R6_8_28_CRYPTO.md`.
+
+## Retained
+- Two-stage scanner and sequential temporary preflight children.
+- Scanner direct-order path remains 0.
+- Selected timeframe authority.
+- Trading-capital authority and child propagation.
+- Existing AI, risk, cost, liquidation, execution-quality, ownership, protection and kill-switch contracts.
+- Explicit scanner-child resource disposal and bounded queues.
+
+## Validation status
+- AST parse: PASS.
+- Python compile: PASS.
+- Windows / Bybit Demo startup and scanner discovery: PASS.
+- Oracle Linux VPS long-run memory validation: **PENDING**.
+- Complete R6.8.28 production source synchronized into GitHub: **PENDING**; repository audit currently shows the expected source path is absent.
+
+## Repository audit note
+The repository must not be treated as a complete R6.8.28 source backup until the full production Python source is present. Documentation intentionally does not claim otherwise.
+
+---
+
 # R6.8.7.22 — Configuration Viability + Execution Taxonomy + Preset Authority — 2026-10-01
 
 ## Fixed / Added
