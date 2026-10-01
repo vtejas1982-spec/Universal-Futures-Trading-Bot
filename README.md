@@ -1,37 +1,48 @@
-# V8.4.2 Crypto AI-Agent R6.8.7.23 — Config Authority + Viability Diagnostics — 2026-10-01
+# Universal Futures Trading Bot — R6.8.28
 
-## Current audited release
-- Engine: UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.7.23_CONFIG_AUTHORITY_VIABILITY_DIAGNOSTICS_MULTIBOT_HUB.py
-- Config schema: 44
-- Runtime schema: 24
-- Signal mode: AI_AGENT
-- Recommended AI preset: AI_AGENT_RECOMMENDED_R6.8.7.23
-- Audit build: V8.4.2-AI-AGENT-AUDIT-2026-10-01-R6.8.7.23-CONFIG-AUTHORITY-VIABILITY-DIAGNOSTICS-MULTIBOT-HUB
+## Current release
 
-### R6.8.7.23 changes
-- Added explicit effective execution-profile startup diagnostics so transient UI/config selection is not confused with runtime authority.
-- Added configured-vs-effective ATR threshold authority diagnostics for AI adaptive ATR.
-- Added CONFIGURATION VIABILITY states while preserving the existing advisory CAN TRADE semantics.
-- Improved cost-gate diagnostics without recommending that the mandatory cost safety gate be disabled.
-- Clarified AI provenance repair wording and divergence configured-vs-effective state.
-- Fixed the adaptive-ATR diagnostic variable mismatch.
-- No trading strategy or hard safety gate was weakened.
+**R6.8.28 — Linux RSS + Low-RAM VPS Memory Hardened**
 
-### Validation
-- AST parse: PASS
+- Engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.28_LINUX_RSS_VPS_MEMORY_HARDENED_FULL_AUDIT.py`
+- Config schema: **67**
+- Signal mode: **AI_AGENT**
+- Scanner: two-stage live pair scanner with sequential preflight/active trade children
+- Timeframe authority: selected scanner timeframe propagates through discovery and child strategy analysis
+- Trading capital authority: configured strategy-capital cap propagates to scanner children and strategy sizing
+- Memory target: Linux/Oracle VPS with approximately 1 GB RAM
+
+## R6.8.28 changes
+
+### Low-RAM / VPS hardening
+- Added Linux process RSS measurement using `/proc/self/status` with `/proc/self/statm` fallback.
+- Added 60-second Hub memory diagnostics for RSS, available RAM and swap usage.
+- Added low-memory scanner admission guard so temporary scanner children are not created when the VPS is under memory pressure.
+- Memory measurement failure is fail-closed for new scanner-child admission.
+- Preserved bounded UI/log queues and scanner candidate structures.
+- Preserved explicit scanner-child exchange disposal, Tk callback cancellation, Hub callback purge and garbage collection after cleanup.
+- Removed duplicate memory-diagnostic scheduling.
+
+### Trading/scanner safety retained
+- No strategy, AI evidence, leverage, SL/TP, cost-gate, liquidation, execution-quality, ownership or protection rule was loosened.
+- Scanner still has no direct `create_order()` path.
+- Normal order execution remains delegated to the existing safety pipeline.
+- Capital allocation and selected timeframe remain runtime-authoritative.
+
+## Validation
+
 - Python compile: PASS
-- Config schema 44: PASS
-- R6.8.7.23 preset identity: PASS
-- Stale R6.8.7.22 recommended-preset identity: 0
-- Effective execution-profile snapshot: PASS
-- ATR threshold authority diagnostic: PASS
-- Configuration viability diagnostic: PASS
-- Cost-gate messaging audit: PASS
-- Divergence effective-state audit: PASS
-- Adaptive-ATR diagnostic regression: PASS
-- Duplicate class-method audit: PASS
+- AST parse: PASS
+- Scanner direct order path: 0
+- `self.profile_id` stale references: 0
+- Config schema: 67
+- Runtime validation on Windows/Bybit DEMO: startup and scanner discovery confirmed.
+- **Oracle Linux VPS long-run memory validation: pending.** The VPS test is the final validation step for RSS stability and swap behavior.
 
-## Source synchronization
-The complete R6.8.7.23 source was generated and validated locally. The production Python source is approximately 982 KB; the connected GitHub file-write endpoint cannot safely serialize the large source replacement in this session, so the repository does not falsely claim that the large source blob was replaced. The R6.8.7.23 audit documentation is synchronized.
+## Repository cleanup
 
-> Engineering/safety hardening only; continue Bybit Demo/Testnet validation before Live.
+R6.8.28 is the active crypto engine. The obsolete crypto engine files previously stored at repository root were removed so the repository no longer presents an old crypto engine as current.
+
+Historical release notes remain under `docs/` for traceability.
+
+> Engineering/safety hardening only. Continue Bybit Demo/Testnet validation before Live deployment.
