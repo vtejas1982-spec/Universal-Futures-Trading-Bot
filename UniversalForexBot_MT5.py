@@ -3,7 +3,7 @@ import os
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 try:
     import ccxt  # retained only for compatibility; Forex runtime does not use it.
@@ -13,6 +13,21 @@ import numpy as np
 import pandas as pd
 import requests
 import sys
+import ast
+import base64
+import ctypes
+import queue
+import sqlite3
+import uuid
+import hashlib
+import math
+import re
+import types
+import shutil
+import subprocess
+import traceback
+import gc
+from datetime import datetime, timezone
 
 try:
     import MetaTrader5 as mt5
@@ -46,8 +61,8 @@ from pathlib import Path
 # ============================================================
 
 
-APP_VERSION = "V8.4.2-FOREX-AI-AGENT-R6.6"
-APP_TITLE = "Universal Forex Trading Bot V8.4.2-FOREX-AI-AGENT-R6.6 - MT5"
+APP_VERSION = "V8.4.2-FOREX-AI-AGENT-V7.1.3-FX-MT5"
+APP_TITLE = "Universal Forex Trading Bot V7.1.3-FOREX-AI-AGENT - MT5"
 AUDIT_BUILD = "V8.4.2-FOREX-AI-AGENT-AUDIT-2026-09-28-R6.5"
 
 # Keep the config and trade log beside the executable when packaged with PyInstaller.
@@ -57,8 +72,8 @@ CONFIG_FILE = str(APP_DIR / "config_universal_fixed.json")
 LOG_FILE = str(APP_DIR / "universal_trade_logs_fixed.csv")
 
 # V8.3.3 Forex-only strategy contract. No crypto/futures exchange is used.
-RUNTIME_SCHEMA_VERSION = 22
-CONFIG_SCHEMA_VERSION = 22
+RUNTIME_SCHEMA_VERSION = 71
+CONFIG_SCHEMA_VERSION = 71
 SUPPORTED_SIGNAL_MODES = ("SINGLE_SIGNAL", "ANY_NON_CONFLICTING", "SCORE", "2_SIGNALS", "3_SIGNALS", "4_SIGNALS", "ADAPTIVE_SCORE", "ADAPTIVE_EVIDENCE", "AI_AGENT", "STRICT_ALL_FILTERS")
 ADAPTIVE_MODULE_WEIGHTS = {
     "ST":1.50,"EMA":1.00,"EMA_CROSS":1.25,"MACD":1.25,"RSI":1.00,"BB":0.75,"STOCH":0.75,
@@ -77,6 +92,138 @@ MAX_GUI_LOG_LINES = 4000
 RUNTIME_STATE_FILE = str(APP_DIR / "forex_runtime_state_v834.json")
 PROFILE_LOCK_FILE = str(APP_DIR / "forex_bot_v834.lock")
 
+
+
+# ============================================================
+# V7.1 FOREX PARITY CONTRACT
+# Ported from UniversalFuturesBot_V7.1, adapted to MT5/Forex.
+# Crypto/futures-only execution concepts are NOT copied into MT5.
+# ============================================================
+PROFILE_DIR = APP_DIR / "bot_profiles"
+MASTER_DB_FILE = str(APP_DIR / "universal_bot_master.db")
+MASTER_CSV_FILE = str(APP_DIR / "universal_bot_master_log.csv")
+HUB_LOG_ROOT = APP_DIR / "hub_bot_logs"
+HUB_COMBINED_LOG_ROOT = APP_DIR / "hub_combined_logs"
+GLOBAL_CAPITAL_AUTHORITY_ENABLED_DEFAULT = False
+GLOBAL_CAPITAL_AUTHORITY_MODE_DEFAULT = "ACCOUNT"
+GLOBAL_CAPITAL_POOL_DEFAULT_USDT = "0.0"
+GLOBAL_CAPITAL_CONFIG_FILE = APP_DIR / "hub_capital_authority.json"
+SCANNER_CHILD_PREFIX = "SCANNER-"
+SCANNER_DEFAULT_ENABLED = False
+SCANNER_DEFAULT_MODE = "SCAN_ONLY"
+SCANNER_DEFAULT_INTERVAL_SEC = 30
+SCANNER_DEFAULT_MAX_POSITIONS = 3
+SCANNER_DEFAULT_MAX_SYMBOLS = 120
+SCANNER_DEFAULT_SHORTLIST = 12
+SCANNER_DEFAULT_MIN_QUOTE_VOLUME = 0.0
+SCANNER_DEFAULT_COOLDOWN_SEC = 15
+SCANNER_DEFAULT_QTY_MODE = "AUTO"
+SCANNER_DEFAULT_LEVERAGE_MODE = "MANUAL"
+SCANNER_DEFAULT_DISPATCH_COUNT = 1
+SCANNER_EXTERNAL_PREFLIGHT_KILL_GRACE_SEC = 5.0
+SCANNER_EXTERNAL_PREFLIGHT_POLL_MS = 250
+SCANNER_EXTERNAL_PREFLIGHT_RESULT_WAIT_SEC = 12.0
+SCANNER_PREFLIGHT_STOP_GRACE_SEC = 15.0
+SCANNER_PREFLIGHT_TIMEOUT_SEC = 180.0
+SCANNER_PREFLIGHT_WATCHDOG_POLL_MS = 250
+SCANNER_SHARED_UNIVERSE_TTL_SEC = 30.0
+SCANNER_SHARED_TICKER_TTL_SEC = 5.0
+SCANNER_SHARED_OHLCV_TTL_SEC = 8.0
+SCANNER_WINDOWS_EXTERNAL_PREFLIGHT_ENABLED = True
+SCANNER_SUPPORTED_MODES = ("SCAN_ONLY","AUTO_TRADE")
+SCANNER_SUPPORTED_QTY_MODES = ("AUTO","FIXED")
+SCANNER_SUPPORTED_LEVERAGE_MODES = ("MANUAL","AUTO")
+MULTIBOT_RESOURCE_GUARD_ENABLED = True
+MULTIBOT_WINDOWS_MIN_AVAILABLE_MB = 1536.0
+MULTIBOT_WINDOWS_RECOVERY_MB = 2048.0
+MULTIBOT_WINDOWS_ENGINE_RESERVE_MB = 300.0
+MULTIBOT_WINDOWS_MAX_ACTIVE_ENGINES = 4
+MULTIBOT_WINDOWS_MAX_PREFLIGHTS_HIGH = 1
+MULTIBOT_WINDOWS_MAX_PREFLIGHTS_MID = 1
+MULTIBOT_WINDOWS_MAX_PREFLIGHTS_LOW = 1
+MULTIBOT_WINDOWS_PREFLIGHT_HIGH_RAM_MB = 4096.0
+MULTIBOT_WINDOWS_PREFLIGHT_MID_RAM_MB = 3072.0
+MULTIBOT_WINDOWS_PREFLIGHT_LOW_RAM_MB = 2304.0
+LOW_MEMORY_GUARD_ENABLED = True
+LOW_MEMORY_AVAILABLE_FLOOR_MB = 180.0
+LOW_MEMORY_RECOVERY_MB = 240.0
+LOW_MEMORY_RSS_FLOOR_MB = 780.0
+LOW_MEMORY_RECHECK_SEC = 15.0
+HUB_UI_CALLBACK_BUDGET_MS = 15.0
+HUB_UI_CALLBACK_MAX_PER_TICK = 60
+HUB_UI_SLOW_CALLBACK_WARN_MS = 500.0
+HUB_UI_HEARTBEAT_WARN_MS = 750.0
+PROFILE_STATUS_HEARTBEAT_MS = 3000
+PROFILE_CONTROL_SCHEMA_VERSION = 1
+PROFILE_OPERATION_SCHEMA_VERSION = 2
+KILL_SWITCH_REQUIRED = True
+KILL_SWITCH_STALE_SECONDS = 45.0
+KILL_SWITCH_HEARTBEAT_SECONDS = 3.0
+KILL_SWITCH_RETRY_SECONDS = 1.0
+KILL_SWITCH_MAX_ATTEMPTS = 4
+KILL_LATCH_SCHEMA_VERSION = 1
+MAX_STOP_WAIT_SECONDS = 20.0
+REMOTE_STOP_STALE_SECONDS = 300.0
+
+# V7.1 AI-agent additions.
+AI_AGENT_MIN_FAMILY_PARTICIPATION = 0.25
+AI_AGENT_2F_FALLBACK_ENABLED = True
+AI_AGENT_2F_MIN_EDGE = 0.55
+AI_AGENT_2F_MIN_FAMILY_CONFIDENCE = 0.55
+AI_AGENT_2F_MIN_PARTICIPATION = 0.30
+AI_AGENT_2F_REQUIRE_STRUCTURE = True
+AI_AGENT_2F_REQUIRE_INDEPENDENT = True
+AI_AGENT_REQUIRE_MTF = False
+AI_AGENT_SHADOW_MODE = False
+AI_AGENT_SOFT_REGIME_ENABLED = True
+AI_AGENT_SOFT_EDGE = 0.25
+AI_AGENT_SOFT_MIN_FAMILIES = 2
+AI_AGENT_SOFT_MAX_REGIME_MISSES = 1
+AI_AGENT_ADAPTIVE_ATR_ENABLED = True
+AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT = 0.10
+AI_AGENT_ADAPTIVE_ATR_QUANTILE = 0.30
+AI_AGENT_TRAILING_ENABLED = True
+AI_AGENT_TRAIL_ATR_MULT = 1.50
+AI_AGENT_TRAIL_START_R = 1.50
+AI_AGENT_TRAIL_MIN_STEP_PCT = 0.05
+DEFAULT_COST_GATE_ENABLED = True
+DEFAULT_TAKER_FEE_PCT = 0.055
+COST_GATE_MIN_STOP_TO_FEE = 3.0
+COST_GATE_MIN_NET_TP1_R = 0.75
+DEFAULT_MAX_ENTRY_SPREAD_PCT = 0.25
+DEFAULT_MAX_ENTRY_SLIPPAGE_PCT = 0.20
+DEFAULT_MAX_ENTRY_CANDLE_DRIFT_PCT = 0.75
+DEFAULT_MIN_ORDERBOOK_DEPTH_MULT = 0.0  # MT5 market-book is broker-dependent; 0 disables the crypto-only depth contract.
+EXECUTION_DEFAULT_PROFILE = "BALANCED"
+EXECUTION_QUALITY_PROFILES = {
+    "STRICT":{"max_spread_pct":0.25,"max_slippage_pct":0.20,"min_depth_mult":0.0,"max_drift_pct":0.75},
+    "BALANCED":{"max_spread_pct":0.35,"max_slippage_pct":0.20,"min_depth_mult":0.0,"max_drift_pct":0.75},
+    "ADAPTIVE":{"max_spread_pct":0.35,"max_slippage_pct":0.20,"min_depth_mult":0.0,"max_drift_pct":0.75},
+}
+DEFAULT_FIBONACCI_PROTECTION_ENABLED = False
+DEFAULT_FIBONACCI_LOOKBACK = 50
+DEFAULT_FIBONACCI_SL_LEVEL = 78.6
+DEFAULT_FIBONACCI_TP1_LEVEL = 127.2
+DEFAULT_FIBONACCI_TP2_LEVEL = 161.8
+DEFAULT_RISK_MODE = "EQUITY_RISK_%"
+DEFAULT_TRADING_CAPITAL_ENABLED = False
+DEFAULT_TRADING_CAPITAL_USDT = "0.0"
+DEFAULT_RISK_SIZING_ENABLED = True
+DEFAULT_LEGACY_PROTECTION_ENABLED = False
+DEFAULT_SIMPLE_ATR_SL_ENABLED = True
+DEFAULT_SIMPLE_ATR_TP_ENABLED = True
+DEFAULT_SIMPLE_FALLBACK_SL_ENABLED = True
+DEFAULT_SIMPLE_FALLBACK_SL_ROI = 30.0
+DEFAULT_SIMPLE_ROI_SL_ENABLED = True
+DEFAULT_SIMPLE_SL_ROI = 30.0
+DEFAULT_SIMPLE_TP1_ENABLED = True
+DEFAULT_SIMPLE_TP2_ENABLED = True
+DEFAULT_SIMPLE_TP_ENABLED = True
+DEFAULT_SIMPLE_TP1_BE_ENABLED = True
+DEFAULT_TP1_CLOSE_PERCENT = 50.0
+DEFAULT_TP2_CLOSE_PERCENT = 50.0
+DEFAULT_TP_QTY_MODE = "PERCENT_%"
+SUPPORTED_GRID_MODES = ("OFF","DIRECT_SHOT","LONG_GRID","SHORT_GRID","NEUTRAL_GRID")
 
 # -------------------- INDICATORS ----------------------------
 
@@ -1229,7 +1376,7 @@ AI_AGENT_PRESET = {
     # Risk / sizing.
     "size_mode": "EQUITY_RISK_%",
     "risk_pct": "0.35",
-    "fixed_qty": "0.001",
+    "fixed_qty": "0.01",
     "max_dd": "5.0",
     "emergency_capital_pct": "10.0",
     "emergency_scope": "BOT_ONLY",
@@ -1329,38 +1476,215 @@ class StrategyEngine:
         return out, bull_families, bear_families, min_families
 
     @classmethod
-    def ai_agent_decision(
-        cls, directional_modules, atr_pass=True, vol_pass=True, adx_pass=True,
-        mtf_pass_bull=True, mtf_pass_bear=True,
-        min_families=AI_AGENT_MIN_FAMILIES, min_edge=AI_AGENT_MIN_EDGE,
-        min_family_confidence=AI_AGENT_MIN_FAMILY_CONFIDENCE,
-        require_trend=AI_AGENT_REQUIRE_TREND, require_structure=AI_AGENT_REQUIRE_STRUCTURE,
-        max_conflicting_families=AI_AGENT_MAX_CONFLICTING_FAMILIES,
-    ):
-        """Deterministic market-intelligence council used by AI_AGENT mode."""
+    def qualify_ai_families(cls, directional_modules, min_family_confidence=AI_AGENT_MIN_FAMILY_CONFIDENCE, min_family_participation=AI_AGENT_MIN_FAMILY_PARTICIPATION):
+        """Single source of truth for AI Evidence-Family qualification.
+
+        Qualification uses exact floating-point values.  UI/log formatting may round them,
+        but no downstream decision is allowed to reconstruct qualification from rounded text.
+        """
         modules = list(directional_modules or [])
         families = {}
+        min_conf = float(min_family_confidence)
+        min_part = float(min_family_participation)
         for family in cls.EVIDENCE_FAMILY_ORDER:
             members = [m for m in modules if cls._family_name(m[0]) == family]
             total = sum(float(ADAPTIVE_MODULE_WEIGHTS.get(m[0], 1.0)) for m in members)
             bull = sum(float(ADAPTIVE_MODULE_WEIGHTS.get(m[0], 1.0)) for m in members if bool(m[1]) and not bool(m[2]))
             bear = sum(float(ADAPTIVE_MODULE_WEIGHTS.get(m[0], 1.0)) for m in members if bool(m[2]) and not bool(m[1]))
             dominant = "BUY" if bull > bear and bull > 0 else "SELL" if bear > bull and bear > 0 else "NONE"
-            confidence = max(bull, bear) / total if total else 0.0
-            conflict = bool(bull and bear and confidence < 0.70)
-            families[family] = {"bull":bull,"bear":bear,"total":total,"dominant":dominant,"confidence":confidence,"conflict":conflict}
-        bull_fams=[f for f,v in families.items() if v["dominant"]=="BUY" and v["confidence"]>=float(min_family_confidence)]
-        bear_fams=[f for f,v in families.items() if v["dominant"]=="SELL" and v["confidence"]>=float(min_family_confidence)]
+            voting = bull + bear
+            purity = max(bull, bear) / voting if voting else 0.0
+            participation = max(bull, bear) / total if total else 0.0
+            conflict = bool(bull and bear and purity < 0.70)
+            strength = float(np.sqrt(purity * participation))
+            confidence_ok = bool(purity >= min_conf)
+            participation_ok = bool(participation >= min_part)
+            dominant_ok = dominant in ("BUY", "SELL")
+            family_qualified = bool(dominant_ok and confidence_ok and participation_ok)
+            reasons = []
+            if not dominant_ok:
+                reasons.append("NO_DIRECTION")
+            elif not confidence_ok:
+                reasons.append(f"CONFIDENCE_{purity:.9f}<{min_conf:.9f}")
+            if not participation_ok:
+                reasons.append(f"PARTICIPATION_{participation:.9f}<{min_part:.9f}")
+            families[family] = {
+                "bull": bull, "bear": bear, "total": total, "dominant": dominant,
+                "confidence": purity, "participation": participation, "strength": strength,
+                "conflict": conflict, "confidence_ok": confidence_ok,
+                "participation_ok": participation_ok, "qualified": family_qualified,
+                "qualification_reasons": reasons,
+            }
+        bull_fams = [f for f, v in families.items() if v["dominant"] == "BUY" and v["qualified"]]
+        bear_fams = [f for f, v in families.items() if v["dominant"] == "SELL" and v["qualified"]]
+        return families, bull_fams, bear_fams
+
+    @classmethod
+    def ai_agent_decision(
+        cls, directional_modules, atr_pass=True, vol_pass=True, adx_pass=True,
+        mtf_pass_bull=True, mtf_pass_bear=True,
+        min_families=AI_AGENT_MIN_FAMILIES, min_edge=AI_AGENT_MIN_EDGE,
+        min_family_confidence=AI_AGENT_MIN_FAMILY_CONFIDENCE,
+        require_trend=AI_AGENT_REQUIRE_TREND, require_structure=AI_AGENT_REQUIRE_STRUCTURE,
+        require_mtf=AI_AGENT_REQUIRE_MTF,
+        max_conflicting_families=AI_AGENT_MAX_CONFLICTING_FAMILIES,
+        min_family_participation=AI_AGENT_MIN_FAMILY_PARTICIPATION,
+        soft_regime=False,
+        soft_edge=AI_AGENT_SOFT_EDGE,
+        soft_min_families=AI_AGENT_SOFT_MIN_FAMILIES,
+        soft_max_regime_misses=AI_AGENT_SOFT_MAX_REGIME_MISSES,
+        fallback_2f_enabled=AI_AGENT_2F_FALLBACK_ENABLED,
+        fallback_2f_min_edge=AI_AGENT_2F_MIN_EDGE,
+        fallback_2f_min_confidence=AI_AGENT_2F_MIN_FAMILY_CONFIDENCE,
+        fallback_2f_min_participation=AI_AGENT_2F_MIN_PARTICIPATION,
+        fallback_2f_require_structure=AI_AGENT_2F_REQUIRE_STRUCTURE,
+        fallback_2f_require_independent=AI_AGENT_2F_REQUIRE_INDEPENDENT,
+    ):
+        """Deterministic market-intelligence council used by AI_AGENT mode.
+
+        Family confidence is PURITY: aligned weight / weight of modules that actually voted
+        (bull+bear). Neutral modules (fresh-event indicators between events) abstain instead of
+        counting as disagreement. PARTICIPATION (aligned weight / total family weight) must still
+        reach ``min_family_participation`` so one lonely indicator cannot speak for a family.
+        """
+        # R6.8.7.12: normalize direct-call inputs before numeric/boolean conversion.
+        def _safe_float(value, default):
+            try:
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    raise ValueError
+                result = float(value)
+                if not math.isfinite(result):
+                    raise ValueError
+                return result
+            except (TypeError, ValueError):
+                return float(default)
+
+        fallback_2f_enabled = (
+            AI_AGENT_2F_FALLBACK_ENABLED if fallback_2f_enabled is None
+            else bool(fallback_2f_enabled)
+        )
+        fallback_2f_min_edge = _safe_float(fallback_2f_min_edge, AI_AGENT_2F_MIN_EDGE)
+        fallback_2f_min_confidence = _safe_float(
+            fallback_2f_min_confidence, AI_AGENT_2F_MIN_FAMILY_CONFIDENCE
+        )
+        fallback_2f_min_participation = _safe_float(
+            fallback_2f_min_participation, AI_AGENT_2F_MIN_PARTICIPATION
+        )
+        fallback_2f_require_structure = (
+            AI_AGENT_2F_REQUIRE_STRUCTURE if fallback_2f_require_structure is None
+            else bool(fallback_2f_require_structure)
+        )
+        fallback_2f_require_independent = (
+            AI_AGENT_2F_REQUIRE_INDEPENDENT if fallback_2f_require_independent is None
+            else bool(fallback_2f_require_independent)
+        )
+
+        modules = list(directional_modules or [])
+        families, bull_fams, bear_fams = cls.qualify_ai_families(
+            modules,
+            min_family_confidence=float(min_family_confidence),
+            min_family_participation=float(min_family_participation),
+        )
         conflicts=[f for f,v in families.items() if v["conflict"]]
         bull_total=sum(v["bull"] for v in families.values())
         bear_total=sum(v["bear"] for v in families.values())
         total=bull_total+bear_total
-        edge=abs(bull_total-bear_total)/total if total else 0.0
+        raw_edge=abs(bull_total-bear_total)/total if total else 0.0
+        family_scores = {
+            f: ((v["bull"] - v["bear"]) / (v["bull"] + v["bear"]) if (v["bull"] + v["bear"]) > 0 else 0.0)
+            for f, v in families.items()
+        }
+        voting_scores = [family_scores[f] for f, v in families.items() if (v["bull"] + v["bear"]) > 0]
+        balanced_score = float(np.mean(voting_scores)) if voting_scores else 0.0
+        edge=abs(balanced_score)
         common=bool(edge>=float(min_edge) and len(conflicts)<=int(max_conflicting_families))
-        buy_ok=bool(common and len(bull_fams)>=int(min_families) and (not require_trend or "TREND" in bull_fams) and (not require_structure or "STRUCTURE" in bull_fams) and atr_pass and vol_pass and adx_pass and mtf_pass_bull)
-        sell_ok=bool(common and len(bear_fams)>=int(min_families) and (not require_trend or "TREND" in bear_fams) and (not require_structure or "STRUCTURE" in bear_fams) and atr_pass and vol_pass and adx_pass and mtf_pass_bear)
+        council_buy=bool(common and len(bull_fams)>=int(min_families) and (not require_trend or "TREND" in bull_fams) and (not require_structure or "STRUCTURE" in bull_fams))
+        council_sell=bool(common and len(bear_fams)>=int(min_families) and (not require_trend or "TREND" in bear_fams) and (not require_structure or "STRUCTURE" in bear_fams))
+
+        # R6.8.7.10: explicit 2-family high-conviction fallback.
+        def _fallback_edge(fams, side):
+            if not bool(fallback_2f_enabled) or len(fams) != 2:
+                return None
+            if len(conflicts) > int(max_conflicting_families):
+                return None
+            # A 2-family fallback is for 'others are silent', never for 'others disagree'.
+            if (bear_fams if side == "BUY" else bull_fams):
+                return None
+            # R6.8.22: the 2F escape hatch may relax the family-count floor,
+            # but it must never bypass explicitly enabled hard family requirements.
+            if bool(require_trend) and "TREND" not in fams:
+                return None
+            if bool(require_structure) and "STRUCTURE" not in fams:
+                return None
+            if bool(fallback_2f_require_structure) and "STRUCTURE" not in fams:
+                return None
+            if bool(fallback_2f_require_independent) and not any(f in fams for f in ("TREND", "MOMENTUM", "FLOW")):
+                return None
+            details = [families[f] for f in fams]
+            if any(float(d.get("confidence", 0.0)) < float(fallback_2f_min_confidence) for d in details):
+                return None
+            if any(float(d.get("participation", 0.0)) < float(fallback_2f_min_participation) for d in details):
+                return None
+            scores = []
+            for d in details:
+                voting = float(d.get("bull", 0.0)) + float(d.get("bear", 0.0))
+                if voting <= 0:
+                    return None
+                signed_score = (float(d.get("bull", 0.0)) - float(d.get("bear", 0.0))) / voting
+                scores.append(signed_score if side == "BUY" else -signed_score)
+            return float(np.mean(scores)) if scores else None
+
+        fallback_edge_buy = _fallback_edge(bull_fams, "BUY")
+        fallback_edge_sell = _fallback_edge(bear_fams, "SELL")
+        fallback_buy = bool(fallback_edge_buy is not None and fallback_edge_buy >= float(fallback_2f_min_edge))
+        fallback_sell = bool(fallback_edge_sell is not None and fallback_edge_sell >= float(fallback_2f_min_edge))
+        council_buy = bool(council_buy or fallback_buy)
+        council_sell = bool(council_sell or fallback_sell)
+
+        # Hard regime: the R6.8.3 behavior. R6.8.4 can optionally soften only
+        # ADX/Volume; ATR and directional MTF remain hard.
+        hard_regime_buy = bool(atr_pass and vol_pass and adx_pass and (mtf_pass_bull if bool(require_mtf) else True))
+        hard_regime_sell = bool(atr_pass and vol_pass and adx_pass and (mtf_pass_bear if bool(require_mtf) else True))
+
+        soft_misses = int(not bool(vol_pass)) + int(not bool(adx_pass))
+        soft_strength_buy = bool((edge >= float(soft_edge) and len(bull_fams) >= int(soft_min_families)
+            and len(conflicts) <= int(max_conflicting_families)) or fallback_buy)
+        soft_regime_buy = bool(atr_pass and (mtf_pass_bull if bool(require_mtf) else True) and soft_misses <= int(soft_max_regime_misses) and soft_strength_buy)
+        soft_strength_sell = bool((edge >= float(soft_edge) and len(bear_fams) >= int(soft_min_families)
+            and len(conflicts) <= int(max_conflicting_families)) or fallback_sell)
+        soft_regime_sell = bool(atr_pass and (mtf_pass_bear if bool(require_mtf) else True) and soft_misses <= int(soft_max_regime_misses) and soft_strength_sell)
+        regime_buy = soft_regime_buy if bool(soft_regime) else hard_regime_buy
+        regime_sell = soft_regime_sell if bool(soft_regime) else hard_regime_sell
+        buy_ok=bool(council_buy and regime_buy)
+        sell_ok=bool(council_sell and regime_sell)
+        shadow_buy_ok=bool(council_buy and soft_regime_buy)
+        shadow_sell_ok=bool(council_sell and soft_regime_sell)
+        split_council = bool(council_buy and council_sell)
+        if split_council:
+            buy_ok = sell_ok = shadow_buy_ok = shadow_sell_ok = False
         side="BUY" if buy_ok and not sell_ok else "SELL" if sell_ok and not buy_ok else "NONE"
-        return {"buy_ok":buy_ok,"sell_ok":sell_ok,"side":side,"bull_families":bull_fams,"bear_families":bear_fams,"conflicting_families":conflicts,"edge":edge,"bull_total":bull_total,"bear_total":bear_total,"families":families,"regime_buy":bool(atr_pass and vol_pass and adx_pass and mtf_pass_bull),"regime_sell":bool(atr_pass and vol_pass and adx_pass and mtf_pass_bear)}
+        shadow_side="BUY" if shadow_buy_ok and not shadow_sell_ok else "SELL" if shadow_sell_ok and not shadow_buy_ok else "NONE"
+        return {
+            "buy_ok":buy_ok,"sell_ok":sell_ok,"side":side,
+            "shadow_buy_ok":shadow_buy_ok,"shadow_sell_ok":shadow_sell_ok,"shadow_side":shadow_side,
+            "bull_families":bull_fams,"bear_families":bear_fams,"conflicting_families":conflicts,
+            "bull_family_count":len(bull_fams),"bear_family_count":len(bear_fams),
+            "qualified_family_details": {
+                "BUY": {f: families[f] for f in bull_fams},
+                "SELL": {f: families[f] for f in bear_fams},
+            },
+            "family_qualification_reasons": {f: list(v.get("qualification_reasons", [])) for f,v in families.items()},
+            "edge":edge,"raw_edge":raw_edge,"balanced_score":balanced_score,"bull_total":bull_total,"bear_total":bear_total,"families":families,
+            "regime_buy":regime_buy,"regime_sell":regime_sell,
+            "hard_regime_buy":hard_regime_buy,"hard_regime_sell":hard_regime_sell,
+            "soft_regime_buy":soft_regime_buy,"soft_regime_sell":soft_regime_sell,
+            "soft_strength_buy":soft_strength_buy,"soft_strength_sell":soft_strength_sell,
+            "fallback_2f_buy":fallback_buy,"fallback_2f_sell":fallback_sell,
+            "fallback_2f_edge_buy":fallback_edge_buy,"fallback_2f_edge_sell":fallback_edge_sell,
+            "fallback_2f_min_edge":float(fallback_2f_min_edge),
+            "soft_regime_misses":soft_misses,
+            "require_mtf":bool(require_mtf),
+        }
 
     @staticmethod
     def decide_signal(directional_modules, signal_mode, min_score,
@@ -1368,7 +1692,27 @@ class StrategyEngine:
                       mtf_pass_bull=True, mtf_pass_bear=True,
                       adaptive_edge=None, adaptive_min_weight=None, evidence_min_families=None, evidence_family_min_score=None, evidence_require_trend=True, evidence_require_independent=True,
                       ai_min_families=None, ai_min_edge=None, ai_min_family_confidence=None,
-                      ai_require_trend=None, ai_require_structure=None, ai_max_conflicting_families=None):
+                      ai_require_trend=None, ai_require_structure=None, ai_require_mtf=None, ai_max_conflicting_families=None,
+                       ai_min_family_participation=None,
+                      ai_soft_regime=None, ai_soft_edge=None, ai_soft_min_families=None,
+                      ai_soft_max_regime_misses=None, ai_2f_fallback_enabled=None,
+                       ai_2f_min_edge=None, ai_2f_min_family_confidence=None,
+                       ai_2f_min_participation=None, ai_2f_require_structure=None,
+                       ai_2f_require_independent=None):
+        # R6.8.7.12: pure-engine callers may omit/None the 2F controls.
+        if ai_2f_min_edge is None:
+            ai_2f_min_edge = AI_AGENT_2F_MIN_EDGE
+        if ai_2f_min_family_confidence is None:
+            ai_2f_min_family_confidence = AI_AGENT_2F_MIN_FAMILY_CONFIDENCE
+        if ai_2f_min_participation is None:
+            ai_2f_min_participation = AI_AGENT_2F_MIN_PARTICIPATION
+        if ai_2f_fallback_enabled is None:
+            ai_2f_fallback_enabled = AI_AGENT_2F_FALLBACK_ENABLED
+        if ai_2f_require_structure is None:
+            ai_2f_require_structure = AI_AGENT_2F_REQUIRE_STRUCTURE
+        if ai_2f_require_independent is None:
+            ai_2f_require_independent = AI_AGENT_2F_REQUIRE_INDEPENDENT
+
         signal_mode = str(signal_mode).strip().upper()
         min_score = int(min_score)
         if min_score < 1:
@@ -1432,7 +1776,19 @@ class StrategyEngine:
                 min_family_confidence=AI_AGENT_MIN_FAMILY_CONFIDENCE if ai_min_family_confidence is None else float(ai_min_family_confidence),
                 require_trend=AI_AGENT_REQUIRE_TREND if ai_require_trend is None else bool(ai_require_trend),
                 require_structure=AI_AGENT_REQUIRE_STRUCTURE if ai_require_structure is None else bool(ai_require_structure),
+                require_mtf=AI_AGENT_REQUIRE_MTF if ai_require_mtf is None else bool(ai_require_mtf),
                 max_conflicting_families=AI_AGENT_MAX_CONFLICTING_FAMILIES if ai_max_conflicting_families is None else int(ai_max_conflicting_families),
+                min_family_participation=AI_AGENT_MIN_FAMILY_PARTICIPATION if ai_min_family_participation is None else float(ai_min_family_participation),
+                soft_regime=AI_AGENT_SOFT_REGIME_ENABLED if ai_soft_regime is None else bool(ai_soft_regime),
+                soft_edge=AI_AGENT_SOFT_EDGE if ai_soft_edge is None else float(ai_soft_edge),
+                soft_min_families=AI_AGENT_SOFT_MIN_FAMILIES if ai_soft_min_families is None else int(ai_soft_min_families),
+                soft_max_regime_misses=AI_AGENT_SOFT_MAX_REGIME_MISSES if ai_soft_max_regime_misses is None else int(ai_soft_max_regime_misses),
+                fallback_2f_enabled=AI_AGENT_2F_FALLBACK_ENABLED if ai_2f_fallback_enabled is None else bool(ai_2f_fallback_enabled),
+                fallback_2f_min_edge=float(ai_2f_min_edge),
+                fallback_2f_min_confidence=float(ai_2f_min_family_confidence),
+                fallback_2f_min_participation=float(ai_2f_min_participation),
+                fallback_2f_require_structure=bool(ai_2f_require_structure),
+                fallback_2f_require_independent=bool(ai_2f_require_independent),
             )
             return result["buy_ok"], result["sell_ok"], result["bull_total"], result["bear_total"]
 
@@ -1478,8 +1834,44 @@ class StrategyEngine:
                         mtf_pass_bull=True, mtf_pass_bear=True,
                         adaptive_edge=None, adaptive_min_weight=None, evidence_min_families=None, evidence_family_min_score=None, evidence_require_trend=True, evidence_require_independent=True,
                         ai_min_families=None, ai_min_edge=None, ai_min_family_confidence=None,
-                        ai_require_trend=None, ai_require_structure=None, ai_max_conflicting_families=None):
+                        ai_require_trend=None, ai_require_structure=None, ai_require_mtf=None, ai_max_conflicting_families=None,
+                         ai_min_family_participation=None,
+                        ai_soft_regime=None, ai_soft_edge=None, ai_soft_min_families=None,
+                        ai_soft_max_regime_misses=None, ai_2f_fallback_enabled=None,
+                       ai_2f_min_edge=None, ai_2f_min_family_confidence=None,
+                       ai_2f_min_participation=None, ai_2f_require_structure=None,
+                       ai_2f_require_independent=None):
         """Explain why the centralized strategy engine did or did not emit a side."""
+        # Defensive normalization: decision_reason() is a diagnostic entry point
+        # and must never turn omitted/None 2F settings into float(None)/bool(None).
+        ai_2f_min_edge = (
+            AI_AGENT_2F_MIN_EDGE if ai_2f_min_edge is None else float(ai_2f_min_edge)
+        )
+        ai_2f_min_family_confidence = (
+            AI_AGENT_2F_MIN_FAMILY_CONFIDENCE
+            if ai_2f_min_family_confidence is None
+            else float(ai_2f_min_family_confidence)
+        )
+        ai_2f_min_participation = (
+            AI_AGENT_2F_MIN_PARTICIPATION
+            if ai_2f_min_participation is None
+            else float(ai_2f_min_participation)
+        )
+        ai_2f_fallback_enabled = (
+            AI_AGENT_2F_FALLBACK_ENABLED
+            if ai_2f_fallback_enabled is None
+            else bool(ai_2f_fallback_enabled)
+        )
+        ai_2f_require_structure = (
+            AI_AGENT_2F_REQUIRE_STRUCTURE
+            if ai_2f_require_structure is None
+            else bool(ai_2f_require_structure)
+        )
+        ai_2f_require_independent = (
+            AI_AGENT_2F_REQUIRE_INDEPENDENT
+            if ai_2f_require_independent is None
+            else bool(ai_2f_require_independent)
+        )
         mode = str(signal_mode).strip().upper()
         modules = list(directional_modules or [])
         buy = sum(1 for _, bull, _ in modules if bool(bull))
@@ -1526,7 +1918,28 @@ class StrategyEngine:
                 return f"ADAPTIVE_BUY_W{wb:.2f}_EDGE{edge:.2f}"
             if ws >= min_weight and ws > wb and edge >= edge_threshold and atr_pass and vol_pass and adx_pass and mtf_pass_bear:
                 return f"ADAPTIVE_SELL_W{ws:.2f}_EDGE{edge:.2f}"
-            return f"ADAPTIVE_BLOCKED_WB{wb:.2f}_WS{ws:.2f}_EDGE{edge:.2f}"
+            failed = []
+            if wb < min_weight and ws < min_weight:
+                failed.append(f"WEIGHT_B{wb:.2f}/S{ws:.2f}<MIN{min_weight:.2f}")
+            if wb > ws and edge < edge_threshold:
+                failed.append(f"EDGE{edge:.2f}<MIN{edge_threshold:.2f}")
+            elif ws > wb and edge < edge_threshold:
+                failed.append(f"EDGE{edge:.2f}<MIN{edge_threshold:.2f}")
+            elif abs(wb - ws) < 1e-12 and edge < edge_threshold:
+                failed.append(f"EDGE{edge:.2f}<MIN{edge_threshold:.2f}")
+            if not atr_pass:
+                failed.append("ATR_GATE")
+            if not vol_pass:
+                failed.append("VOLUME_GATE")
+            if not adx_pass:
+                failed.append("ADX_GATE")
+            if wb > ws and not mtf_pass_bull:
+                failed.append("MTF_BUY_GATE")
+            if ws > wb and not mtf_pass_bear:
+                failed.append("MTF_SELL_GATE")
+            if not failed:
+                failed.append("DIRECTION/CONFLICT")
+            return f"ADAPTIVE_BLOCKED_WB{wb:.2f}_WS{ws:.2f}_EDGE{edge:.2f}_" + ",".join(failed)
         if mode == "AI_AGENT":
             result = StrategyEngine.ai_agent_decision(
                 modules,
@@ -1540,7 +1953,19 @@ class StrategyEngine:
                 min_family_confidence=AI_AGENT_MIN_FAMILY_CONFIDENCE if ai_min_family_confidence is None else float(ai_min_family_confidence),
                 require_trend=AI_AGENT_REQUIRE_TREND if ai_require_trend is None else bool(ai_require_trend),
                 require_structure=AI_AGENT_REQUIRE_STRUCTURE if ai_require_structure is None else bool(ai_require_structure),
+                require_mtf=AI_AGENT_REQUIRE_MTF if ai_require_mtf is None else bool(ai_require_mtf),
                 max_conflicting_families=AI_AGENT_MAX_CONFLICTING_FAMILIES if ai_max_conflicting_families is None else int(ai_max_conflicting_families),
+                min_family_participation=AI_AGENT_MIN_FAMILY_PARTICIPATION if ai_min_family_participation is None else float(ai_min_family_participation),
+                soft_regime=AI_AGENT_SOFT_REGIME_ENABLED if ai_soft_regime is None else bool(ai_soft_regime),
+                soft_edge=AI_AGENT_SOFT_EDGE if ai_soft_edge is None else float(ai_soft_edge),
+                soft_min_families=AI_AGENT_SOFT_MIN_FAMILIES if ai_soft_min_families is None else int(ai_soft_min_families),
+                soft_max_regime_misses=AI_AGENT_SOFT_MAX_REGIME_MISSES if ai_soft_max_regime_misses is None else int(ai_soft_max_regime_misses),
+                fallback_2f_enabled=AI_AGENT_2F_FALLBACK_ENABLED if ai_2f_fallback_enabled is None else bool(ai_2f_fallback_enabled),
+                fallback_2f_min_edge=float(ai_2f_min_edge),
+                fallback_2f_min_confidence=float(ai_2f_min_family_confidence),
+                fallback_2f_min_participation=float(ai_2f_min_participation),
+                fallback_2f_require_structure=bool(ai_2f_require_structure),
+                fallback_2f_require_independent=bool(ai_2f_require_independent),
             )
             bulls = "+".join(result["bull_families"]) if result["bull_families"] else "NONE"
             bears = "+".join(result["bear_families"]) if result["bear_families"] else "NONE"
@@ -1549,21 +1974,82 @@ class StrategyEngine:
                 return (f"AI_AGENT_CHIEF_{result['side']} | BullFamilies={bulls} | BearFamilies={bears} | "
                         f"Edge={result['edge']:.2f} | Conflicts={conflicts} | "
                         f"Regime={'PASS' if (result['regime_buy'] or result['regime_sell']) else 'FAIL'}")
-            blocks=[]
-            fams=result["bull_families"] if result["bull_total"]>=result["bear_total"] else result["bear_families"]
+            # R6.7 diagnostic hardening: report the dominant evidence side and
+            # its directional MTF gate.  BUY and SELL have separate MTF flags.
+            if result["bull_total"] > result["bear_total"]:
+                dominant_side = "BUY"
+                fams = result["bull_families"]
+            elif result["bear_total"] > result["bull_total"]:
+                dominant_side = "SELL"
+                fams = result["bear_families"]
+            else:
+                dominant_side = "TIE"
+                fams = result["bull_families"] if result["bull_families"] else result["bear_families"]
+
+            blocks=[f"DOMINANT={dominant_side}"]
+            blocks.append("AI_MTF_GATE" if bool(ai_require_mtf) and not ((mtf_pass_bull if dominant_side == "BUY" else mtf_pass_bear) if dominant_side in ("BUY", "SELL") else True) else "AI_MTF_OPTIONAL")
+            family_detail = "|".join(
+                f"{family}:{data['dominant']}:{data['confidence']:.4f}/{data['participation']:.4f}:"
+                f"{'Q' if data.get('qualified') else 'X'}"
+                for family, data in result["families"].items() if data["total"] > 0
+            )
+            if family_detail:
+                blocks.append(f"FAMILY_DETAIL={family_detail}")
+            qualified_buy = "+".join(result["bull_families"]) or "NONE"
+            qualified_sell = "+".join(result["bear_families"]) or "NONE"
+            blocks.append(f"QUALIFIED_BUY={qualified_buy}")
+            blocks.append(f"QUALIFIED_SELL={qualified_sell}")
+            if result.get("fallback_2f_buy") and result.get("fallback_2f_edge_buy") is not None:
+                blocks.append(f"2F_FALLBACK_BUY_EDGE={result['fallback_2f_edge_buy']:.4f}>={result['fallback_2f_min_edge']:.4f}")
+            if result.get("fallback_2f_sell") and result.get("fallback_2f_edge_sell") is not None:
+                blocks.append(f"2F_FALLBACK_SELL_EDGE={result['fallback_2f_edge_sell']:.4f}>={result['fallback_2f_min_edge']:.4f}")
+            failed_detail = ";".join(
+                f"{family}[{','.join(data.get('qualification_reasons', []))}]"
+                for family, data in result["families"].items()
+                if data.get("total", 0) > 0 and not data.get("qualified", False)
+            )
+            if failed_detail:
+                blocks.append(f"FAMILY_FAIL={failed_detail}")
             effective_min_families = AI_AGENT_MIN_FAMILIES if ai_min_families is None else int(ai_min_families)
             effective_min_edge = AI_AGENT_MIN_EDGE if ai_min_edge is None else float(ai_min_edge)
             effective_max_conflicts = AI_AGENT_MAX_CONFLICTING_FAMILIES if ai_max_conflicting_families is None else int(ai_max_conflicting_families)
             effective_require_trend = AI_AGENT_REQUIRE_TREND if ai_require_trend is None else bool(ai_require_trend)
             effective_require_structure = AI_AGENT_REQUIRE_STRUCTURE if ai_require_structure is None else bool(ai_require_structure)
             if len(fams)<effective_min_families: blocks.append(f"FAMILIES_{len(fams)}/{effective_min_families}")
+            _part_floor = AI_AGENT_MIN_FAMILY_PARTICIPATION if ai_min_family_participation is None else float(ai_min_family_participation)
+            _want = "BUY" if dominant_side == "BUY" else "SELL" if dominant_side == "SELL" else None
+            _thin = [f for f, d in result["families"].items() if _want and d["dominant"] == _want and d["participation"] < _part_floor and d["total"] > 0]
+            if _thin: blocks.append("THIN_" + "+".join(_thin))
             if result["edge"]<effective_min_edge: blocks.append(f"EDGE_{result['edge']:.2f}<{effective_min_edge:.2f}")
             if len(result["conflicting_families"])>effective_max_conflicts: blocks.append("CONFLICT_REVIEW")
             if effective_require_trend and "TREND" not in fams: blocks.append("TREND_REQUIRED")
             if effective_require_structure and "STRUCTURE" not in fams: blocks.append("STRUCTURE_REQUIRED")
             if not atr_pass: blocks.append("ATR_GATE")
-            if not vol_pass: blocks.append("VOLUME_GATE")
-            if not adx_pass: blocks.append("ADX_GATE")
+            _soft_on = AI_AGENT_SOFT_REGIME_ENABLED if ai_soft_regime is None else bool(ai_soft_regime)
+            if not _soft_on:
+                if not vol_pass: blocks.append("VOLUME_GATE")
+                if not adx_pass: blocks.append("ADX_GATE")
+            else:
+                _soft_edge = AI_AGENT_SOFT_EDGE if ai_soft_edge is None else float(ai_soft_edge)
+                _soft_min_fams = AI_AGENT_SOFT_MIN_FAMILIES if ai_soft_min_families is None else int(ai_soft_min_families)
+                _soft_max_miss = AI_AGENT_SOFT_MAX_REGIME_MISSES if ai_soft_max_regime_misses is None else int(ai_soft_max_regime_misses)
+                _soft_misses = int(not bool(vol_pass)) + int(not bool(adx_pass))
+                _soft_strong = bool(result["edge"] >= _soft_edge and len(fams) >= _soft_min_fams and len(result["conflicting_families"]) <= effective_max_conflicts)
+                _fallback_side = result.get("fallback_2f_buy") if dominant_side == "BUY" else result.get("fallback_2f_sell") if dominant_side == "SELL" else False
+                if _soft_misses > _soft_max_miss:
+                    blocks.append(f"SOFT_REGIME_{_soft_misses}_MISSES")
+                elif not (_soft_strong or _fallback_side):
+                    blocks.append(f"SOFT_REGIME_STRENGTH_EDGE{result['edge']:.2f}_F{len(fams)}")
+                elif _fallback_side:
+                    blocks.append("2F_HIGH_CONVICTION_FALLBACK")
+
+            if dominant_side == "BUY" and not mtf_pass_bull:
+                blocks.append("MTF_GATE_BUY")
+            elif dominant_side == "SELL" and not mtf_pass_bear:
+                blocks.append("MTF_GATE_SELL")
+            elif dominant_side == "TIE" and not (mtf_pass_bull and mtf_pass_bear):
+                blocks.append("MTF_GATE_TIE")
+
             return "AI_AGENT_BLOCKED | "+",".join(blocks or ["CONFLICT_OR_NEUTRAL"])
 
         if mode == "ADAPTIVE_EVIDENCE":
@@ -2781,7 +3267,7 @@ class UniversalFuturesBotGUI:
             f_risk,
             width=10,
         )
-        self.e_fixed_qty.insert(0, "0.001")
+        self.e_fixed_qty.insert(0, "0.01")
         self.e_fixed_qty.grid(row=0, column=5, padx=5)
 
         tk.Label(
@@ -2798,7 +3284,7 @@ class UniversalFuturesBotGUI:
 
         tk.Label(f_risk, text="Emergency Capital Loss Stop (%):").grid(row=2, column=0, sticky="w")
         self.e_emergency_capital_pct = tk.Entry(f_risk, width=8)
-        self.e_emergency_capital_pct.insert(0, "30.0")
+        self.e_emergency_capital_pct.insert(0, "10.0")
         self.e_emergency_capital_pct.grid(row=2, column=1, padx=5)
         tk.Label(f_risk, text="Emergency scope:").grid(row=3, column=0, sticky="w")
         self.v_emergency_scope = tk.StringVar(value="BOT_ONLY")
@@ -3838,7 +4324,7 @@ class UniversalFuturesBotGUI:
                 0,
                 cfg.get(
                     "fixed_qty",
-                    "0.001",
+                    "0.01",
                 ),
             )
 
@@ -3854,7 +4340,7 @@ class UniversalFuturesBotGUI:
                 ),
             )
             self.e_emergency_capital_pct.delete(0, tk.END)
-            self.e_emergency_capital_pct.insert(0, cfg.get("emergency_capital_pct", "30.0"))
+            self.e_emergency_capital_pct.insert(0, cfg.get("emergency_capital_pct", "10.0"))
             self.v_emergency_scope.set(cfg.get("emergency_scope", "BOT_ONLY"))
 
             legacy_protection_mode = cfg.get("sltp_mode", "PRICE_%")
@@ -6500,6 +6986,12 @@ class UniversalFuturesBotGUI:
             )
 
             use_adx = self.v_use_adx.get()
+            try:
+                adx_len = int(float(self.e_adx_len.get().strip() or DEFAULT_ADX_LEN))
+            except Exception:
+                raise ValueError("ADX period must be a whole number.")
+            if adx_len <= 0:
+                raise ValueError("ADX period must be greater than 0.")
             adx_thresh = float(
                 self.e_adx_thresh.get()
             )
@@ -6632,6 +7124,28 @@ class UniversalFuturesBotGUI:
             ):
                 raise ValueError(
                     "SL/TP targets and Hold-All-Reverse SL ROI must be greater than 0."
+                )
+
+            # ---- Startup risk/protection contract (fail before any order is sent) ----
+            _fx_sig_mode = str(self.v_signal_mode.get()).strip().upper()
+            if _fx_sig_mode != "AI_AGENT" and tp2_target_pct <= tp1_target_pct:
+                raise ValueError(
+                    f"TP2 ({tp2_target_pct:g}) must be farther than TP1 ({tp1_target_pct:g}); "
+                    "otherwise protection fails AFTER the position is open."
+                )
+            if max_dd > 0 and risk_pct >= max_dd:
+                raise ValueError(
+                    f"RISK CONFLICT: Risk Per Trade {risk_pct * 100:g}% >= Max Daily Drawdown {max_dd * 100:g}%. "
+                    "One stop-out (plus spread/slippage) would trip the daily breaker."
+                )
+            if emergency_capital_loss > 0 and risk_pct >= emergency_capital_loss:
+                raise ValueError(
+                    f"RISK CONFLICT: Risk Per Trade {risk_pct * 100:g}% >= Emergency Capital Loss Stop {emergency_capital_loss * 100:g}%."
+                )
+            if max_dd > 0 and 0 < emergency_capital_loss <= max_dd:
+                self.log(
+                    f"RISK CONFLICT WARNING: Emergency Stop {emergency_capital_loss * 100:g}% <= Daily Drawdown {max_dd * 100:g}%; "
+                    "the emergency stop can fire before the daily breaker."
                 )
 
             if leverage <= 0:
@@ -7331,7 +7845,9 @@ class UniversalFuturesBotGUI:
                     if use_divergence: directional_modules.append(("DIVERGENCE",bool(df["div_bull_signal"].iloc[-2]),bool(df["div_bear_signal"].iloc[-2])))
                     if use_vol_sr: directional_modules.append(("VOL_SR",bool(df["sr_bull"].iloc[-2]),bool(df["sr_bear"].iloc[-2])))
                     if use_vol and vol_pass: directional_modules.append(("VOL",candle_bull,candle_bear))
-                    if use_adx and adx_pass: directional_modules.append(("ADX",float(df["plus_di"].iloc[-2])>float(df["minus_di"].iloc[-2]),float(df["minus_di"].iloc[-2])>float(df["plus_di"].iloc[-2])))
+                    adx_bull = bool(use_adx and float(df["plus_di"].iloc[-2]) > float(df["minus_di"].iloc[-2]))
+                    adx_bear = bool(use_adx and float(df["minus_di"].iloc[-2]) > float(df["plus_di"].iloc[-2]))
+                    if use_adx and adx_pass: directional_modules.append(("ADX",adx_bull,adx_bear))
                     if use_atr and atr_pass: directional_modules.append(("ATR",candle_bull,candle_bear))
 
                     buy_score=sum(1 for _,b,_ in directional_modules if b); sell_score=sum(1 for _,_,s in directional_modules if s)
@@ -7340,17 +7856,56 @@ class UniversalFuturesBotGUI:
                         evidence_min_families=evidence_min_families, evidence_family_min_score=evidence_family_min_score,
                         evidence_require_trend=evidence_require_trend, evidence_require_independent=evidence_require_independent,
                         ai_min_families=ai_min_families, ai_min_edge=ai_min_edge, ai_min_family_confidence=ai_family_confidence,
-                        ai_require_trend=ai_require_trend, ai_require_structure=ai_require_structure, ai_max_conflicting_families=ai_max_conflicts)
+                        ai_require_trend=ai_require_trend, ai_require_structure=ai_require_structure, ai_max_conflicting_families=ai_max_conflicts,
+                        require_mtf=bool(getattr(self, "v_ai_require_mtf", tk.BooleanVar(value=AI_AGENT_REQUIRE_MTF)).get()),
+                        min_family_participation=float(getattr(self, "e_ai_min_participation", tk.Entry(self.root)).get() or AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                        soft_regime=bool(getattr(self, "v_ai_soft_regime", tk.BooleanVar(value=AI_AGENT_SOFT_REGIME_ENABLED)).get()),
+                        soft_edge=float(getattr(self, "e_ai_soft_edge", tk.Entry(self.root)).get() or AI_AGENT_SOFT_EDGE),
+                        soft_min_families=int(float(getattr(self, "e_ai_soft_min_families", tk.Entry(self.root)).get() or AI_AGENT_SOFT_MIN_FAMILIES)),
+                        soft_max_regime_misses=int(float(getattr(self, "e_ai_soft_max_regime_misses", tk.Entry(self.root)).get() or AI_AGENT_SOFT_MAX_REGIME_MISSES)),
+                        fallback_2f_enabled=bool(getattr(self, "v_ai_2f_fallback_enabled", tk.BooleanVar(value=AI_AGENT_2F_FALLBACK_ENABLED)).get()),
+                        fallback_2f_min_edge=float(getattr(self, "e_ai_2f_min_edge", tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_EDGE),
+                        fallback_2f_min_confidence=float(getattr(self, "e_ai_2f_min_family_confidence", tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                        fallback_2f_min_participation=float(getattr(self, "e_ai_2f_min_participation", tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_PARTICIPATION),
+                        fallback_2f_require_structure=bool(getattr(self, "v_ai_2f_require_structure", tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_STRUCTURE)).get()),
+                        fallback_2f_require_independent=bool(getattr(self, "v_ai_2f_require_independent", tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_INDEPENDENT)).get()))
                     decision_reason=StrategyEngine.decision_reason(directional_modules,signal_mode,min_score,atr_pass=atr_pass,vol_pass=vol_pass,adx_pass=adx_pass,mtf_pass_bull=mtf_pass_bull,mtf_pass_bear=mtf_pass_bear,adaptive_edge=adaptive_edge, adaptive_min_weight=adaptive_min_weight,
                         evidence_min_families=evidence_min_families, evidence_family_min_score=evidence_family_min_score,
                         evidence_require_trend=evidence_require_trend, evidence_require_independent=evidence_require_independent,
                         ai_min_families=ai_min_families, ai_min_edge=ai_min_edge, ai_min_family_confidence=ai_family_confidence,
-                        ai_require_trend=ai_require_trend, ai_require_structure=ai_require_structure, ai_max_conflicting_families=ai_max_conflicts)
+                        ai_require_trend=ai_require_trend, ai_require_structure=ai_require_structure, ai_max_conflicting_families=ai_max_conflicts,
+                        require_mtf=bool(getattr(self, "v_ai_require_mtf", tk.BooleanVar(value=AI_AGENT_REQUIRE_MTF)).get()),
+                        min_family_participation=float(getattr(self, "e_ai_min_participation", tk.Entry(self.root)).get() or AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                        soft_regime=bool(getattr(self, "v_ai_soft_regime", tk.BooleanVar(value=AI_AGENT_SOFT_REGIME_ENABLED)).get()),
+                        soft_edge=float(getattr(self, "e_ai_soft_edge", tk.Entry(self.root)).get() or AI_AGENT_SOFT_EDGE),
+                        soft_min_families=int(float(getattr(self, "e_ai_soft_min_families", tk.Entry(self.root)).get() or AI_AGENT_SOFT_MIN_FAMILIES)),
+                        soft_max_regime_misses=int(float(getattr(self, "e_ai_soft_max_regime_misses", tk.Entry(self.root)).get() or AI_AGENT_SOFT_MAX_REGIME_MISSES)),
+                        fallback_2f_enabled=bool(getattr(self, "v_ai_2f_fallback_enabled", tk.BooleanVar(value=AI_AGENT_2F_FALLBACK_ENABLED)).get()),
+                        fallback_2f_min_edge=float(getattr(self, "e_ai_2f_min_edge", tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_EDGE),
+                        fallback_2f_min_confidence=float(getattr(self, "e_ai_2f_min_family_confidence", tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                        fallback_2f_min_participation=float(getattr(self, "e_ai_2f_min_participation", tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_PARTICIPATION),
+                        fallback_2f_require_structure=bool(getattr(self, "v_ai_2f_require_structure", tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_STRUCTURE)).get()),
+                        fallback_2f_require_independent=bool(getattr(self, "v_ai_2f_require_independent", tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_INDEPENDENT)).get()))
+                    if buy_signal and sell_signal:
+                        self.log("ENTRY BLOCKED: AMBIGUOUS_CANDLE | BUY and SELL both true on the same completed candle; signal forced to NONE.")
+                        buy_signal = sell_signal = False
                     signal="BUY" if buy_signal else "SELL" if sell_signal else "NONE"
                     self.log(f"V8.4.2-R6.5 SIGNAL={signal} | Mode={signal_mode} | BUY_W/SELL_W={buy_score}/{sell_score} | {decision_reason}")
                     if signal_mode == "AI_AGENT":
                         try:
-                            ar=StrategyEngine.ai_agent_decision(directional_modules,atr_pass=atr_pass,vol_pass=vol_pass,adx_pass=adx_pass,mtf_pass_bull=mtf_pass_bull,mtf_pass_bear=mtf_pass_bear,min_families=ai_min_families,min_edge=ai_min_edge,min_family_confidence=ai_family_confidence,require_trend=ai_require_trend,require_structure=ai_require_structure,max_conflicting_families=ai_max_conflicts)
+                            ar=StrategyEngine.ai_agent_decision(directional_modules,atr_pass=atr_pass,vol_pass=vol_pass,adx_pass=adx_pass,mtf_pass_bull=mtf_pass_bull,mtf_pass_bear=mtf_pass_bear,min_families=ai_min_families,min_edge=ai_min_edge,min_family_confidence=ai_family_confidence,require_trend=ai_require_trend,require_structure=ai_require_structure,max_conflicting_families=ai_max_conflicts,
+                                require_mtf=bool(getattr(self,"v_ai_require_mtf",tk.BooleanVar(value=AI_AGENT_REQUIRE_MTF)).get()),
+                                min_family_participation=float(getattr(self,"e_ai_min_participation",tk.Entry(self.root)).get() or AI_AGENT_MIN_FAMILY_PARTICIPATION),
+                                soft_regime=bool(getattr(self,"v_ai_soft_regime",tk.BooleanVar(value=AI_AGENT_SOFT_REGIME_ENABLED)).get()),
+                                soft_edge=float(getattr(self,"e_ai_soft_edge",tk.Entry(self.root)).get() or AI_AGENT_SOFT_EDGE),
+                                soft_min_families=int(float(getattr(self,"e_ai_soft_min_families",tk.Entry(self.root)).get() or AI_AGENT_SOFT_MIN_FAMILIES)),
+                                soft_max_regime_misses=int(float(getattr(self,"e_ai_soft_max_regime_misses",tk.Entry(self.root)).get() or AI_AGENT_SOFT_MAX_REGIME_MISSES)),
+                                fallback_2f_enabled=bool(getattr(self,"v_ai_2f_fallback_enabled",tk.BooleanVar(value=AI_AGENT_2F_FALLBACK_ENABLED)).get()),
+                                fallback_2f_min_edge=float(getattr(self,"e_ai_2f_min_edge",tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_EDGE),
+                                fallback_2f_min_confidence=float(getattr(self,"e_ai_2f_min_family_confidence",tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+                                fallback_2f_min_participation=float(getattr(self,"e_ai_2f_min_participation",tk.Entry(self.root)).get() or AI_AGENT_2F_MIN_PARTICIPATION),
+                                fallback_2f_require_structure=bool(getattr(self,"v_ai_2f_require_structure",tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_STRUCTURE)).get()),
+                                fallback_2f_require_independent=bool(getattr(self,"v_ai_2f_require_independent",tk.BooleanVar(value=AI_AGENT_2F_REQUIRE_INDEPENDENT)).get()))
                             detail=" | ".join(f"{n}:B{v['bull_ratio']:.0%}/S{v['bear_ratio']:.0%}/{v['dominant']}" for n,v in ar['families'].items() if v['total']>0)
                             self.log(f"AI COUNCIL DETAIL | {detail or 'NONE'} | BullFamilies={ar['bull_families']} | BearFamilies={ar['bear_families']} | Edge={ar['edge']:.3f} | Conflicts={ar['conflicting_families']} | ATR={'PASS' if atr_pass else 'FAIL'} | VOL={'PASS' if vol_pass else 'FAIL'} | ADX={'PASS' if adx_pass else 'FAIL'}")
                         except Exception as _ai_log_error: self.log(f"AI COUNCIL LOG WARNING: {_ai_log_error}")
@@ -7529,6 +8084,18 @@ class UniversalFuturesBotGUI:
                         if signal == "SELL"
                         else "NONE"
                     )
+
+                    if bool(getattr(self, "scanner_preflight_only", False)) and desired_side == "NONE":
+                        self._scanner_preflight_result = {
+                            "qualified": False,
+                            "reason": "AI_OR_STRATEGY_SIGNAL_BLOCKED",
+                            "signal": "NONE",
+                            "closed_candle_ts": int(df["time"].iloc[-2]),
+                            "decision_reason": decision_reason,
+                            "detail": "No valid BUY/SELL signal reached the entry pipeline."
+                        }
+                        self.log(f"SCANNER PREFLIGHT REJECT | {self.symbol} | reason=AI_OR_STRATEGY_SIGNAL_BLOCKED | decision={decision_reason}")
+                        break
 
                     # ------------------------------------------------
                     # 7. New/reversal trade
@@ -7762,6 +8329,31 @@ class UniversalFuturesBotGUI:
                             f"Requested Qty={entry_qty}"
                         )
 
+                        # V7.1 scanner preflight: all normal Forex sizing and hard
+                        # pre-entry calculations have completed. Never submit an MT5
+                        # order from a PREFLIGHT_WORKER child.
+                        if bool(getattr(self, "scanner_preflight_only", False)):
+                            try:
+                                q = self._fx71_execution_quality_gate(self.symbol, signal, close)
+                                self._scanner_preflight_result = {
+                                    "qualified": True,
+                                    "side": signal,
+                                    "qty": float(entry_qty),
+                                    "closed_candle_ts": int(df["time"].iloc[-2]),
+                                    "decision_reason": decision_reason,
+                                    "execution_quality": q,
+                                }
+                                self.log(f"SCANNER PREFLIGHT QUALIFIED | {self.symbol} | side={signal} | qty={entry_qty} | no MT5 order submitted")
+                            except Exception as pre_exc:
+                                self._scanner_preflight_result = {
+                                    "qualified": False,
+                                    "reason": "EXECUTION_QUALITY_BLOCKED",
+                                    "detail": str(pre_exc),
+                                    "signal": signal,
+                                    "decision_reason": decision_reason,
+                                }
+                                self.log(f"SCANNER PREFLIGHT BLOCKED | {self.symbol} | {type(pre_exc).__name__}: {pre_exc}")
+                            break
                         try:
                             new_position, actual_entry = (
                                 self.open_market_position(
@@ -8406,1824 +8998,3 @@ class MT5ForexAdapter:
         if len(agg) > 1:
             older = agg.iloc[:-1]
             newest = agg.iloc[-1:]
-            older = older[older["base_count"] == 3]
-            agg = pd.concat([older, newest])
-        agg = agg.tail(int(limit))
-        return agg[["time","open","high","low","close","vol"]].values.tolist()
-
-    def fetch_ticker(self, symbol):
-        tick = mt5.symbol_info_tick(symbol)
-        if tick is None:
-            raise RuntimeError(f"MT5 tick failed for {symbol}: {mt5.last_error()}")
-        return {"bid": float(tick.bid), "ask": float(tick.ask),
-                "last": float(tick.last or ((tick.bid + tick.ask) / 2.0)),
-                "close": float(tick.last or tick.bid)}
-
-    def _paper_position(self, symbol):
-        return self.paper_positions.get(symbol)
-
-    def fetch_positions(self, symbols=None):
-        # No-argument call is deliberately account-wide for the emergency circuit breaker.
-        if self.paper:
-            if symbols:
-                wanted = set(symbols)
-                return [self.paper_positions[s] for s in self.paper_positions if s in wanted]
-            return list(self.paper_positions.values())
-        if symbols:
-            positions = []
-            for sym in symbols:
-                rows = mt5.positions_get(symbol=sym) or []
-                positions.extend(rows)
-        else:
-            positions = list(mt5.positions_get() or [])
-        out = []
-        for p in positions:
-            if p.volume <= 0:
-                continue
-            side = "long" if p.type == mt5.POSITION_TYPE_BUY else "short"
-            out.append({
-                "id": str(p.ticket),
-                "symbol": p.symbol,
-                "contracts": float(p.volume),
-                "side": side,
-                "entryPrice": float(p.price_open),
-                "average": float(p.price_open),
-                "leverage": 0.0,
-                "initialMargin": float(mt5.order_calc_margin(
-                    mt5.ORDER_TYPE_BUY if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL,
-                    p.symbol, p.volume, p.price_open) or 0.0),
-                "unrealizedPnl": float(p.profit),
-                "info": {"ticket": p.ticket, "magic": p.magic, "sl": p.sl, "tp": p.tp},
-                "_mt5": p,
-            })
-        # Normal bot management must only see this bot's magic-number positions.
-        if getattr(self.bot, "mt5_magic", None):
-            out = [p for p in out if int((p.get("info") or {}).get("magic", 0)) == int(self.bot.mt5_magic)]
-        return out
-
-    def _all_positions_raw(self):
-        return list(mt5.positions_get() or [])
-
-    def fetch_balance(self):
-        if self.paper:
-            return {"total": {"USD": self.paper_equity}, "USD": {"total": self.paper_equity}}
-        info = mt5.account_info()
-        if info is None:
-            raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
-        return {"total": {str(info.currency): float(info.balance)},
-                str(info.currency): {"total": float(info.balance)}}
-
-    def calc_profit(self, side, symbol, volume, price_open, price_close):
-        if self.paper:
-            info = self._info(symbol)
-            contract = float(info.trade_contract_size or 100000.0)
-            # Approximate account-currency P/L for common USD-quoted pairs.
-            direction = 1.0 if side == "LONG" else -1.0
-            return direction * (price_close - price_open) * volume * contract
-        order_type = mt5.ORDER_TYPE_BUY if side == "LONG" else mt5.ORDER_TYPE_SELL
-        value = mt5.order_calc_profit(order_type, symbol, float(volume),
-                                      float(price_open), float(price_close))
-        if value is None:
-            raise RuntimeError(f"MT5 order_calc_profit failed: {mt5.last_error()}")
-        return float(value)
-
-    def calc_margin(self, side, symbol, volume, price):
-        order_type = mt5.ORDER_TYPE_BUY if side == "LONG" else mt5.ORDER_TYPE_SELL
-        value = mt5.order_calc_margin(order_type, symbol, float(volume), float(price))
-        if value is None:
-            return 0.0
-        return float(value)
-
-    def fetch_open_orders(self, symbol=None):
-        # Position SL/TP are not pending orders in MT5. This is only for true pending orders.
-        if self.paper:
-            return []
-        rows = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
-        rows = rows or []
-        return [{"id": str(o.ticket), "status": "open", "symbol": o.symbol,
-                 "type": str(o.type), "info": {"ticket": o.ticket}} for o in rows]
-
-    def fetch_closed_orders(self, symbol=None, limit=100):
-        return []
-
-    def cancel_order(self, order_id, symbol):
-        if self.paper:
-            return True
-        req = {
-            "action": mt5.TRADE_ACTION_REMOVE,
-            "order": int(order_id),
-            "symbol": symbol,
-        }
-        result = mt5.order_send(req)
-        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-            raise RuntimeError(f"MT5 cancel failed: {getattr(result,'retcode',None)} {mt5.last_error()}")
-        return True
-
-    def _filling(self, symbol):
-        info = self._info(symbol)
-        mode = int(info.filling_mode)
-        # Prefer broker-supported IOC/FOK; market execution commonly supports IOC.
-        if mode & 2:
-            return mt5.ORDER_FILLING_IOC
-        if mode & 1:
-            return mt5.ORDER_FILLING_FOK
-        return mt5.ORDER_FILLING_RETURN
-
-    def create_order(self, symbol, order_type, side, qty, price=None, params=None):
-        params = params or {}
-        if self.paper:
-            return self._paper_create_order(symbol, order_type, side, qty, price, params)
-
-        tick = mt5.symbol_info_tick(symbol)
-        if tick is None:
-            raise RuntimeError(f"MT5 tick unavailable: {mt5.last_error()}")
-        is_buy = side.lower() == "buy"
-        mt5_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
-        req = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": float(qty),
-            "type": mt5_type,
-            "price": float(tick.ask if is_buy else tick.bid),
-            "deviation": int(params.get("deviation", 20)),
-            "magic": int(getattr(self.bot, "mt5_magic", 26091801)),
-            "comment": "UniversalForexBotV1",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": self._filling(symbol),
-        }
-        if params.get("position"):
-            req["position"] = int(params["position"])
-        if params.get("sl") is not None:
-            req["sl"] = float(params["sl"])
-        if params.get("tp") is not None:
-            req["tp"] = float(params["tp"])
-        result = mt5.order_send(req)
-        if result is None:
-            # MT5 can return None after a terminal/network failure even when the
-            # broker accepted the request. Never blindly retry an entry: first
-            # reconcile the account for a bot-owned position.
-            if not params.get("position"):
-                try:
-                    rows = mt5.positions_get(symbol=symbol) or []
-                    owned = [r for r in rows if int(getattr(r, "magic", 0)) == int(getattr(self.bot, "mt5_magic", 0))]
-                    expected_type = mt5.POSITION_TYPE_BUY if is_buy else mt5.POSITION_TYPE_SELL
-                    matching = [r for r in owned if int(r.type) == int(expected_type) and float(r.volume) > 0]
-                    if matching:
-                        p = matching[0]
-                        self.bot.log(f"MT5 ENTRY RECONCILED AFTER order_send=None | ticket={p.ticket} | volume={p.volume}")
-                        return {"id": str(p.ticket), "status": "reconciled", "filled": float(p.volume),
-                                "average": float(p.price_open), "price": float(p.price_open),
-                                "info": {"ticket": p.ticket, "reconciled": True}}
-                except Exception as reconcile_error:
-                    self.bot.log(f"MT5 ENTRY RECONCILIATION FAILED: {reconcile_error}")
-            raise RuntimeError(f"MT5 order_send returned None: {mt5.last_error()}")
-        if result.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
-            raise RuntimeError(f"MT5 order rejected: retcode={result.retcode} comment={result.comment}")
-        return {
-            "id": str(result.order or result.deal),
-            "status": "closed" if result.deal else "open",
-            "filled": float(getattr(result, "volume", qty) or qty),
-            "average": float(getattr(result, "price", 0.0) or 0.0),
-            "price": float(getattr(result, "price", 0.0) or 0.0),
-            "info": {"deal": result.deal, "order": result.order,
-                     "retcode": result.retcode, "comment": result.comment},
-        }
-
-    def _paper_create_order(self, symbol, order_type, side, qty, price, params):
-        tick = self.fetch_ticker(symbol)
-        px = float(tick["ask"] if side.lower() == "buy" else tick["bid"])
-        q = float(qty)
-        if params.get("position"):
-            pos = self.paper_positions.get(symbol)
-            if not pos:
-                return {"id": f"PAPER-{time.time_ns()}", "filled": q, "average": px}
-            pnl = self.calc_profit(pos["side"], symbol, q, pos["entry"], px)
-            self.paper_equity += pnl
-            remaining = max(0.0, pos["qty"] - q)
-            if remaining <= 1e-12:
-                del self.paper_positions[symbol]
-            else:
-                pos["qty"] = remaining
-            return {"id": f"PAPER-CLOSE-{time.time_ns()}", "filled": q, "average": px}
-        position_side = "LONG" if side.lower() == "buy" else "SHORT"
-        margin = self.calc_margin(position_side, symbol, q, px)
-        if margin <= 0:
-            # Paper margin approximation only; actual MT5 mode uses order_calc_margin.
-            margin = abs(px * q * float(self._info(symbol).trade_contract_size)) / max(
-                float(self.bot.reference_leverage), 1.0
-            )
-        self.paper_positions[symbol] = {
-            "id": f"PAPER-POS-{time.time_ns()}",
-            "symbol": symbol, "contracts": q, "qty": q,
-            "side": position_side, "entryPrice": px, "average": px,
-            "entry": px, "leverage": float(self.bot.reference_leverage),
-            "initialMargin": margin, "unrealizedPnl": 0.0,
-            "info": {"magic": self.bot.mt5_magic, "sl": 0.0, "tp": 0.0},
-        }
-        return {"id": self.paper_positions[symbol]["id"], "filled": q, "average": px, "price": px}
-
-    def modify_position_sl(self, symbol, position, sl):
-        if self.paper:
-            p = self.paper_positions.get(symbol)
-            if p:
-                p["info"]["sl"] = float(sl)
-            return {"id": f"PAPER-SL-{time.time_ns()}", "sl": float(sl)}
-        ticket = int(position.get("id") or (position.get("raw") or {}).get("id") or
-                     (position.get("info") or {}).get("ticket") or 0)
-        if not ticket:
-            # Find bot position ticket.
-            rows = mt5.positions_get(symbol=symbol) or []
-            rows = [r for r in rows if int(r.magic) == int(self.bot.mt5_magic)]
-            if not rows:
-                raise RuntimeError("Could not find MT5 bot position ticket for SL modification.")
-            ticket = int(rows[0].ticket)
-        info = mt5.symbol_info(symbol)
-        tick = mt5.symbol_info_tick(symbol)
-        if info is None or tick is None:
-            raise RuntimeError("MT5 SL modification failed: symbol/tick unavailable.")
-        min_points = max(int(getattr(info, "trade_stops_level", 0) or 0), int(getattr(info, "trade_freeze_level", 0) or 0))
-        point = float(info.point or 0.00001)
-        ref_price = float(tick.bid if position.get("side") == "LONG" else tick.ask)
-        if min_points > 0 and abs(ref_price - float(sl)) < min_points * point:
-            raise RuntimeError(f"SL is inside broker stop/freeze distance: {abs(ref_price-float(sl))/point:.1f} < {min_points} points.")
-        req = {
-            "action": mt5.TRADE_ACTION_SLTP,
-            "symbol": symbol,
-            "position": ticket,
-            "sl": float(sl),
-            "tp": 0.0,
-            "magic": int(self.bot.mt5_magic),
-        }
-        # Preserve existing TP if broker position has one.
-        rows = mt5.positions_get(ticket=ticket) or []
-        if rows:
-            req["tp"] = float(rows[0].tp or 0.0)
-        result = mt5.order_send(req)
-        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-            raise RuntimeError(f"MT5 SL modification failed: {getattr(result,'retcode',None)} {mt5.last_error()}")
-        return {"id": f"SL-{ticket}-{time.time_ns()}", "status": "closed", "sl": float(sl)}
-
-    def shutdown(self):
-        # Do not shut down the user's terminal on every stop; only release Python connection.
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-
-
-def _fx_symbol_info(bot, symbol):
-    return mt5.symbol_info(symbol)
-
-
-def fx_safe_amount(self, symbol, qty):
-    q = float(qty)
-    if q <= 0:
-        return 0.0
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        raise RuntimeError(f"MT5 symbol_info failed: {symbol}")
-    step = float(info.volume_step or 0.01)
-    mn = float(info.volume_min or step)
-    mx = float(info.volume_max or q)
-    q = min(q, mx)
-    q = (q // step) * step
-    if q < mn:
-        return 0.0
-    return float(f"{q:.8f}")
-
-
-def fx_safe_price(self, symbol, price):
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        return float(price)
-    return round(float(price), int(info.digits))
-
-
-def fx_fetch_balance_total(self):
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        return float(self.exchange.paper_equity)
-    info = mt5.account_info()
-    if info is None:
-        raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
-    return float(info.balance)
-
-
-def fx_fetch_account_equity(self):
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        # Update paper floating P/L.
-        for sym, pos in list(self.exchange.paper_positions.items()):
-            px = self._current_market_price(sym)
-            pnl = self.exchange.calc_profit(pos["side"], sym, pos["qty"], pos["entry"], px)
-            pos["unrealizedPnl"] = pnl
-        floating = sum(float(p.get("unrealizedPnl", 0.0)) for p in self.exchange.paper_positions.values())
-        return float(self.exchange.paper_balance + floating)
-    info = mt5.account_info()
-    if info is None:
-        raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
-    return float(info.equity)
-
-
-def fx_normalize_symbol(self, exchange, exchange_id, raw_symbol):
-    return exchange.normalize(raw_symbol)
-
-
-def fx_build_exchange(self, exchange_id, api_key, api_secret, account_mode):
-    if exchange_id != "mt5_forex":
-        raise RuntimeError("Forex V1 supports MT5 only.")
-    try:
-        paper_balance = float(getattr(self, "e_paper_balance", None).get().strip())
-    except Exception:
-        paper_balance = 1000.0
-    return MT5ForexAdapter(
-        self, account_mode,
-        login=api_key,
-        password=api_secret,
-        server=getattr(self, "e_mt5_server", None).get().strip() if hasattr(self, "e_mt5_server") else "",
-        paper_balance=paper_balance,
-    )
-
-
-def fx_configure_leverage(self, symbol, leverage):
-    self.reference_leverage = float(leverage)
-    self.log(
-        f"MT5 Forex leverage: BROKER-CONTROLLED | Reference Leverage={leverage}x "
-        "(used only as fallback/ROI reference; no leverage is changed by the bot)"
-    )
-
-
-def fx_target_to_price_fraction(self, target_pct, protection_mode, leverage,
-                                actual_entry=None, position_qty=None,
-                                position_initial_margin=None):
-    target_pct = float(target_pct)
-    if target_pct <= 0:
-        raise RuntimeError("SL/TP targets must be greater than zero.")
-    if str(protection_mode).upper() == "PRICE_%":
-        return target_pct / 100.0
-    if str(protection_mode).upper() == "PIPS":
-        if actual_entry is not None:
-            return (fx_v2_pip_size(self.symbol) * target_pct) / float(actual_entry)
-        return (target_pct * 0.0001) / max(float(actual_entry or 1.0), 1e-12)
-    if str(protection_mode).upper() != "ROI_%":
-        raise RuntimeError(f"Unknown SL/TP protection mode: {protection_mode}")
-    # For display/pre-entry fallback retain V8 semantics; post-entry calculation
-    # below uses actual MT5 margin/P&L, not leverage division.
-    return (target_pct / 100.0) / max(float(leverage), 1.0)
-
-
-def fx_find_price_for_pnl(self, side, symbol, entry, volume, target_pnl):
-    """Binary-search price where MT5 order_calc_profit reaches target P/L."""
-    entry = float(entry)
-    target_pnl = float(target_pnl)
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        raise RuntimeError(f"MT5 symbol_info failed: {symbol}")
-    point = float(info.point or 0.00001)
-    # Start with 100 points and expand until target is bracketed.
-    lo, hi = entry, entry
-    if side == "LONG":
-        if target_pnl < 0:
-            hi = entry
-            lo = entry - point * 100
-            while self.exchange.calc_profit(side, symbol, volume, entry, lo) > target_pnl:
-                lo -= (hi - lo) * 2.0
-        else:
-            lo = entry
-            hi = entry + point * 100
-            while self.exchange.calc_profit(side, symbol, volume, entry, hi) < target_pnl:
-                hi += (hi - lo) * 2.0
-    else:
-        if target_pnl < 0:
-            lo = entry
-            hi = entry + point * 100
-            while self.exchange.calc_profit(side, symbol, volume, entry, hi) > target_pnl:
-                hi += (hi - lo) * 2.0
-        else:
-            hi = entry
-            lo = entry - point * 100
-            while self.exchange.calc_profit(side, symbol, volume, entry, lo) < target_pnl:
-                lo -= (hi - lo) * 2.0
-    for _ in range(70):
-        mid = (lo + hi) / 2.0
-        pnl = self.exchange.calc_profit(side, symbol, volume, entry, mid)
-        if side == "LONG":
-            if pnl < target_pnl:
-                lo = mid
-            else:
-                hi = mid
-        else:
-            if pnl < target_pnl:
-                hi = mid
-            else:
-                lo = mid
-    return self.fx_safe_price(symbol, (lo + hi) / 2.0) if hasattr(self, "fx_safe_price") else fx_safe_price(self, symbol, (lo + hi) / 2.0)
-
-
-def fx_calculate_entry_qty(self, symbol, balance, reference_price,
-                           risk_pct, sl_price_fraction, size_mode, fixed_qty):
-    if size_mode == "FIXED_QTY":
-        qty = float(fixed_qty)
-    else:
-        if risk_pct <= 0:
-            raise ValueError("Risk Per Trade must be greater than 0.")
-        if sl_price_fraction <= 0:
-            raise ValueError("SL price distance must be greater than 0.")
-        # Use the actual broker P/L function for 1 lot.
-        side = getattr(self, "_pending_signal_for_sizing", "BUY")
-        direction = "LONG" if side == "BUY" else "SHORT"
-        stop_price = (
-            float(reference_price) * (1.0 - sl_price_fraction)
-            if direction == "LONG"
-            else float(reference_price) * (1.0 + sl_price_fraction)
-        )
-        risk_amount = float(balance) * float(risk_pct)
-        loss_1lot = abs(self.exchange.calc_profit(
-            direction, symbol, 1.0, float(reference_price), stop_price
-        ))
-        if loss_1lot <= 0:
-            raise RuntimeError("MT5 returned zero risk for 1.00 lot; cannot calculate safe size.")
-        qty = risk_amount / loss_1lot
-    qty = fx_safe_amount(self, symbol, qty)
-    if qty <= 0:
-        raise RuntimeError("Calculated Forex lot size is below broker minimum/step.")
-    return qty
-
-
-def fx_calculate_protection_prices(self, symbol, side, actual_entry, position_qty,
-                                   position_initial_margin, sl_target_pct,
-                                   tp1_target_pct, tp2_target_pct, sl_mode, tp_mode,
-                                   leverage):
-    entry = float(actual_entry)
-    qty = float(position_qty)
-    if entry <= 0 or qty <= 0:
-        raise RuntimeError("Actual MT5 entry/lot size is invalid.")
-    # PRICE_% remains direct market-price movement.
-    def target_price(target, mode, positive=True):
-        target = float(target)
-        if target <= 0:
-            raise RuntimeError("SL/TP targets must be greater than zero.")
-        if str(mode).upper() == "PRICE_%":
-            move = entry * target / 100.0
-            return entry + move if positive else entry - move
-        if str(mode).upper() != "ROI_%":
-            raise RuntimeError(f"Unknown SL/TP mode: {mode}")
-        if position_initial_margin <= 0:
-            margin = self.exchange.calc_margin(side, symbol, qty, entry)
-        else:
-            margin = float(position_initial_margin)
-        if margin <= 0:
-            raise RuntimeError("MT5 could not calculate actual position margin for ROI target.")
-        target_pnl = margin * target / 100.0
-        signed = target_pnl if positive else -target_pnl
-        return fx_find_price_for_pnl(self, side, symbol, entry, qty, signed)
-
-    sl = target_price(sl_target_pct, sl_mode, positive=False if side == "LONG" else True)
-    tp1 = target_price(tp1_target_pct, tp_mode, positive=True if side == "LONG" else False)
-    tp2 = target_price(tp2_target_pct, tp_mode, positive=True if side == "LONG" else False)
-    sl, tp1, tp2 = [fx_safe_price(self, symbol, x) for x in (sl,tp1,tp2)]
-
-    if side == "LONG" and not (sl < entry and tp1 > entry and tp2 > tp1):
-        raise RuntimeError("Calculated LONG Forex SL/TP prices are invalid.")
-    if side == "SHORT" and not (sl > entry and tp1 < entry and tp2 < tp1):
-        raise RuntimeError("Calculated SHORT Forex SL/TP prices are invalid.")
-    return (
-        sl, tp1, tp2,
-        abs(sl-entry)/entry,
-        abs(tp1-entry)/entry,
-        abs(tp2-entry)/entry,
-    )
-
-
-def fx_fetch_position(self, symbol):
-    rows = self.exchange.fetch_positions([symbol])
-    for p in rows:
-        if p["contracts"] > 0:
-            return {
-                "id": p.get("id"),
-                "side": p["side"].upper(),
-                "qty": float(p["contracts"]),
-                "entry": float(p["entryPrice"]),
-                "leverage": float(p.get("leverage") or self.reference_leverage),
-                "initial_margin": float(p.get("initialMargin") or 0.0),
-                "raw": p,
-            }
-    return None
-
-
-def fx_wait_for_position(self, symbol, expected_side, timeout=10):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        p = fx_fetch_position(self, symbol)
-        if p and p["side"] == expected_side and p["qty"] > 0 and p["entry"] > 0:
-            return p
-        time.sleep(0.3)
-    return None
-
-
-def fx_open_market_position(self, symbol, signal, qty):
-    self._pending_signal_for_sizing = signal
-    # Optional broker spread guard. This is an execution safety filter and
-    # does not alter any V8 indicator or signal formula.
-    if getattr(self, "v_use_spread_filter", None) is not None and self.v_use_spread_filter.get():
-        tick = mt5.symbol_info_tick(symbol)
-        info = mt5.symbol_info(symbol)
-        if tick is None or info is None:
-            raise RuntimeError("MT5 spread check failed: symbol tick/info unavailable.")
-        spread_points = (float(tick.ask) - float(tick.bid)) / float(info.point)
-        max_spread = float(self.e_max_spread_points.get().strip())
-        self.log(f"FOREX SPREAD CHECK: {spread_points:.2f} points | Max={max_spread:.2f}")
-        if spread_points > max_spread:
-            raise RuntimeError(
-                f"Entry blocked by Forex spread filter: {spread_points:.2f} > {max_spread:.2f} points."
-            )
-    order = self.exchange.create_order(
-        symbol, "market", "buy" if signal == "BUY" else "sell", qty, None, {}
-    )
-    expected = "LONG" if signal == "BUY" else "SHORT"
-    pos = fx_wait_for_position(self, symbol, expected, timeout=10)
-    if not pos:
-        raise RuntimeError("MT5 order submitted but actual position could not be confirmed.")
-    return pos, pos["entry"]
-
-
-def fx_close_position_market(self, symbol, position_side, qty):
-    pos = fx_fetch_position(self, symbol)
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        self.exchange.create_order(
-            symbol, "market", "sell" if position_side == "LONG" else "buy",
-            fx_safe_amount(self, symbol, qty), None,
-            {"position": pos["id"] if pos else None},
-        )
-        return
-    if not pos:
-        return
-    order = self.exchange.create_order(
-        symbol, "market", "sell" if position_side == "LONG" else "buy",
-        fx_safe_amount(self, symbol, qty), None,
-        {"position": pos["id"], "deviation": 30}
-    )
-    return order
-
-
-def fx_cancel_all_open_orders(self, symbol):
-    for order in self.exchange.fetch_open_orders(symbol):
-        oid = order.get("id")
-        if oid:
-            try:
-                self.exchange.cancel_order(oid, symbol)
-            except Exception as e:
-                self.log(f"MT5 pending-order cancel warning {oid}: {e}")
-
-
-def fx_reconcile_protection_mt5(self, position):
-    """Fail-closed reconciliation of broker-side MT5 SL protection."""
-    if not position or not self.last_protected_position:
-        return True
-    protected = self.last_protected_position
-    if protected.get("side") != position.get("side"):
-        return True
-    if protected.get("hold_sl_wait_reversal"):
-        return True
-    now = time.time()
-    if now - getattr(self, "last_protection_reconcile", 0.0) < 3.0:
-        return True
-    self.last_protection_reconcile = now
-    try:
-        rows = mt5.positions_get(ticket=int(position["id"])) or []
-        if not rows:
-            rows = mt5.positions_get(symbol=self.symbol) or []
-            rows = [r for r in rows if int(getattr(r, "magic", 0)) == int(self.mt5_magic)]
-        if not rows:
-            return True
-        broker_pos = rows[0]
-        expected_sl = float(protected.get("sl") or 0.0)
-        actual_sl = float(broker_pos.sl or 0.0)
-        point = float((mt5.symbol_info(self.symbol) or {}).point if mt5.symbol_info(self.symbol) else 0.00001)
-        tolerance = max(point * 2.0, 1e-12)
-        if expected_sl <= 0:
-            raise RuntimeError("Bot protection state has no valid SL price.")
-        if actual_sl <= 0 or abs(actual_sl - expected_sl) > tolerance:
-            self.log(f"PROTECTION REPAIR: broker SL={actual_sl:.10g}, expected={expected_sl:.10g}")
-            self.exchange.modify_position_sl(self.symbol, position, expected_sl)
-            time.sleep(0.2)
-            verify = mt5.positions_get(ticket=int(broker_pos.ticket)) or []
-            verified_sl = float(verify[0].sl or 0.0) if verify else 0.0
-            if verified_sl <= 0 or abs(verified_sl - expected_sl) > tolerance:
-                raise RuntimeError("Broker-side SL repair could not be verified.")
-            self.log("PROTECTION REPAIR VERIFIED ✓")
-        return True
-    except Exception as e:
-        self.log(f"CRITICAL PROTECTION RECONCILIATION FAILURE: {e}")
-        try:
-            p = fx_fetch_position(self, self.symbol)
-            if p:
-                fx_close_position_market(self, self.symbol, p["side"], p["qty"])
-                self.log("FAIL-CLOSED: unprotected Forex position was closed.")
-        except Exception as close_error:
-            self.log(f"!!! FAIL-CLOSED CLOSE FAILED !!! {close_error}")
-            self.is_running = False
-        return False
-
-
-def fx_create_protection_orders(self, symbol, position_side, position_qty,
-                                 sl, tp1, tp2, tp_qty_mode,
-                                 tp1_close_value, tp2_close_value):
-    qty = fx_safe_amount(self, symbol, position_qty)
-    if qty <= 0:
-        raise RuntimeError("Actual MT5 position volume is invalid.")
-    hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
-
-    tp1_qty = tp2_qty = 0.0
-    if not hold_all_reverse:
-        tp1_qty, tp2_qty = self.calculate_tp_close_quantities(
-            symbol, qty, tp_qty_mode, tp1_close_value, tp2_close_value
-        )
-
-    # Hold-SL WAIT is handled before this method in the unchanged V8 main loop.
-    pos = fx_fetch_position(self, symbol)
-    if not pos:
-        raise RuntimeError("MT5 position disappeared before SL installation.")
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        sl_order = self.exchange.modify_position_sl(symbol, pos, sl)
-    else:
-        sl_order = self.exchange.modify_position_sl(symbol, pos, sl)
-    self.log(f"MT5 BROKER-SIDE SL ACTIVE ✓ | SL={sl}")
-    # TP1/TP2 are bot-managed because MT5 position-level TP supports only one TP.
-    created = [("SL", sl_order)]
-    if not hold_all_reverse:
-        created.append(("TP1", {
-            "id": f"MT5-TP1-{time.time_ns()}",
-            "status": "open",
-            "filled": 0.0,
-            "price": float(tp1),
-            "qty": float(tp1_qty),
-            "info": {"managed_by_bot": True},
-        }))
-        created.append(("TP2", {
-            "id": f"MT5-TP2-{time.time_ns()}",
-            "status": "open",
-            "filled": 0.0,
-            "price": float(tp2),
-            "qty": float(tp2_qty),
-            "info": {"managed_by_bot": True},
-        }))
-    return created
-
-
-def fx_verify_protection_orders(self, symbol, created):
-    if not created:
-        return True
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        pos = self.exchange.paper_positions.get(symbol)
-        return bool(pos and float(pos.get("info", {}).get("sl", 0.0)) > 0)
-    rows = mt5.positions_get(symbol=symbol) or []
-    rows = [r for r in rows if int(r.magic) == int(self.mt5_magic)]
-    if not rows:
-        return False
-    sl_orders = [o for label,o in created if label in ("SL","BREAK-EVEN SL")]
-    if not sl_orders:
-        return True
-    requested = float(sl_orders[0].get("sl") or 0.0)
-    return float(rows[0].sl or 0.0) > 0 and abs(float(rows[0].sl) - requested) <= max(float(mt5.symbol_info(symbol).point)*2, 1e-12)
-
-
-def fx_manage_tp_be(self, position):
-    """MT5 manual TP1/TP2 + BE manager; broker SL remains the hard protection."""
-    if not position or not self.last_protected_position:
-        return
-    if self.v_hold_until_all_reverse.get():
-        return
-    protected = self.last_protected_position
-    if protected.get("side") != position.get("side"):
-        return
-    symbol = self.symbol
-    price = self._current_market_price(symbol)
-    side = position["side"]
-    tp1 = float(protected.get("tp1") or 0)
-    tp2 = float(protected.get("tp2") or 0)
-    tp1_id = protected.get("tp1_id")
-    tp2_id = protected.get("tp2_id")
-    # Track TP1/TP2 with bot state.
-    if not protected.get("tp1_hit"):
-        hit = price >= tp1 if side == "LONG" else price <= tp1
-        if hit and tp1_id:
-            tp1_qty = float(protected.get("tp1_qty") or 0)
-            current_qty = float(position.get("qty") or 0)
-            close_qty = min(tp1_qty, current_qty)
-            if close_qty > 0:
-                self.log(f"TP1 HIT ✓ | Price={price:.12g} | Closing={close_qty:g} lots")
-                fx_close_position_market(self, symbol, side, close_qty)
-                protected["tp1_hit"] = True
-                self._mark_tp1_hit_for_stats()
-                time.sleep(0.5)
-                remaining = fx_fetch_position(self, symbol)
-                if remaining and self.v_tp1_be.get():
-                    be = fx_safe_price(self, symbol, remaining["entry"])
-                    self.exchange.modify_position_sl(symbol, remaining, be)
-                    protected["sl"] = be
-                    protected["sl_id"] = f"MT5-BE-{time.time_ns()}"
-                    self.tp1_be_done = True
-                    self.log(f"BREAK-EVEN ACTIVE ✓ | Entry={remaining['entry']:.12g} | SL={be:.12g}")
-                return
-
-    # TP2 is evaluated against the remaining position.
-    if protected.get("tp1_hit") and not protected.get("tp2_hit"):
-        hit = price >= tp2 if side == "LONG" else price <= tp2
-        if hit:
-            remaining = fx_fetch_position(self, symbol)
-            if remaining:
-                self.log(f"TP2 HIT ✓ | Price={price:.12g} | Closing remaining={remaining['qty']:g} lots")
-                fx_close_position_market(self, symbol, side, remaining["qty"])
-                protected["tp2_hit"] = True
-                return
-
-    # PAPER mode must emulate the broker-side SL because no real order exists.
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        sl = float(protected.get("sl") or 0)
-        if sl:
-            hit = price <= sl if side == "LONG" else price >= sl
-            if hit:
-                self.log(f"PAPER SL HIT | Price={price:.12g} | SL={sl:.12g}")
-                fx_close_position_market(self, symbol, side, position["qty"])
-
-
-def fx_detect_exit_reason(self, protected):
-    if not protected:
-        return "UNKNOWN"
-    symbol = self.symbol
-    try:
-        price = self._current_market_price(symbol)
-    except Exception:
-        return "UNKNOWN"
-    side = protected.get("side")
-    sl = float(protected.get("sl") or 0)
-    tp1 = float(protected.get("tp1") or 0)
-    tp2 = float(protected.get("tp2") or 0)
-    if protected.get("tp2_hit"):
-        return "TP2"
-    if protected.get("tp1_hit") and not protected.get("tp2_hit"):
-        # If position is now flat after TP2 it would have been marked above.
-        return "TP1"
-    if sl > 0 and ((side == "LONG" and price <= sl) or (side == "SHORT" and price >= sl)):
-        return "SL"
-    return "UNKNOWN"
-
-
-def fx_emergency_flatten(self, reason, equity, threshold):
-    self.log(
-        f"CRITICAL MT5 CAPITAL CIRCUIT BREAKER: Equity={equity:.8f} <= "
-        f"Threshold={threshold:.8f} | {reason}"
-    )
-    self.send_telegram(
-        f"CRITICAL MT5 CAPITAL STOP: equity {equity:.4f} <= {threshold:.4f}. "
-        "All account positions will be closed and bot stopped."
-    )
-    scope = str(getattr(self, "v_emergency_scope", tk.StringVar(value="BOT_ONLY")).get()).upper()
-    account_wide = scope == "ALL_ACCOUNT"
-    self.log(f"EMERGENCY CAPITAL STOP SCOPE={scope}")
-    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
-        if account_wide:
-            self.exchange.paper_positions.clear()
-        else:
-            self.exchange.paper_positions.pop(self.symbol, None)
-        self.exchange.paper_equity = self.exchange.paper_balance
-    else:
-        rows = list(mt5.positions_get() or [])
-        if not account_wide:
-            rows = [p for p in rows if int(getattr(p, "magic", 0)) == int(self.mt5_magic) and str(getattr(p, "symbol", "")) == str(self.symbol)]
-        for p in rows:
-            try:
-                tick = mt5.symbol_info_tick(p.symbol)
-                if tick is None:
-                    continue
-                close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
-                price = tick.bid if p.type == mt5.POSITION_TYPE_BUY else tick.ask
-                req = {
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": p.symbol,
-                    "volume": float(p.volume),
-                    "type": close_type,
-                    "position": int(p.ticket),
-                    "price": float(price),
-                    "deviation": 50,
-                    "magic": int(self.mt5_magic),
-                    "comment": "UniversalForexBotV1 CAPITAL STOP",
-                    "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": self.exchange._filling(p.symbol),
-                }
-                result = mt5.order_send(req)
-                self.log(
-                    f"CAPITAL STOP: {p.symbol} ticket={p.ticket} result="
-                    f"{getattr(result,'retcode',None)}"
-                )
-            except Exception as e:
-                self.log(f"CAPITAL STOP: FAILED {p.symbol} ticket={getattr(p,'ticket','?')}: {e}")
-        # Cancel pending orders in the same scope as the capital stop.
-        pending_rows = list(mt5.orders_get() or [])
-        if not account_wide:
-            pending_rows = [o for o in pending_rows if int(getattr(o, "magic", 0)) == int(self.mt5_magic) and str(getattr(o, "symbol", "")) == str(self.symbol)]
-        for o in pending_rows:
-            try:
-                result = mt5.order_send({
-                    "action": mt5.TRADE_ACTION_REMOVE,
-                    "order": int(o.ticket),
-                    "symbol": o.symbol,
-                })
-                self.log(f"CAPITAL STOP: Pending order {o.ticket} cancel={getattr(result,'retcode',None)}")
-            except Exception as e:
-                self.log(f"CAPITAL STOP: Pending cancel failed {getattr(o,'ticket','?')}: {e}")
-
-        # Verify. Do not claim flat if MT5 still reports positions.
-        remaining = list(mt5.positions_get() or [])
-        if remaining:
-            self.log(f"!!! CAPITAL STOP WARNING: {len(remaining)} MT5 positions remain open.")
-        else:
-            self.log("CAPITAL STOP COMPLETE ✓: ALL MT5 account positions are flat.")
-    self.is_running = False
-    try:
-        self.root.after(0, lambda: (
-            self.btn_start.config(state="normal"),
-            self.btn_stop.config(state="disabled")
-        ))
-    except Exception:
-        pass
-
-
-def fx_fetch_strategy_ohlcv(self, timeframe, limit):
-    return self.exchange.fetch_ohlcv(self.symbol, timeframe=timeframe, limit=limit)
-
-
-def fx_start_bot(self):
-    if self.is_running:
-        return
-    try:
-        preflight = self._validate_strategy_preflight()
-        self.save_settings()
-        self.log(
-            "STRATEGY PREFLIGHT PASS: "
-            f"Mode={preflight['signal_mode']} | MinScore={preflight['min_score']} | "
-            f"EvidenceFamilies={preflight['evidence_min_families']} | "
-            f"FamilyMin={preflight['evidence_family_min_score']:.2f}"
-        )
-        if mt5 is None:
-            raise RuntimeError("MetaTrader5 is not installed. Run: py -m pip install MetaTrader5")
-        exchange_id = "mt5_forex"
-        mode = self.v_account_mode.get().strip().upper()
-        if mode not in ("MT5_PAPER","MT5_TERMINAL","MT5_LIVE"):
-            raise ValueError("Choose MT5_PAPER, MT5_TERMINAL or MT5_LIVE.")
-        self.exchange_id = exchange_id
-        self.mt5_magic = int(self.e_magic.get().strip()) if hasattr(self, "e_magic") else 26091802
-        self.reference_leverage = float(self.e_lev.get().strip())
-        self.exchange = fx_build_exchange(
-            self, exchange_id, self.e_api_key.get().strip(),
-            self.e_api_secret.get().strip(), mode
-        )
-        self.symbol = self.normalize_symbol(self.exchange, exchange_id, self.e_symbol.get())
-        self.exchange.symbol = self.symbol
-        # Broker symbol info / volume rules are logged before any order.
-        info = mt5.symbol_info(self.symbol)
-        if info is None:
-            raise RuntimeError(f"MT5 symbol_info unavailable for {self.symbol}")
-        self.log(
-            f"FOREX SYMBOL: {self.symbol} | Digits={info.digits} | Point={info.point} | "
-            f"Contract={info.trade_contract_size} | Lots min/step/max="
-            f"{info.volume_min}/{info.volume_step}/{info.volume_max} | "
-            f"StopsLevel={info.trade_stops_level} points"
-        )
-        if self.v_use_spread_filter.get():
-            self.log(f"FOREX SPREAD FILTER: ON | Max={self.e_max_spread_points.get().strip()} points")
-        self.configure_leverage(self.symbol, self.reference_leverage)
-
-        max_trades = int(self.e_max_trades.get().strip())
-        if max_trades < 0:
-            raise ValueError("Max Trades cannot be negative.")
-        self.start_balance = self.fetch_balance_total()
-        self.total_trades = self.opened_trades = self.winning_trades = self.losing_trades = 0
-        self.trade_pnls = []
-        self.active_trade = None
-        self.session_started_at = time.time()
-        self.session_max_trades = max_trades
-        self.reentry_direction_lock = None
-        self.last_protected_position = None
-        self.tp1_be_done = False
-        self.hold_sl_threshold_hit = False
-        self.hold_sl_threshold_logged = False
-        self.last_entry_candle_ts = None
-        self.last_flat_time = 0.0
-
-        self.log(
-            f"CONNECTED: MT5 {mode} | {self.symbol} | "
-            f"Start Balance={self.start_balance:.4f} | "
-            f"Equity={self.fetch_account_equity():.4f}"
-        )
-        self.log("FOREX ENGINE: MT5-native candles + broker lot rules + MT5 P/L/margin calculations")
-        self.log("STRATEGY ENGINE: V8 indicator/entry/reversal logic preserved unchanged.")
-        self.log(
-            f"SL/TP engine: {self.v_sl_mode.get()} / {self.v_tp_mode.get()} | "
-            "Forex ROI targets use actual MT5 margin + order_calc_profit after fill."
-        )
-
-        self.is_running = True
-        self.btn_start.config(state="disabled")
-        self.btn_stop.config(state="normal")
-        self.bot_thread = threading.Thread(target=self._run_bot_logic, daemon=True)
-        self.bot_thread.start()
-    except Exception as e:
-        self.log(f"START FAILED: {e}")
-        self.is_running = False
-        try:
-            messagebox.showerror("Forex bot start failed", str(e))
-        except Exception:
-            pass
-
-
-# Spread filter: injected at the beginning of each strategy cycle without changing
-# any indicator or signal formulas. We wrap the original method only to gate entries.
-_original_run_bot_logic_v1 = UniversalFuturesBotGUI._run_bot_logic
-
-def fx_run_bot_logic(self):
-    # The V8 main loop is retained. A lightweight spread guard is enforced by
-    # monkey-patching desired order creation through a flag checked by sizing.
-    self._fx_spread_block = False
-    return _original_run_bot_logic_v1(self)
-
-# Extra fields/settings compatibility.
-_original_save_settings_v1 = UniversalFuturesBotGUI.save_settings
-def fx_save_settings(self):
-    _original_save_settings_v1(self)
-    try:
-        cfg_path = CONFIG_FILE
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        cfg["exchange"] = "mt5_forex"
-        cfg["account_mode"] = self.v_account_mode.get()
-        cfg["mt5_server"] = getattr(self, "e_mt5_server", tk.Entry()).get().strip() if hasattr(self,"e_mt5_server") else ""
-        cfg["paper_balance"] = getattr(self, "e_paper_balance", tk.Entry()).get().strip() if hasattr(self,"e_paper_balance") else "1000"
-        cfg["use_spread_filter"] = self.v_use_spread_filter.get() if hasattr(self,"v_use_spread_filter") else False
-        cfg["max_spread_points"] = self.e_max_spread_points.get().strip() if hasattr(self,"e_max_spread_points") else "30"
-        # V2 Forex guardrails
-        cfg.update({
-            "v2_auto_symbol": self.v_auto_symbol.get(),
-            "v2_use_slippage": self.v_use_slippage.get(),
-            "v2_max_slippage_points": self.e_max_slippage_points.get().strip(),
-            "v2_use_session": self.v_use_session.get(),
-            "v2_session_start": self.e_session_start.get().strip(),
-            "v2_session_end": self.e_session_end.get().strip(),
-            "v2_friday_protect": self.v_friday_protect.get(),
-            "v2_friday_cutoff": self.e_friday_cutoff.get().strip(),
-            "v2_use_daily_loss": self.v_use_daily_loss.get(),
-            "v2_daily_loss_pct": self.e_daily_loss_pct.get().strip(),
-            "v2_use_daily_profit": self.v_use_daily_profit.get(),
-            "v2_daily_profit_pct": self.e_daily_profit_pct.get().strip(),
-            "v2_use_loss_streak": self.v_use_loss_streak.get(),
-            "v2_max_loss_streak": self.e_max_loss_streak.get().strip(),
-            "v2_use_trailing": self.v_use_trailing.get(),
-            "v2_trail_activation": self.e_trail_activation.get().strip(),
-            "v2_trail_distance": self.e_trail_distance.get().strip(),
-            "v2_use_atr_sl": self.v_use_atr_sl.get(),
-            "v2_atr_sl_mult": self.e_atr_sl_mult.get().strip(),
-            "v2_use_news": self.v_use_news.get(),
-            "v2_news_minutes": self.e_news_minutes.get().strip(),
-            "v2_use_correlation": self.v_use_correlation.get(),
-            "v2_corr_threshold": self.e_corr_threshold.get().strip(),
-            "v2_corr_symbols": self.e_corr_symbols.get().strip(),
-            "v2_scanner": self.v_scanner.get(),
-            "v2_scan_symbols": self.e_scan_symbols.get().strip(),
-            "v2_reconnect": self.v_reconnect.get(),
-            "v2_position_recovery": self.v_position_recovery.get(),
-            "v2_magic": self.e_magic.get().strip(),
-        })
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=4)
-    except Exception as e:
-        self.log(f"Forex config extension save warning: {e}")
-
-# Use a Forex-safe load wrapper for the extra controls while retaining every V8 strategy setting.
-_original_load_settings_v1 = UniversalFuturesBotGUI.load_settings
-def fx_load_settings(self):
-    _original_load_settings_v1(self)
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        self.v_exchange.set("mt5_forex")
-        self.v_account_mode.set(cfg.get("account_mode","MT5_PAPER"))
-        if hasattr(self, "e_mt5_server"):
-            self.e_mt5_server.delete(0, tk.END)
-            self.e_mt5_server.insert(0, cfg.get("mt5_server",""))
-        if hasattr(self, "e_paper_balance"):
-            self.e_paper_balance.delete(0, tk.END)
-            self.e_paper_balance.insert(0, cfg.get("paper_balance","1000"))
-        if hasattr(self, "v_use_spread_filter"):
-            self.v_use_spread_filter.set(cfg.get("use_spread_filter",False))
-        if hasattr(self, "e_max_spread_points"):
-            self.e_max_spread_points.delete(0, tk.END)
-            self.e_max_spread_points.insert(0, cfg.get("max_spread_points","30"))
-        # V2 Forex guardrails
-        self.v_auto_symbol.set(cfg.get("v2_auto_symbol", True))
-        self.v_use_slippage.set(cfg.get("v2_use_slippage", True))
-        self.e_max_slippage_points.delete(0, tk.END); self.e_max_slippage_points.insert(0, cfg.get("v2_max_slippage_points","20"))
-        self.v_use_session.set(cfg.get("v2_use_session", False))
-        self.e_session_start.delete(0, tk.END); self.e_session_start.insert(0, cfg.get("v2_session_start","07:00"))
-        self.e_session_end.delete(0, tk.END); self.e_session_end.insert(0, cfg.get("v2_session_end","20:00"))
-        self.v_friday_protect.set(cfg.get("v2_friday_protect", True))
-        self.e_friday_cutoff.delete(0, tk.END); self.e_friday_cutoff.insert(0, cfg.get("v2_friday_cutoff","18:00"))
-        self.v_use_daily_loss.set(cfg.get("v2_use_daily_loss", True))
-        self.e_daily_loss_pct.delete(0, tk.END); self.e_daily_loss_pct.insert(0, cfg.get("v2_daily_loss_pct","3.0"))
-        self.v_use_daily_profit.set(cfg.get("v2_use_daily_profit", False))
-        self.e_daily_profit_pct.delete(0, tk.END); self.e_daily_profit_pct.insert(0, cfg.get("v2_daily_profit_pct","5.0"))
-        self.v_use_loss_streak.set(cfg.get("v2_use_loss_streak", True))
-        self.e_max_loss_streak.delete(0, tk.END); self.e_max_loss_streak.insert(0, cfg.get("v2_max_loss_streak","3"))
-        self.v_use_trailing.set(cfg.get("v2_use_trailing", False))
-        self.e_trail_activation.delete(0, tk.END); self.e_trail_activation.insert(0, cfg.get("v2_trail_activation","30"))
-        self.e_trail_distance.delete(0, tk.END); self.e_trail_distance.insert(0, cfg.get("v2_trail_distance","20"))
-        self.v_use_atr_sl.set(cfg.get("v2_use_atr_sl", False))
-        self.e_atr_sl_mult.delete(0, tk.END); self.e_atr_sl_mult.insert(0, cfg.get("v2_atr_sl_mult","1.5"))
-        self.v_use_news.set(cfg.get("v2_use_news", False))
-        self.e_news_minutes.delete(0, tk.END); self.e_news_minutes.insert(0, cfg.get("v2_news_minutes","30"))
-        self.v_use_correlation.set(cfg.get("v2_use_correlation", False))
-        self.e_corr_threshold.delete(0, tk.END); self.e_corr_threshold.insert(0, cfg.get("v2_corr_threshold","0.85"))
-        self.e_corr_symbols.delete(0, tk.END); self.e_corr_symbols.insert(0, cfg.get("v2_corr_symbols","EURUSD,GBPUSD,USDCHF,USDJPY"))
-        self.v_scanner.set(cfg.get("v2_scanner", False))
-        self.e_scan_symbols.delete(0, tk.END); self.e_scan_symbols.insert(0, cfg.get("v2_scan_symbols","EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD"))
-        self.v_reconnect.set(cfg.get("v2_reconnect", True))
-        self.v_position_recovery.set(cfg.get("v2_position_recovery", True))
-        self.e_magic.delete(0, tk.END); self.e_magic.insert(0, cfg.get("v2_magic","26091802"))
-    except Exception:
-        pass
-
-
-# ============================================================
-# V2 FOREX SAFETY / EXECUTION EXTENSIONS
-# Strategy and indicator formulas above remain unchanged.
-# These modules add broker-aware execution and optional guardrails.
-# ============================================================
-
-from datetime import datetime, timezone
-
-def _v2_bool(bot, name, default=False):
-    try:
-        return bool(getattr(bot, name).get())
-    except Exception:
-        return default
-
-def _v2_float(bot, name, default):
-    try:
-        return float(getattr(bot, name).get().strip())
-    except Exception:
-        return float(default)
-
-def _v2_time_hm(value, default=(0, 0)):
-    try:
-        h, m = [int(x) for x in str(value).strip().split(":")[:2]]
-        if 0 <= h <= 23 and 0 <= m <= 59:
-            return h, m
-    except Exception:
-        pass
-    return default
-
-def fx_v2_in_session(self):
-    if not _v2_bool(self, "v_use_session", False):
-        return True
-    now = datetime.now(timezone.utc)
-    cur = now.hour * 60 + now.minute
-    sh, sm = _v2_time_hm(self.e_session_start.get(), (7, 0))
-    eh, em = _v2_time_hm(self.e_session_end.get(), (20, 0))
-    start = sh * 60 + sm
-    end = eh * 60 + em
-    if start == end:
-        return True
-    if start < end:
-        return start <= cur < end
-    return cur >= start or cur < end
-
-def fx_v2_friday_block(self):
-    if not _v2_bool(self, "v_friday_protect", True):
-        return False
-    now = datetime.now(timezone.utc)
-    if now.weekday() != 4:
-        return False
-    h, m = _v2_time_hm(self.e_friday_cutoff.get(), (18, 0))
-    return now.hour * 60 + now.minute >= h * 60 + m
-
-def fx_acquire_profile_lock(self):
-    """Prevent two copies of the same Forex bot profile from trading concurrently."""
-    if getattr(self, "profile_lock_fd", None) is not None:
-        return True
-    path = Path(self.profile_lock_file)
-    try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, f"PID={os.getpid()}\nTIME={time.time():.3f}\nSYMBOL={self.symbol}\nMAGIC={self.mt5_magic}\n".encode())
-        self.profile_lock_fd = fd
-        return True
-    except FileExistsError:
-        try:
-            age = time.time() - path.stat().st_mtime
-            if age > 86400:
-                path.unlink(missing_ok=True)
-                return self.fx_acquire_profile_lock()
-        except Exception:
-            pass
-        raise RuntimeError(f"Another Forex bot instance appears to own the profile lock: {path}")
-
-def fx_release_profile_lock(self):
-    fd = getattr(self, "profile_lock_fd", None)
-    if fd is None:
-        return
-    try:
-        os.close(fd)
-    except Exception:
-        pass
-    self.profile_lock_fd = None
-    try:
-        Path(self.profile_lock_file).unlink(missing_ok=True)
-    except Exception:
-        pass
-
-def fx_persist_runtime_state(self):
-    try:
-        p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) and self.symbol else None
-        protected = dict(self.last_protected_position or {})
-        state = {
-            "version": 1, "timestamp": time.time(), "symbol": self.symbol, "magic": int(getattr(self, "mt5_magic", 0)),
-            "position": p or {}, "protected": protected, "tp1_be_done": bool(getattr(self, "tp1_be_done", False)),
-            "reentry_direction_lock": getattr(self, "reentry_direction_lock", None),
-        }
-        tmp = Path(self.runtime_state_file).with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, self.runtime_state_file)
-    except Exception as e:
-        self.log(f"RUNTIME CHECKPOINT WARNING: {e}")
-
-def fx_load_runtime_state(self):
-    try:
-        path = Path(self.runtime_state_file)
-        if not path.exists():
-            return None
-        state = json.loads(path.read_text(encoding="utf-8"))
-        if str(state.get("symbol")) != str(self.symbol) or int(state.get("magic", 0)) != int(self.mt5_magic):
-            return None
-        age = time.time() - float(state.get("timestamp", 0))
-        if age > 3 * 86400:
-            return None
-        return state
-    except Exception as e:
-        self.log(f"RUNTIME RECOVERY READ WARNING: {e}")
-        return None
-
-def fx_clear_runtime_state(self):
-    try:
-        Path(self.runtime_state_file).unlink(missing_ok=True)
-    except Exception:
-        pass
-
-def fx_v2_day_start(self, equity):
-    key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if getattr(self, "v2_day_key", None) != key or getattr(self, "v2_day_start_equity", 0) <= 0:
-        self.v2_day_key = key
-        self.v2_day_start_equity = float(equity)
-        self.v2_loss_streak = 0
-        self.log(f"V2 DAILY RISK RESET | UTC={key} | Start Equity={equity:.4f}")
-
-def fx_v2_daily_status(self):
-    equity = float(self.fetch_account_equity())
-    fx_v2_day_start(self, equity)
-    base = max(float(self.v2_day_start_equity), 1e-12)
-    pct = (equity - base) / base * 100.0
-    return equity, pct
-
-def fx_v2_close_bot_position(self, reason):
-    try:
-        p = fx_fetch_position(self, self.symbol)
-        if p:
-            self.log(f"V2 RISK FLATTEN: {reason} | {p['side']} {p['qty']} {self.symbol}")
-            fx_cancel_all_open_orders(self, self.symbol)
-            fx_close_position_market(self, self.symbol, p["side"], p["qty"])
-            time.sleep(0.5)
-    except Exception as e:
-        self.log(f"V2 RISK FLATTEN FAILED: {e}")
-
-def fx_v2_news_block(self, symbol):
-    if not _v2_bool(self, "v_use_news", False):
-        return False
-    now = time.time()
-    if now - getattr(self, "v2_last_news_check", 0) > 300:
-        try:
-            url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-            r = requests.get(url, timeout=5)
-            r.raise_for_status()
-            data = r.json()
-            self.v2_news_cache = data if isinstance(data, list) else []
-            self.v2_last_news_check = now
-        except Exception as e:
-            # Fail closed when the user explicitly enabled the news safety gate.
-            # An unavailable calendar must never silently disable a safety filter.
-            self.log(f"NEWS FILTER FAIL-CLOSED: calendar unavailable; entry blocked. {e}")
-            self.v2_last_news_check = now
-            return True
-    minutes = max(0.0, _v2_float(self, "e_news_minutes", 30))
-    pair = str(symbol).upper().replace("/", "")
-    currencies = []
-    if len(pair) >= 6:
-        currencies = [pair[:3], pair[3:6]]
-    now_dt = datetime.now(timezone.utc)
-    for item in getattr(self, "v2_news_cache", []):
-        try:
-            impact = str(item.get("impact", "")).strip().lower()
-            if impact != "high":
-                continue
-            country = str(item.get("country", "")).upper()
-            if currencies and country not in currencies:
-                continue
-            raw = item.get("date") or item.get("datetime")
-            if not raw:
-                continue
-            event_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-            if event_dt.tzinfo is None:
-                event_dt = event_dt.replace(tzinfo=timezone.utc)
-            delta = abs((event_dt.astimezone(timezone.utc) - now_dt).total_seconds()) / 60.0
-            if delta <= minutes:
-                title = item.get("title") or item.get("event") or "High impact event"
-                self.log(f"NEWS BLOCK: {title} | {country} | ±{minutes:g} min")
-                return True
-        except Exception:
-            continue
-    return False
-
-def fx_v2_correlation_block(self, symbol):
-    if not _v2_bool(self, "v_use_correlation", False):
-        return False
-    threshold = min(0.999, max(0.0, _v2_float(self, "e_corr_threshold", 0.85)))
-    symbols = [x.strip().upper() for x in self.e_corr_symbols.get().split(",") if x.strip()]
-    base_raw = str(symbol).upper().replace("/", "")
-    for raw in symbols:
-        try:
-            candidate = self.exchange.normalize(raw)
-            if candidate == symbol:
-                continue
-            existing = self.exchange.fetch_positions([candidate])
-            if not existing:
-                continue
-            a = self.exchange.fetch_ohlcv(symbol, "1h", 80)
-            b = self.exchange.fetch_ohlcv(candidate, "1h", 80)
-            da = pd.DataFrame(a, columns=["time","open","high","low","close","vol"])
-            db = pd.DataFrame(b, columns=["time","open","high","low","close","vol"])
-            n = min(len(da), len(db))
-            if n < 30:
-                continue
-            corr = da["close"].pct_change().tail(n).corr(db["close"].pct_change().tail(n))
-            if pd.notna(corr) and abs(float(corr)) >= threshold:
-                self.log(f"CORRELATION BLOCK: {candidate} position exists | 1H corr={float(corr):.3f} >= {threshold:.3f}")
-                return True
-        except Exception:
-            continue
-    return False
-
-def fx_v2_apply_atr_sl(self, symbol, side, entry, sl, qty):
-    if not _v2_bool(self, "v_use_atr_sl", False):
-        return sl
-    try:
-        mult = max(0.1, _v2_float(self, "e_atr_sl_mult", 1.5))
-        rows = self.exchange.fetch_ohlcv(symbol, self.v_tf.get(), 120)
-        d = pd.DataFrame(rows, columns=["time","open","high","low","close","vol"])
-        if len(d) < 20:
-            return sl
-        tr = pd.concat([
-            d["high"] - d["low"],
-            (d["high"] - d["close"].shift(1)).abs(),
-            (d["low"] - d["close"].shift(1)).abs(),
-        ], axis=1).max(axis=1)
-        atr = float(calculate_rma(tr, 14).iloc[-2])
-        if not np.isfinite(atr) or atr <= 0:
-            return sl
-        candidate = entry - mult * atr if side == "LONG" else entry + mult * atr
-        candidate = fx_safe_price(self, symbol, candidate)
-        # Never make ATR stop less protective than the configured stop.
-        if side == "LONG":
-            return min(float(sl), candidate)
-        return max(float(sl), candidate)
-    except Exception as e:
-        self.log(f"ATR SL WARNING: {e}")
-        return sl
-
-def fx_v2_trailing_manage(self, position):
-    if not position or not _v2_bool(self, "v_use_trailing", False):
-        return
-    try:
-        symbol = self.symbol
-        info = mt5.symbol_info(symbol)
-        tick = mt5.symbol_info_tick(symbol)
-        if info is None or tick is None:
-            return
-        point = float(info.point or 0.00001)
-        activation = max(0.0, _v2_float(self, "e_trail_activation", 30)) * point
-        distance = max(1.0, _v2_float(self, "e_trail_distance", 20)) * point
-        side = position["side"]
-        entry = float(position["entry"])
-        current = float(tick.bid if side == "LONG" else tick.ask)
-        favorable = current - entry if side == "LONG" else entry - current
-        if favorable < activation:
-            return
-        new_sl = current - distance if side == "LONG" else current + distance
-        new_sl = fx_safe_price(self, symbol, new_sl)
-        old_sl = float((self.last_protected_position or {}).get("sl") or 0.0)
-        improve = (new_sl > old_sl) if side == "LONG" else (new_sl < old_sl or old_sl == 0)
-        valid = (new_sl < current and new_sl > entry) if side == "LONG" else (new_sl > current and new_sl < entry)
-        if improve and valid:
-            self.exchange.modify_position_sl(symbol, position, new_sl)
-            if self.last_protected_position is not None:
-                self.last_protected_position["sl"] = new_sl
-            self.v2_trailing_last_log = time.time()
-            self.log(f"TRAILING SL UPDATED ✓ | {side} | Entry={entry:.8f} | SL={new_sl:.8f}")
-    except Exception as e:
-        self.log(f"TRAILING STOP WARNING: {e}")
-
-def fx_v2_reconnect(self):
-    try:
-        info = mt5.account_info()
-        if info is not None:
-            return True
-    except Exception:
-        pass
-    try:
-        mt5.shutdown()
-    except Exception:
-        pass
-    try:
-        if mt5.initialize():
-            self.log("MT5 RECONNECTED ✓")
-            mt5.symbol_select(self.symbol, True)
-            return True
-    except Exception as e:
-        self.log(f"MT5 RECONNECT FAILED: {e}")
-    return False
-
-def fx_v2_scanner(self):
-    if not _v2_bool(self, "v_scanner", False):
-        return
-    if time.time() - getattr(self, "v2_last_scan", 0) < 300:
-        return
-    self.v2_last_scan = time.time()
-    rows = []
-    for raw in [x.strip() for x in self.e_scan_symbols.get().split(",") if x.strip()]:
-        try:
-            sym = self.exchange.normalize(raw)
-            o = self.exchange.fetch_ohlcv(sym, self.v_tf.get(), 80)
-            d = pd.DataFrame(o, columns=["time","open","high","low","close","vol"])
-            if len(d) < 30:
-                continue
-            d = calculate_supertrend(d, int(self.e_st_len.get()), float(self.e_st_mult.get()), self.v_st_source.get(), self.v_st_change_atr.get())
-            ema = d["close"].ewm(span=int(self.e_ema_len.get()), adjust=False).mean()
-            st = "BUY" if bool(d["trend"].iloc[-2]) else "SELL"
-            em = "BUY" if float(d["close"].iloc[-2]) > float(ema.iloc[-2]) else "SELL"
-            rows.append(f"{sym}:{st}/{em}")
-        except Exception:
-            continue
-    if rows:
-        self.log("V2 SCANNER | " + " | ".join(rows))
-
-def fx_v2_watchdog(self):
-    self.v2_watchdog_running = True
-    while self.is_running and self.v2_watchdog_running:
-        try:
-            if _v2_bool(self, "v_reconnect", True):
-                fx_v2_reconnect(self)
-            equity, day_pct = fx_v2_daily_status(self)
-
-            if _v2_bool(self, "v_use_daily_loss", True):
-                limit = abs(_v2_float(self, "e_daily_loss_pct", 3.0))
-                if day_pct <= -limit:
-                    self.log(f"DAILY LOSS LIMIT HIT: {day_pct:.2f}% <= -{limit:.2f}%")
-                    fx_v2_close_bot_position(self, "Daily loss limit")
-                    self.stop_bot()
-                    break
-
-            if _v2_bool(self, "v_use_daily_profit", False):
-                target = abs(_v2_float(self, "e_daily_profit_pct", 5.0))
-                if day_pct >= target:
-                    self.log(f"DAILY PROFIT LOCK HIT: {day_pct:.2f}% >= {target:.2f}%")
-                    fx_v2_close_bot_position(self, "Daily profit target")
-                    self.stop_bot()
-                    break
-
-            if _v2_bool(self, "v_use_loss_streak", True):
-                max_streak = max(1, int(_v2_float(self, "e_max_loss_streak", 3)))
-                if self.v2_loss_streak >= max_streak:
-                    self.log(f"CONSECUTIVE LOSS STOP: {self.v2_loss_streak} losses reached.")
-                    fx_v2_close_bot_position(self, "Consecutive loss protection")
-                    self.stop_bot()
-                    break
-
-            p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) else None
-            if p:
-                with self.v2_guard_lock:
-                    self._manage_tp1_break_even(p)
-                    self._reconcile_protection_orders(p)
-                    fx_v2_trailing_manage(self, p)
-                fx_persist_runtime_state(self)
-            else:
-                fx_clear_runtime_state(self)
-            fx_v2_scanner(self)
-        except Exception as e:
-            self.log(f"V2 WATCHDOG WARNING: {e}")
-        for _ in range(5):
-            if not self.is_running or not self.v2_watchdog_running:
-                break
-            time.sleep(1)
-
-def fx_v2_open_market_position(self, symbol, signal, qty):
-    # Entry gates are checked immediately before broker order submission.
-    if not fx_v2_in_session(self):
-        raise RuntimeError("Entry blocked: outside configured UTC trading session.")
-    if fx_v2_friday_block(self):
-        raise RuntimeError("Entry blocked: Friday protection cutoff reached.")
-    if fx_v2_news_block(self, symbol):
-        raise RuntimeError("Entry blocked: high-impact economic news window.")
-    if fx_v2_correlation_block(self, symbol):
-        raise RuntimeError("Entry blocked: correlated bot position exists.")
-    requested_tick = mt5.symbol_info_tick(symbol)
-    info = mt5.symbol_info(symbol)
-    requested_mid = None
-    if requested_tick and info:
-        requested_mid = float(requested_tick.ask if signal == "BUY" else requested_tick.bid)
-    result = _fx_v2_original_open(self, symbol, signal, qty)
-    if _v2_bool(self, "v_use_slippage", True) and requested_mid is not None:
-        actual = float(result[1])
-        deviation_points = abs(actual - requested_mid) / float(info.point or 1e-5)
-        max_points = max(0.0, _v2_float(self, "e_max_slippage_points", 20))
-        self.log(f"SLIPPAGE CHECK: {deviation_points:.2f} points | Max={max_points:.2f}")
-        if deviation_points > max_points:
-            try:
-                p = fx_fetch_position(self, symbol)
-                if p:
-                    fx_close_position_market(self, symbol, p["side"], p["qty"])
-            finally:
-                raise RuntimeError(f"Entry rejected by slippage protection: {deviation_points:.2f} > {max_points:.2f} points.")
-    return result
-
-def fx_v2_pip_size(symbol):
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        raise RuntimeError(f"MT5 symbol_info unavailable for pip calculation: {symbol}")
-    point = float(info.point or 0.00001)
-    digits = int(info.digits)
-    return point * 10.0 if digits in (3, 5) else point
-
-def fx_v2_calculate_protection_prices(self, symbol, side, actual_entry, position_qty,
-                                      position_initial_margin, sl_target_pct, tp1_target_pct,
-                                      tp2_target_pct, sl_mode, tp_mode, leverage):
-    # V2 adds PIPS mode; V1 PRICE_% and ROI_% calculations are preserved.
-    if str(sl_mode).upper() == "PIPS" or str(tp_mode).upper() == "PIPS":
-        entry = float(actual_entry)
-        qty = float(position_qty)
-        pip = fx_v2_pip_size(symbol)
-        def px(target, mode, positive):
-            target = float(target)
-            if target <= 0:
-                raise RuntimeError("SL/TP targets must be greater than zero.")
-            if str(mode).upper() == "PIPS":
-                return entry + (pip * target if positive else -pip * target)
-            # Delegate each non-PIPS leg to the V1 engine.
-            return None
-        if str(sl_mode).upper() == "PIPS":
-            sl = px(sl_target_pct, "PIPS", side == "SHORT")
-        else:
-            base = _fx_v2_original_calc_protection(self, symbol, side, entry, qty,
-                                                    position_initial_margin, sl_target_pct,
-                                                    max(tp1_target_pct, 0.0001), max(tp2_target_pct, 0.0001),
-                                                    sl_mode, "PRICE_%", leverage)
-            sl = base[0]
-        if str(tp_mode).upper() == "PIPS":
-            tp1 = px(tp1_target_pct, "PIPS", side == "LONG")
-            tp2 = px(tp2_target_pct, "PIPS", side == "LONG")
-            if side == "SHORT":
-                tp1 = px(tp1_target_pct, "PIPS", False)
-                tp2 = px(tp2_target_pct, "PIPS", False)
-        else:
-            base = _fx_v2_original_calc_protection(self, symbol, side, entry, qty,
-                                                    position_initial_margin, max(sl_target_pct, 0.0001),
-                                                    tp1_target_pct, tp2_target_pct,
-                                                    "PRICE_%", tp_mode, leverage)
-            tp1, tp2 = base[1], base[2]
-        sl, tp1, tp2 = [fx_safe_price(self, symbol, x) for x in (sl, tp1, tp2)]
-        if side == "LONG" and not (sl < entry and tp1 > entry and tp2 > tp1):
-            raise RuntimeError("Calculated LONG Forex PIPS SL/TP prices are invalid.")
-        if side == "SHORT" and not (sl > entry and tp1 < entry and tp2 < tp1):
-            raise RuntimeError("Calculated SHORT Forex PIPS SL/TP prices are invalid.")
-        sl = fx_v2_apply_atr_sl(self, symbol, side, entry, sl, qty)
-        return sl, tp1, tp2, abs(sl-entry)/entry, abs(tp1-entry)/entry, abs(tp2-entry)/entry
-
-    vals = _fx_v2_original_calc_protection(self, symbol, side, actual_entry, position_qty,
-                                            position_initial_margin, sl_target_pct, tp1_target_pct,
-                                            tp2_target_pct, sl_mode, tp_mode, leverage)
-    sl = fx_v2_apply_atr_sl(self, symbol, side, actual_entry, vals[0], position_qty)
-    return (sl, vals[1], vals[2], abs(sl-actual_entry)/actual_entry, vals[4], vals[5])
-
-def fx_v2_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty):
-    if size_mode=="FIXED_QTY":
-        return fx_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty)
-    fraction=float(sl_price_fraction)
-    ai_active=(str(self.v_signal_mode.get()).strip().upper()=="AI_AGENT" and bool(getattr(self,"_ai_active_management",None)))
-    if ai_active:
-        self.log(f"AI SIZING AUTHORITY | Risk={float(risk_pct)*100.0:.3f}% | StopFraction={fraction:.8g} | Dynamic AI SL preserved")
-    elif _v2_bool(self,"v_use_atr_sl",False):
-        try:
-            rows=self.exchange.fetch_ohlcv(symbol,self.v_tf.get(),120)
-            d=pd.DataFrame(rows,columns=["time","open","high","low","close","vol"]); prev=d["close"].shift(1)
-            tr=pd.concat([d["high"]-d["low"],(d["high"]-prev).abs(),(d["low"]-prev).abs()],axis=1).max(axis=1)
-            fraction=(max(0.1,_v2_float(self,"e_atr_sl_mult",1.5))*float(calculate_rma(tr,14).iloc[-2]))/float(reference_price)
-        except Exception as e: self.log(f"ATR SIZING WARNING: {e}")
-    elif str(self.v_sl_mode.get()).upper()=="PIPS":
-        try: fraction=(fx_v2_pip_size(symbol)*float(self.e_sl_pct.get()))/float(reference_price)
-        except Exception: pass
-    return fx_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,fraction,size_mode,fixed_qty)
-
-def fx_v2_start_bot(self):
-    if self.is_running:
-        return
-    try:
-        self.mt5_magic = int(self.e_magic.get().strip())
-    except Exception:
-        self.mt5_magic = 26091802
-    fx_acquire_profile_lock(self)
-    try:
-        _fx_v2_original_start(self)
-    except Exception:
-        fx_release_profile_lock(self)
-        raise
-    if self.is_running:
-        try:
-            eq = self.fetch_account_equity()
-            fx_v2_day_start(self, eq)
-        except Exception as e:
-            self.log(f"V2 risk initialization warning: {e}")
-        fx_v2_recover_position(self)
-        if self.is_running:
-            self.v2_watchdog_running = True
-            self.v2_watchdog_thread = threading.Thread(target=fx_v2_watchdog, args=(self,), daemon=True)
-            self.v2_watchdog_thread.start()
-
-UniversalFuturesBotGUI.start_bot = fx_v2_start_bot
-
-# Save/load wrapper references the already extended V1 wrappers.
-_fx_v2_original_save = fx_save_settings
-_fx_v2_original_load = fx_load_settings
-
-def fx_v2_save_settings(self):
-    _fx_v2_original_save(self)
-
-def fx_v2_load_settings(self):
-    _fx_v2_original_load(self)
-
-UniversalFuturesBotGUI.save_settings = fx_v2_save_settings
-UniversalFuturesBotGUI.load_settings = fx_v2_load_settings
-
-
-# Bind overrides. No indicator/signal calculation function is modified.
-UniversalFuturesBotGUI.build_exchange = fx_build_exchange
-UniversalFuturesBotGUI.normalize_symbol = fx_normalize_symbol
-UniversalFuturesBotGUI.safe_amount = fx_safe_amount
-UniversalFuturesBotGUI.safe_price = fx_safe_price
-UniversalFuturesBotGUI.fetch_balance_total = fx_fetch_balance_total
-UniversalFuturesBotGUI.fetch_account_equity = fx_fetch_account_equity
-UniversalFuturesBotGUI.fetch_position = fx_fetch_position
-UniversalFuturesBotGUI.wait_for_position = fx_wait_for_position
-UniversalFuturesBotGUI.cancel_all_open_orders = fx_cancel_all_open_orders
-UniversalFuturesBotGUI.calculate_entry_qty = fx_calculate_entry_qty
-UniversalFuturesBotGUI.target_to_price_fraction = fx_target_to_price_fraction
-UniversalFuturesBotGUI.calculate_protection_prices = fx_calculate_protection_prices
-UniversalFuturesBotGUI._current_market_price = lambda self, symbol: float(self.exchange.fetch_ticker(symbol)["last"])
-UniversalFuturesBotGUI.create_protection_orders = fx_create_protection_orders
-UniversalFuturesBotGUI.verify_protection_orders = fx_verify_protection_orders
-UniversalFuturesBotGUI._reconcile_protection_orders = fx_reconcile_protection_mt5
-UniversalFuturesBotGUI._manage_tp1_break_even = fx_manage_tp_be
-UniversalFuturesBotGUI._detect_protection_exit_reason = fx_detect_exit_reason
-UniversalFuturesBotGUI._emergency_flatten_all_positions = fx_emergency_flatten
-UniversalFuturesBotGUI.open_market_position = fx_open_market_position
-UniversalFuturesBotGUI.close_position_market = fx_close_position_market
-UniversalFuturesBotGUI.configure_leverage = fx_configure_leverage
-UniversalFuturesBotGUI._fetch_strategy_ohlcv = fx_fetch_strategy_ohlcv
-UniversalFuturesBotGUI.start_bot = fx_start_bot
-UniversalFuturesBotGUI.save_settings = fx_save_settings
-UniversalFuturesBotGUI.load_settings = fx_load_settings
-
-
-
-# Re-bind V2 overrides after the legacy V1 binding block.
-UniversalFuturesBotGUI.open_market_position = fx_v2_open_market_position
-UniversalFuturesBotGUI.calculate_entry_qty = fx_v2_calculate_entry_qty
-UniversalFuturesBotGUI.normalize_symbol = fx_v2_normalize_symbol
-UniversalFuturesBotGUI.calculate_protection_prices = fx_v2_calculate_protection_prices
-UniversalFuturesBotGUI._finalize_performance_trade = fx_v2_finalize_performance
-UniversalFuturesBotGUI.start_bot = fx_v2_start_bot
-UniversalFuturesBotGUI.save_settings = fx_v2_save_settings
-UniversalFuturesBotGUI.load_settings = fx_v2_load_settings
-
-# Stop watchdog cleanly when the user presses STOP.
-_fx_v2_original_stop = UniversalFuturesBotGUI.stop_bot
-def fx_v2_stop_bot(self):
-    self.v2_watchdog_running = False
-    result = _fx_v2_original_stop(self)
-    try:
-        p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) and self.symbol else None
-        if not p:
-            fx_clear_runtime_state(self)
-    except Exception:
-        pass
-    fx_release_profile_lock(self)
-    return result
-UniversalFuturesBotGUI.stop_bot = fx_v2_stop_bot
-
-# -------------------- MAIN ----------------------------------
-
-# ============================================================
-# V8.3.4 FOREX-ONLY FINAL OVERRIDES
-# ============================================================
-_original_v833_build_exchange = UniversalFuturesBotGUI.build_exchange
-def v833_forex_build_exchange(self, exchange_id, api_key, api_secret, account_mode):
-    if str(exchange_id).strip().lower() not in ("mt5_forex","mt5","forex"):
-        raise RuntimeError("V8.3.3 FOREX-ONLY BOT: Crypto/futures exchanges are disabled. Use MT5 Forex.")
-    return fx_build_exchange(self, "mt5_forex", api_key, api_secret, account_mode)
-UniversalFuturesBotGUI.build_exchange = v833_forex_build_exchange
-# Keep the existing V2 MT5 execution, recovery, session/news/correlation/trailing layers.
-
-
-# ============================================================
-# V8.4.2-FOREX-AI-AGENT-R6.5 FINAL OVERRIDES
-# ============================================================
-GUI = UniversalFuturesBotGUI
-_prev_init = GUI.__init__
-_prev_save = GUI.save_settings
-_prev_load = GUI.load_settings
-_prev_pre = GUI._validate_strategy_preflight
-_prev_prot = GUI.calculate_protection_prices
-_prev_start = GUI.start_bot
-_prev_finalize = GUI._finalize_performance_trade
-
-
-def get_completed_atr(self, symbol, limit=160):
-    rows=self.exchange.fetch_ohlcv(symbol,self.v_tf.get(),limit)
-    d=pd.DataFrame(rows,columns=["time","open","high","low","close","vol"])
-    if len(d)<30: raise RuntimeError("Not enough candles for completed-candle ATR.")
-    prev=d["close"].shift(1)
-    tr=pd.concat([d["high"]-d["low"],(d["high"]-prev).abs(),(d["low"]-prev).abs()],axis=1).max(axis=1)
-    atr=float(calculate_rma(tr,int(self.e_adx_len.get() or 14)).iloc[-2])
-    if not np.isfinite(atr) or atr<=0: raise RuntimeError("Completed-candle ATR is invalid.")
-    return atr
-
-
-def _r65_load_ai(self, cfg):
-    for w,k,default in [
-        (self.e_ai_min_families,"ai_min_families",3),(self.e_ai_min_edge,"ai_min_edge",0.20),(self.e_ai_family_confidence,"ai_family_confidence",0.55),(self.e_ai_max_conflicts,"ai_max_conflicts",1),
-        (self.e_min_reverse_families,"min_reverse_families",2),(self.e_max_open_trades,"max_open_trades",1)]:
-        w.delete(0,tk.END); w.insert(0,cfg.get(k,default))
-    self.v_ai_require_trend.set(cfg.get("ai_require_trend",True)); self.v_ai_require_structure.set(cfg.get("ai_require_structure",True))
-    self.v_reverse_exit_mode.set(cfg.get("reverse_exit_mode","MIN_FAMILIES"))
-    self.v_grid_mode.set(cfg.get("grid_mode","OFF"))
-    self.v_liq_entry_mode.set(cfg.get("liq_entry_mode","FRESH_BREAK"))
-    self.e_div_min_count.delete(0,tk.END); self.e_div_min_count.insert(0,cfg.get("div_min_count","1"))
-    self.v_div_entry_mode.set(cfg.get("div_entry_mode","FRESH"))
-    self.e_atr_tp1_mult.delete(0,tk.END); self.e_atr_tp1_mult.insert(0,cfg.get("atr_tp1_mult","1.2"))
-    self.e_atr_tp2_mult.delete(0,tk.END); self.e_atr_tp2_mult.insert(0,cfg.get("atr_tp2_mult","2.2"))
-    self.ai_agent_preset_name=cfg.get("ai_agent_preset_name","CURRENT_SETTINGS")
-    self.ai_agent_preset_applied=bool(cfg.get("ai_agent_preset_applied",False))
-
-
-def r65_load(self):
-    """Additive migration: preserve existing saved values; fill only missing fields."""
-    try:
-        with open(CONFIG_FILE,encoding="utf-8") as f: cfg=json.load(f)
-        if not isinstance(cfg,dict): cfg={}
-    except Exception: cfg={}
-    try: schema=int(cfg.get("config_schema_version",0) or 0)
-    except Exception: schema=0
-    if schema<CONFIG_SCHEMA_VERSION:
-        missing=[]
-        for k,v in AI_AGENT_PRESET.items():
-            if k not in cfg:
-                cfg[k]=v
-                missing.append(k)
-        cfg.setdefault("ai_agent_preset_name","CURRENT_SETTINGS")
-        cfg.setdefault("ai_agent_preset_applied",False)
-        cfg["config_schema_version"]=CONFIG_SCHEMA_VERSION
-        cfg["runtime_schema_version"]=RUNTIME_SCHEMA_VERSION
-        cfg["app_version"]=APP_VERSION
-        try:
-            with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
-            self.log(f"CONFIG MIGRATION R6.5: schema {schema} -> {CONFIG_SCHEMA_VERSION}; initialized {len(missing)} missing fields; existing saved values preserved.")
-        except Exception as e: self.log(f"CONFIG MIGRATION SAVE WARNING: {e}")
-    _prev_load(self)
-    try:
-        with open(CONFIG_FILE,encoding="utf-8") as f: final_cfg=json.load(f)
-    except Exception: final_cfg=cfg
-    _r65_load_ai(self,final_cfg)
-    self._settings_dirty=False
-    return None
-
-def r65_save(self):
-    _prev_save(self)
-    try:
-        with open(CONFIG_FILE,encoding="utf-8") as f: cfg=json.load(f)
-        cfg.update({
-            "config_schema_version":CONFIG_SCHEMA_VERSION,"runtime_schema_version":RUNTIME_SCHEMA_VERSION,"app_version":APP_VERSION,
-            "ai_agent_preset_name":self.ai_agent_preset_name,"ai_agent_preset_applied":self.ai_agent_preset_applied,
-            "ai_min_families":self.e_ai_min_families.get(),"ai_min_edge":self.e_ai_min_edge.get(),"ai_family_confidence":self.e_ai_family_confidence.get(),"ai_max_conflicts":self.e_ai_max_conflicts.get(),
-            "ai_require_trend":self.v_ai_require_trend.get(),"ai_require_structure":self.v_ai_require_structure.get(),
-            "ai_dynamic_management_enabled":True,"ai_min_risk_pct":AI_AGENT_MIN_RISK_PCT,"ai_max_risk_pct":AI_AGENT_MAX_RISK_PCT,
-            "ai_min_atr_sl_mult":AI_AGENT_MIN_ATR_SL_MULT,"ai_max_atr_sl_mult":AI_AGENT_MAX_ATR_SL_MULT,
-            "ai_min_tp1_r_mult":AI_AGENT_MIN_TP1_R_MULT,"ai_max_tp1_r_mult":AI_AGENT_MAX_TP1_R_MULT,
-            "ai_min_tp2_r_mult":AI_AGENT_MIN_TP2_R_MULT,"ai_max_tp2_r_mult":AI_AGENT_MAX_TP2_R_MULT,
-            "reverse_exit_mode":self.v_reverse_exit_mode.get(),"min_reverse_families":self.e_min_reverse_families.get(),
-            "grid_mode":self.v_grid_mode.get(),"liq_entry_mode":self.v_liq_entry_mode.get(),"div_min_count":self.e_div_min_count.get(),"div_entry_mode":self.v_div_entry_mode.get(),"max_open_trades":self.e_max_open_trades.get(),"atr_tp1_mult":self.e_atr_tp1_mult.get(),"atr_tp2_mult":self.e_atr_tp2_mult.get(),
-        })
-        with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
-    except Exception as e: self.log(f"R6.5 AI config save warning: {e}")
-
-
-def r65_pre(self):
-    out=_prev_pre(self)
-    mode=self._r65_validate_ai()
-    if mode=="AI_AGENT": self.log(f"AI AGENT PREFLIGHT: Families={self.e_ai_min_families.get()} | Edge={self.e_ai_min_edge.get()} | Confidence={self.e_ai_family_confidence.get()} | MaxConflicts={self.e_ai_max_conflicts.get()} | Trend={'ON' if self.v_ai_require_trend.get() else 'OFF'} | Structure={'ON' if self.v_ai_require_structure.get() else 'OFF'}")
-    return out
-
-
-def _r65_validate_ai(self):
-    ai_min_families=int(self.e_ai_min_families.get()); ai_min_edge=float(self.e_ai_min_edge.get()); conf=float(self.e_ai_family_confidence.get()); maxc=int(self.e_ai_max_conflicts.get())
-    if not 1<=ai_min_families<=4: raise ValueError("AI Agent Minimum Families must be 1..4.")
-    if not 0<ai_min_edge<1: raise ValueError("AI Agent Edge must be >0 and <1.")
-    if not 0<conf<=1: raise ValueError("AI Agent Family Confidence must be >0 and <=1.")
-    if not 0<=maxc<=4: raise ValueError("AI Agent Max Conflicts must be 0..4.")
-    if self.v_reverse_exit_mode.get() not in REVERSAL_EXIT_MODES: raise ValueError("Reverse Exit Rule must be ALL_ACTIVE or MIN_FAMILIES.")
-    mr=int(self.e_min_reverse_families.get())
-    if not 1<=mr<=4: raise ValueError("Minimum Reverse Families must be 1..4.")
-    try:
-        max_open=int(self.e_max_open_trades.get().strip())
-    except Exception:
-        raise ValueError("Max Open Trades must be a whole number.")
-    if max_open != 1:
-        self.e_max_open_trades.delete(0,tk.END); self.e_max_open_trades.insert(0,"1")
-        self.log(f"AI AGENT SAFETY: Max Open Trades normalized from {max_open} to 1 for MT5 single-position contract.")
-    return self.v_signal_mode.get().strip().upper()
-
-
-def r65_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev,**kwargs):
-    mgr=getattr(self,"_ai_active_management",None)
-    if self.v_signal_mode.get().strip().upper()=="AI_AGENT" and mgr and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED and not bool(self.v_hold_until_all_reverse.get()):
-        atr=float(mgr["atr_value"]); sd=atr*float(mgr["atr_sl_mult"]); d1=sd*float(mgr["tp1_r"]); d2=sd*float(mgr["tp2_r"])
-        if side=="LONG": sl,tp1,tp2=entry-sd,entry+d1,entry+d2
-        else: sl,tp1,tp2=entry+sd,entry-d1,entry-d2
-        sl,tp1,tp2=[fx_safe_price(self,symbol,v) for v in (sl,tp1,tp2)]
-        if side=="LONG" and not(sl<entry<tp1<tp2): raise RuntimeError("AI R6.5 LONG protection ordering invalid.")
-        if side=="SHORT" and not(sl>entry>tp1>tp2): raise RuntimeError("AI R6.5 SHORT protection ordering invalid.")
-        self.log(f"AI EFFECTIVE RISK | Risk={mgr['risk_pct']:.3f}% | SL={mgr['atr_sl_mult']:.3f} ATR | TP1={mgr['tp1_r']:.3f}R | TP2={mgr['tp2_r']:.3f}R | ActualEntry={entry:.12g} | ActualQty={qty:g}")
-        return sl,tp1,tp2,sd/entry,d1/entry,d2/entry
-    return _prev_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev,**kwargs)
-
-
-def r65_start(self):
-    self._r65_validate_ai()
-    _prev_start(self)
-    if self.is_running and self.v_signal_mode.get().strip().upper()=="AI_AGENT":
-        self.log(f"V8.4.2 FOREX AI-AGENT R6.5-HOTFIX1 | Preset={self.ai_agent_preset_name} | Risk=0.20–0.50% | SL=1.50–2.40 ATR | TP1=1.00–1.50R | TP2=2.00–3.00R")
-
-
-def r65_finalize(self,reason="UNKNOWN",balance=None):
-    out=_prev_finalize(self,reason=reason,balance=balance); self._ai_active_management=None; return out
-
-def r65_init(self,root):
-    # R6.5-HOTFIX1: initialize every R6.5 contract variable BEFORE _prev_init().
-    # _prev_init() calls self.load_settings(), which resolves to r65_load.
-    self.v_grid_mode=tk.StringVar(root,value="OFF")
-    self.v_liq_entry_mode=tk.StringVar(root,value="FRESH_BREAK")
-    self.v_div_entry_mode=tk.StringVar(root,value="FRESH")
-    self.e_div_min_count=tk.Entry(root); self.e_div_min_count.insert(0,"1")
-    self.e_atr_tp1_mult=tk.Entry(root); self.e_atr_tp1_mult.insert(0,"1.2")
-    self.e_atr_tp2_mult=tk.Entry(root); self.e_atr_tp2_mult.insert(0,"2.2")
-
-    self._r65_extra_frame=tk.LabelFrame(root,text=" R6.5 AI-Agent Controls — Forex / MT5 ")
-    self._r65_extra_frame.pack(side="bottom",fill="x",padx=8,pady=4)
-    fr=self._r65_extra_frame
-    tk.Label(fr,text="Liquidity Entry:").grid(row=0,column=0,sticky="e")
-    ttk.OptionMenu(fr,self.v_liq_entry_mode,"FRESH_BREAK","FRESH_BREAK","CURRENT_TREND").grid(row=0,column=1,padx=4,sticky="w")
-    tk.Label(fr,text="Divergence Entry:").grid(row=0,column=2,sticky="e")
-    ttk.OptionMenu(fr,self.v_div_entry_mode,"FRESH","FRESH","CURRENT_STATE").grid(row=0,column=3,padx=4,sticky="w")
-    tk.Label(fr,text="Min Div:").grid(row=0,column=4,sticky="e")
-    self.e_div_min_count.grid(row=0,column=5,padx=4,sticky="w")
-    tk.Label(fr,text="AI TP1 R:").grid(row=0,column=6,sticky="e")
-    self.e_atr_tp1_mult.grid(row=0,column=7,padx=4,sticky="w")
-    tk.Label(fr,text="AI TP2 R:").grid(row=0,column=8,sticky="e")
-    self.e_atr_tp2_mult.grid(row=0,column=9,padx=4,sticky="w")
-    tk.Label(fr,text="Grid: OFF (Forex execution disabled)",fg="#555555").grid(row=1,column=0,columnspan=10,sticky="w")
-
-    _prev_init(self,root)
-    self._ai_active_management=None
-GUI.__init__=r65_init
-GUI.save_settings=r65_save
-GUI.load_settings=r65_load
-GUI._validate_strategy_preflight=r65_pre
-GUI.calculate_protection_prices=r65_prot
-GUI.start_bot=r65_start
-GUI._finalize_performance_trade=r65_finalize
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = UniversalFuturesBotGUI(root)
-    root.mainloop()
