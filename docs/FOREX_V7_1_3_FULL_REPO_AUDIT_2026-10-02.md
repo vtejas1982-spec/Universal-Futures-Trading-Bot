@@ -14,7 +14,7 @@ The Forex production source remains MT5/Forex-native. Crypto/futures execution c
 - V7.1.2 low-memory reference: `UniversalForexBot_MT5_V7.1.2_LOW_MEMORY.py`
 - Config schema: 71
 - Runtime schema: 71
-- V7.1.3 local SHA-256: `b113440cc1e75d15ee167f0938d2e0c0b9be061341c21a6cd2576c298bb42baf`
+- V7.1.3 supplied-file SHA-256: `b113440cc1e75d15ee167f0938d2e0c0b9be061341c21a6cd2576c298bb42baf`\n- GitHub production blob SHA: `51ae16e4c7365dd54b23428d805f062ba2ba1852`\n- GitHub V7.1.2 reference blob SHA: `3f546a129bdb64bf1fc50b149b8d7a675fb6bada`
 
 ## Source-level validation
 - AST parse: PASS
