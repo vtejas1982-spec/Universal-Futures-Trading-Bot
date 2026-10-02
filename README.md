@@ -1,62 +1,54 @@
-# Universal Futures Trading Bot — V7.1
+# Universal Trading Bot — Forex MT5 V7.1.3
 
-## Current release
+## Current production release
 
-**V7.1 — Scanner Ephemeral Lifecycle + Profile Trade History + Order-ID Telemetry**
+**Universal Forex Trading Bot V7.1.3 — MT5 / Forex**
 
-- Engine: `UniversalFuturesBot_V7.1_SCANNER_EPHEMERAL_TRADE_HISTORY.py`
-- Config schema: **68**
-- Runtime schema: **25**
-- Signal mode: **AI_AGENT**
-- Multi-Bot Hub with asynchronous Windows scanner preflight
-- Global capital authority (`OFF/ACCOUNT`, `GLOBAL_SHARED`, `INDIVIDUAL`)
-- Hardened TP1/TP2/true-BE protection contract
-- Scanner temporary-profile cleanup and startup reconciliation
-- Completed Trade History tab with exchange order IDs and TP1/TP2 fill details
+- Canonical engine: `UniversalForexBot_MT5.py`
+- Audited release artifact: `UniversalForexBot_MT5_V7_1_3_AUDITED.py`
+- Low-memory reference: `UniversalForexBot_MT5_V7.1.2_LOW_MEMORY.py`
+- Config schema: **71**
+- Runtime schema: **71**
+- Signal mode default: **AI_AGENT**
+- MT5-native execution, sizing, protection and position reconciliation
+- V7.1 evidence-family AI council and guarded 2-family fallback
+- Scanner/preflight lifecycle controls
+- Global capital authority and expiring reservations
+- SQLite trade history and profile system
+- Windows RAM/RSS resource governor
+- Persistent kill-switch latch
 
-## V7.1 fixed / added / modified
+## V7.1.3 audit fixes
 
-### Fixed
-- Prevented rejected scanner preflight profiles from accumulating indefinitely.
-- Added safe startup reconciliation for abandoned `PREFLIGHT_WORKER` directories.
-- Repaired trade-history protection telemetry so actual SL/TP1/TP2 order IDs are persisted after protection verification.
-- Preserved the original SL order ID separately from the BE order ID.
-
-### Added
-- Hub `TRADE HISTORY` tab showing completed trades only.
-- BOT profile filter and `ALL PROFILES` view.
-- Full scanner engine ID alongside parent BOT attribution.
-- Entry, SL, TP1, TP2, BE and final exit order IDs.
-- TP1/TP2 fill quantity, price and time.
-- `COPY SELECTED` trade-history action.
-- Ephemeral scanner purge/deferred-purge diagnostics.
-
-### Modified
-- Master SQLite trade schema is upgraded additively; existing history is preserved.
-- TP2 recreation updates the trade-history TP2 order ID.
-- No AI, strategy, leverage, risk, cost, liquidation, execution-quality or protection gate was loosened.
+- Fixed undefined ADX runtime state used by Hold-All-Reverse paths.
+- Fixed 2-family AI fallback so an opposing qualified family blocks fallback.
+- Added explicit council split handling when both BUY and SELL qualify.
+- Added `AMBIGUOUS_CANDLE` fail-closed handling.
+- Corrected MT5 volume-step rounding/minimum-lot handling.
+- Added safe minimum-lot TP1 whole-position behavior.
+- Added broker-side break-even verification with one retry and fail-safe retention of the original SL.
+- Added startup risk/protection ordering checks.
+- Unified emergency-stop default to 10%.
+- Preserved lazy-profile/resource-governor memory controls.
 
 ## Validation
 
+See `docs/FOREX_V7_1_3_FULL_REPO_AUDIT_2026-10-02.md`.
+
 - AST parse: PASS
 - Python compile: PASS
-- Compileall: PASS
-- MultiBotHub: 77 methods, 0 duplicates
-- UniversalFuturesBotGUI: 250 methods, 0 duplicates
-- Embedded V7.1 + prior safety audits: PASS
-- SQLite trade-history smoke test: PASS
+- Randomized AI council contract: PASS
+- 2F opposing-family regression: PASS
+- Ambiguous-candle contract: PASS
+- MT5 lot/protection contract: PASS
+- Live MetaTrader 5 terminal validation: **PENDING**
 
-## Source synchronization
-The validated V7.1 production source is approximately 1.29 MB. The connected GitHub file-write path cannot safely serialize that complete source blob in this session without truncation, so the repository does **not** falsely claim that the large production source has been replaced.
+## Important MT5 behavior
 
-The authoritative local source SHA-256 is:
-`ffc25d3138d9515361efd66dba59b2064e80f168aaaa830828ae41ef17d123f6`
+The Forex engine keeps the broker-side SL as the hard protection. TP1/TP2 are bot-managed because the MT5 position model does not provide the same two independent exchange-trigger orders used by the Crypto engine. If the bot process is stopped, broker-side SL remains available but bot-managed TP logic cannot run.
 
-See `docs/V7.1_SOURCE_SYNC.md` for synchronization instructions.
+## Historical material
 
-## User guide
-- `docs/USER_MANUAL_V8_4_2_V7_1_CRYPTO.md`
-- `docs/V7.1_RELEASE_NOTES.md`
-- `docs/V7.1_FULL_AUDIT_REPORT.md`
+Older Crypto/V8 release notes and audit documents remain in `docs/` as historical engineering records. They are not the current Forex production source.
 
-> Engineering/safety hardening only. Continue Bybit Demo/Testnet validation before Live deployment.
+Engineering/safety hardening only. Validate on an MT5 Demo account with the target broker before Live deployment.
