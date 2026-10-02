@@ -1,31 +1,37 @@
-# Current Release Manifest — R6.8.32
+# Current Release Manifest — V7.1
 
 ## Active Crypto AI-Agent release
-- Release: V8.4.2-CRYPTO-AI-AGENT-R6.8.32
-- Engine: `UniversalFuturesBot_CRYPTO_AI_AGENT_R6.8.32_ORACLE_VPS_MEMORY_FAILCLOSED_HYSTERESIS_FULL_AUDIT.py`
-- Config schema: 67
-- Signal mode: AI_AGENT
-- Target environment: Linux/Oracle VPS (~1 GB RAM)
+- Release: **V7.1**
+- Engine: `UniversalFuturesBot_V7.1_SCANNER_EPHEMERAL_TRADE_HISTORY.py`
+- Build: `V7.1-AI-AGENT-SCANNER-EPHEMERAL-LIFECYCLE-PROFILE-TRADE-HISTORY-ORDER-ID-AUDIT-FULL-AUDIT`
+- Config schema: **68**
+- Runtime schema: **25**
+- Signal mode: **AI_AGENT**
+- Local source SHA-256: `ffc25d3138d9515361efd66dba59b2064e80f168aaaa830828ae41ef17d123f6`
 
-## R6.8.32
-- Hardened Linux/Oracle VPS scanner-child memory admission.
-- Linux memory telemetry reads `/proc/meminfo`; process RSS reads `/proc/self/status` with `statm` fallback.
-- Linux admission is fail-closed if required memory telemetry is unavailable.
-- Added real low-memory hysteresis: admission blocks below 180 MB available RAM and, after a low-memory latch, does not resume until available RAM reaches 240 MB.
-- Retained Linux process-RSS ceiling at 780 MB.
-- Windows keeps available-RAM admission; RSS remains diagnostic-only.
-- Scanner preflight remains sequential and temporary; rejected/flat children are disposed before the next candidate.
-- No strategy, risk, cost, liquidation, execution-quality, protection, ownership, or kill-switch gate was loosened.
+## V7.1 release scope
+- Scanner `PREFLIGHT_WORKER` directories are safely purged after terminal rejection/failure when no active/recovery state exists.
+- Startup reconciliation handles abandoned scanner preflight directories.
+- Hub `TRADE HISTORY` shows completed trades only and supports parent-BOT filtering.
+- Trade History records entry/SL/TP1/TP2/BE/final exit order IDs and TP1/TP2 fills.
+- Actual protection IDs are synchronized after exchange verification.
+- Original SL and BE order IDs remain separate.
+
+## Safety retained
+- AI/evidence gates unchanged.
+- Saved profile remains authoritative.
+- TP1/TP2/true-BE contract retained.
+- Windows resource governor and async preflight retained.
+- Linux 180/240/780 MB memory contract retained.
+- Global capital authority retained.
 
 ## Validation status
-- Python AST parse: PASS.
-- Python compile / py_compile: PASS.
-- Static memory-helper/class-ownership audit: PASS.
-- Linux fail-closed/hysteresis source audit: PASS.
-- Scanner dispatch/preflight call-chain audit: PASS.
-- Oracle VPS live smoke test: PASS for memory telemetry, child admission, preflight startup, and cleanup.
-- Oracle long-run memory validation: PENDING; a 30–60 minute run is still required to establish sustained memory behavior.
-- Local production source SHA-256: `a843dcdec83ac271b361eaec16dddda37d5ca0852ad285fa30f311c8a7ea51d9`.
+- AST parse: PASS
+- Python compile: PASS
+- Compileall: PASS
+- Embedded V7.1 and R6.x safety audits: PASS
+- SQLite history smoke test: PASS
+- Target Windows runtime validation: **PENDING**
 
-## Repository source synchronization
-The complete R6.8.32 production Python source was validated locally. The connected GitHub file-write endpoint cannot safely serialize the ~1.17 MB production source replacement in this session, so this repository update synchronizes the release manifest, changelog, and audit report without falsely claiming that the large source blob was replaced. The local source remains the authoritative R6.8.32 artifact until the source file is committed through a normal Git client or equivalent large-file-safe path.
+## Source synchronization status
+The repository metadata and manuals are synchronized to V7.1. The complete ~1.29 MB production Python source remains pending normal large-file-safe Git synchronization; a truncated source blob is intentionally not committed as the production engine.
