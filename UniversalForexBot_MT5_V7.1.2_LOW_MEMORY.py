@@ -8998,3 +8998,3309 @@ class MT5ForexAdapter:
                 "id": str(p.ticket),
                 "symbol": p.symbol,
                 "contracts": float(p.volume),
+                "side": side,
+                "entryPrice": float(p.price_open),
+                "average": float(p.price_open),
+                "leverage": 0.0,
+                "initialMargin": float(mt5.order_calc_margin(
+                    mt5.ORDER_TYPE_BUY if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL,
+                    p.symbol, p.volume, p.price_open) or 0.0),
+                "unrealizedPnl": float(p.profit),
+                "info": {"ticket": p.ticket, "magic": p.magic, "sl": p.sl, "tp": p.tp},
+                "_mt5": p,
+            })
+        # Normal bot management must only see this bot's magic-number positions.
+        if getattr(self.bot, "mt5_magic", None):
+            out = [p for p in out if int((p.get("info") or {}).get("magic", 0)) == int(self.bot.mt5_magic)]
+        return out
+
+    def _all_positions_raw(self):
+        return list(mt5.positions_get() or [])
+
+    def fetch_balance(self):
+        if self.paper:
+            return {"total": {"USD": self.paper_equity}, "USD": {"total": self.paper_equity}}
+        info = mt5.account_info()
+        if info is None:
+            raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
+        return {"total": {str(info.currency): float(info.balance)},
+                str(info.currency): {"total": float(info.balance)}}
+
+    def calc_profit(self, side, symbol, volume, price_open, price_close):
+        if self.paper:
+            info = self._info(symbol)
+            contract = float(info.trade_contract_size or 100000.0)
+            # Approximate account-currency P/L for common USD-quoted pairs.
+            direction = 1.0 if side == "LONG" else -1.0
+            return direction * (price_close - price_open) * volume * contract
+        order_type = mt5.ORDER_TYPE_BUY if side == "LONG" else mt5.ORDER_TYPE_SELL
+        value = mt5.order_calc_profit(order_type, symbol, float(volume),
+                                      float(price_open), float(price_close))
+        if value is None:
+            raise RuntimeError(f"MT5 order_calc_profit failed: {mt5.last_error()}")
+        return float(value)
+
+    def calc_margin(self, side, symbol, volume, price):
+        order_type = mt5.ORDER_TYPE_BUY if side == "LONG" else mt5.ORDER_TYPE_SELL
+        value = mt5.order_calc_margin(order_type, symbol, float(volume), float(price))
+        if value is None:
+            return 0.0
+        return float(value)
+
+    def fetch_open_orders(self, symbol=None):
+        # Position SL/TP are not pending orders in MT5. This is only for true pending orders.
+        if self.paper:
+            return []
+        rows = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
+        rows = rows or []
+        return [{"id": str(o.ticket), "status": "open", "symbol": o.symbol,
+                 "type": str(o.type), "info": {"ticket": o.ticket}} for o in rows]
+
+    def fetch_closed_orders(self, symbol=None, limit=100):
+        return []
+
+    def cancel_order(self, order_id, symbol):
+        if self.paper:
+            return True
+        req = {
+            "action": mt5.TRADE_ACTION_REMOVE,
+            "order": int(order_id),
+            "symbol": symbol,
+        }
+        result = mt5.order_send(req)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"MT5 cancel failed: {getattr(result,'retcode',None)} {mt5.last_error()}")
+        return True
+
+    def _filling(self, symbol):
+        info = self._info(symbol)
+        mode = int(info.filling_mode)
+        # Prefer broker-supported IOC/FOK; market execution commonly supports IOC.
+        if mode & 2:
+            return mt5.ORDER_FILLING_IOC
+        if mode & 1:
+            return mt5.ORDER_FILLING_FOK
+        return mt5.ORDER_FILLING_RETURN
+
+    def create_order(self, symbol, order_type, side, qty, price=None, params=None):
+        params = params or {}
+        if self.paper:
+            return self._paper_create_order(symbol, order_type, side, qty, price, params)
+
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise RuntimeError(f"MT5 tick unavailable: {mt5.last_error()}")
+        is_buy = side.lower() == "buy"
+        mt5_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+        req = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(qty),
+            "type": mt5_type,
+            "price": float(tick.ask if is_buy else tick.bid),
+            "deviation": int(params.get("deviation", 20)),
+            "magic": int(getattr(self.bot, "mt5_magic", 26091801)),
+            "comment": "UniversalForexBotV1",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": self._filling(symbol),
+        }
+        if params.get("position"):
+            req["position"] = int(params["position"])
+        if params.get("sl") is not None:
+            req["sl"] = float(params["sl"])
+        if params.get("tp") is not None:
+            req["tp"] = float(params["tp"])
+        result = mt5.order_send(req)
+        if result is None:
+            # MT5 can return None after a terminal/network failure even when the
+            # broker accepted the request. Never blindly retry an entry: first
+            # reconcile the account for a bot-owned position.
+            if not params.get("position"):
+                try:
+                    rows = mt5.positions_get(symbol=symbol) or []
+                    owned = [r for r in rows if int(getattr(r, "magic", 0)) == int(getattr(self.bot, "mt5_magic", 0))]
+                    expected_type = mt5.POSITION_TYPE_BUY if is_buy else mt5.POSITION_TYPE_SELL
+                    matching = [r for r in owned if int(r.type) == int(expected_type) and float(r.volume) > 0]
+                    if matching:
+                        p = matching[0]
+                        self.bot.log(f"MT5 ENTRY RECONCILED AFTER order_send=None | ticket={p.ticket} | volume={p.volume}")
+                        return {"id": str(p.ticket), "status": "reconciled", "filled": float(p.volume),
+                                "average": float(p.price_open), "price": float(p.price_open),
+                                "info": {"ticket": p.ticket, "reconciled": True}}
+                except Exception as reconcile_error:
+                    self.bot.log(f"MT5 ENTRY RECONCILIATION FAILED: {reconcile_error}")
+            raise RuntimeError(f"MT5 order_send returned None: {mt5.last_error()}")
+        if result.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_DONE_PARTIAL):
+            raise RuntimeError(f"MT5 order rejected: retcode={result.retcode} comment={result.comment}")
+        return {
+            "id": str(result.order or result.deal),
+            "status": "closed" if result.deal else "open",
+            "filled": float(getattr(result, "volume", qty) or qty),
+            "average": float(getattr(result, "price", 0.0) or 0.0),
+            "price": float(getattr(result, "price", 0.0) or 0.0),
+            "info": {"deal": result.deal, "order": result.order,
+                     "retcode": result.retcode, "comment": result.comment},
+        }
+
+    def _paper_create_order(self, symbol, order_type, side, qty, price, params):
+        tick = self.fetch_ticker(symbol)
+        px = float(tick["ask"] if side.lower() == "buy" else tick["bid"])
+        q = float(qty)
+        if params.get("position"):
+            pos = self.paper_positions.get(symbol)
+            if not pos:
+                return {"id": f"PAPER-{time.time_ns()}", "filled": q, "average": px}
+            pnl = self.calc_profit(pos["side"], symbol, q, pos["entry"], px)
+            self.paper_equity += pnl
+            remaining = max(0.0, pos["qty"] - q)
+            if remaining <= 1e-12:
+                del self.paper_positions[symbol]
+            else:
+                pos["qty"] = remaining
+            return {"id": f"PAPER-CLOSE-{time.time_ns()}", "filled": q, "average": px}
+        position_side = "LONG" if side.lower() == "buy" else "SHORT"
+        margin = self.calc_margin(position_side, symbol, q, px)
+        if margin <= 0:
+            # Paper margin approximation only; actual MT5 mode uses order_calc_margin.
+            margin = abs(px * q * float(self._info(symbol).trade_contract_size)) / max(
+                float(self.bot.reference_leverage), 1.0
+            )
+        self.paper_positions[symbol] = {
+            "id": f"PAPER-POS-{time.time_ns()}",
+            "symbol": symbol, "contracts": q, "qty": q,
+            "side": position_side, "entryPrice": px, "average": px,
+            "entry": px, "leverage": float(self.bot.reference_leverage),
+            "initialMargin": margin, "unrealizedPnl": 0.0,
+            "info": {"magic": self.bot.mt5_magic, "sl": 0.0, "tp": 0.0},
+        }
+        return {"id": self.paper_positions[symbol]["id"], "filled": q, "average": px, "price": px}
+
+    def modify_position_sl(self, symbol, position, sl):
+        if self.paper:
+            p = self.paper_positions.get(symbol)
+            if p:
+                p["info"]["sl"] = float(sl)
+            return {"id": f"PAPER-SL-{time.time_ns()}", "sl": float(sl)}
+        ticket = int(position.get("id") or (position.get("raw") or {}).get("id") or
+                     (position.get("info") or {}).get("ticket") or 0)
+        if not ticket:
+            # Find bot position ticket.
+            rows = mt5.positions_get(symbol=symbol) or []
+            rows = [r for r in rows if int(r.magic) == int(self.bot.mt5_magic)]
+            if not rows:
+                raise RuntimeError("Could not find MT5 bot position ticket for SL modification.")
+            ticket = int(rows[0].ticket)
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if info is None or tick is None:
+            raise RuntimeError("MT5 SL modification failed: symbol/tick unavailable.")
+        min_points = max(int(getattr(info, "trade_stops_level", 0) or 0), int(getattr(info, "trade_freeze_level", 0) or 0))
+        point = float(info.point or 0.00001)
+        ref_price = float(tick.bid if position.get("side") == "LONG" else tick.ask)
+        if min_points > 0 and abs(ref_price - float(sl)) < min_points * point:
+            raise RuntimeError(f"SL is inside broker stop/freeze distance: {abs(ref_price-float(sl))/point:.1f} < {min_points} points.")
+        req = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": symbol,
+            "position": ticket,
+            "sl": float(sl),
+            "tp": 0.0,
+            "magic": int(self.bot.mt5_magic),
+        }
+        # Preserve existing TP if broker position has one.
+        rows = mt5.positions_get(ticket=ticket) or []
+        if rows:
+            req["tp"] = float(rows[0].tp or 0.0)
+        result = mt5.order_send(req)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            raise RuntimeError(f"MT5 SL modification failed: {getattr(result,'retcode',None)} {mt5.last_error()}")
+        return {"id": f"SL-{ticket}-{time.time_ns()}", "status": "closed", "sl": float(sl)}
+
+    def shutdown(self):
+        # Do not shut down the user's terminal on every stop; only release Python connection.
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+
+
+def _fx_symbol_info(bot, symbol):
+    return mt5.symbol_info(symbol)
+
+
+def fx_safe_amount(self, symbol, qty):
+    q = float(qty)
+    if q <= 0:
+        return 0.0
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"MT5 symbol_info failed: {symbol}")
+    step = float(info.volume_step or 0.01)
+    mn = float(info.volume_min or step)
+    mx = float(info.volume_max or q)
+    q = min(q, mx)
+    q = (q // step) * step
+    if q < mn:
+        return 0.0
+    return float(f"{q:.8f}")
+
+
+def fx_safe_price(self, symbol, price):
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return float(price)
+    return round(float(price), int(info.digits))
+
+
+def fx_fetch_balance_total(self):
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        return float(self.exchange.paper_equity)
+    info = mt5.account_info()
+    if info is None:
+        raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
+    return float(info.balance)
+
+
+def fx_fetch_account_equity(self):
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        # Update paper floating P/L.
+        for sym, pos in list(self.exchange.paper_positions.items()):
+            px = self._current_market_price(sym)
+            pnl = self.exchange.calc_profit(pos["side"], sym, pos["qty"], pos["entry"], px)
+            pos["unrealizedPnl"] = pnl
+        floating = sum(float(p.get("unrealizedPnl", 0.0)) for p in self.exchange.paper_positions.values())
+        return float(self.exchange.paper_balance + floating)
+    info = mt5.account_info()
+    if info is None:
+        raise RuntimeError(f"MT5 account_info failed: {mt5.last_error()}")
+    return float(info.equity)
+
+
+def fx_normalize_symbol(self, exchange, exchange_id, raw_symbol):
+    return exchange.normalize(raw_symbol)
+
+
+def fx_build_exchange(self, exchange_id, api_key, api_secret, account_mode):
+    if exchange_id != "mt5_forex":
+        raise RuntimeError("Forex V1 supports MT5 only.")
+    try:
+        paper_balance = float(getattr(self, "e_paper_balance", None).get().strip())
+    except Exception:
+        paper_balance = 1000.0
+    return MT5ForexAdapter(
+        self, account_mode,
+        login=api_key,
+        password=api_secret,
+        server=getattr(self, "e_mt5_server", None).get().strip() if hasattr(self, "e_mt5_server") else "",
+        paper_balance=paper_balance,
+    )
+
+
+def fx_configure_leverage(self, symbol, leverage):
+    self.reference_leverage = float(leverage)
+    self.log(
+        f"MT5 Forex leverage: BROKER-CONTROLLED | Reference Leverage={leverage}x "
+        "(used only as fallback/ROI reference; no leverage is changed by the bot)"
+    )
+
+
+def fx_target_to_price_fraction(self, target_pct, protection_mode, leverage,
+                                actual_entry=None, position_qty=None,
+                                position_initial_margin=None):
+    target_pct = float(target_pct)
+    if target_pct <= 0:
+        raise RuntimeError("SL/TP targets must be greater than zero.")
+    if str(protection_mode).upper() == "PRICE_%":
+        return target_pct / 100.0
+    if str(protection_mode).upper() == "PIPS":
+        if actual_entry is not None:
+            return (fx_v2_pip_size(self.symbol) * target_pct) / float(actual_entry)
+        return (target_pct * 0.0001) / max(float(actual_entry or 1.0), 1e-12)
+    if str(protection_mode).upper() != "ROI_%":
+        raise RuntimeError(f"Unknown SL/TP protection mode: {protection_mode}")
+    # For display/pre-entry fallback retain V8 semantics; post-entry calculation
+    # below uses actual MT5 margin/P&L, not leverage division.
+    return (target_pct / 100.0) / max(float(leverage), 1.0)
+
+
+def fx_find_price_for_pnl(self, side, symbol, entry, volume, target_pnl):
+    """Binary-search price where MT5 order_calc_profit reaches target P/L."""
+    entry = float(entry)
+    target_pnl = float(target_pnl)
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"MT5 symbol_info failed: {symbol}")
+    point = float(info.point or 0.00001)
+    # Start with 100 points and expand until target is bracketed.
+    lo, hi = entry, entry
+    if side == "LONG":
+        if target_pnl < 0:
+            hi = entry
+            lo = entry - point * 100
+            while self.exchange.calc_profit(side, symbol, volume, entry, lo) > target_pnl:
+                lo -= (hi - lo) * 2.0
+        else:
+            lo = entry
+            hi = entry + point * 100
+            while self.exchange.calc_profit(side, symbol, volume, entry, hi) < target_pnl:
+                hi += (hi - lo) * 2.0
+    else:
+        if target_pnl < 0:
+            lo = entry
+            hi = entry + point * 100
+            while self.exchange.calc_profit(side, symbol, volume, entry, hi) > target_pnl:
+                hi += (hi - lo) * 2.0
+        else:
+            hi = entry
+            lo = entry - point * 100
+            while self.exchange.calc_profit(side, symbol, volume, entry, lo) < target_pnl:
+                lo -= (hi - lo) * 2.0
+    for _ in range(70):
+        mid = (lo + hi) / 2.0
+        pnl = self.exchange.calc_profit(side, symbol, volume, entry, mid)
+        if side == "LONG":
+            if pnl < target_pnl:
+                lo = mid
+            else:
+                hi = mid
+        else:
+            if pnl < target_pnl:
+                hi = mid
+            else:
+                lo = mid
+    return self.fx_safe_price(symbol, (lo + hi) / 2.0) if hasattr(self, "fx_safe_price") else fx_safe_price(self, symbol, (lo + hi) / 2.0)
+
+
+def fx_calculate_entry_qty(self, symbol, balance, reference_price,
+                           risk_pct, sl_price_fraction, size_mode, fixed_qty):
+    if size_mode == "FIXED_QTY":
+        qty = float(fixed_qty)
+    else:
+        if risk_pct <= 0:
+            raise ValueError("Risk Per Trade must be greater than 0.")
+        if sl_price_fraction <= 0:
+            raise ValueError("SL price distance must be greater than 0.")
+        # Use the actual broker P/L function for 1 lot.
+        side = getattr(self, "_pending_signal_for_sizing", "BUY")
+        direction = "LONG" if side == "BUY" else "SHORT"
+        stop_price = (
+            float(reference_price) * (1.0 - sl_price_fraction)
+            if direction == "LONG"
+            else float(reference_price) * (1.0 + sl_price_fraction)
+        )
+        risk_amount = float(balance) * float(risk_pct)
+        loss_1lot = abs(self.exchange.calc_profit(
+            direction, symbol, 1.0, float(reference_price), stop_price
+        ))
+        if loss_1lot <= 0:
+            raise RuntimeError("MT5 returned zero risk for 1.00 lot; cannot calculate safe size.")
+        qty = risk_amount / loss_1lot
+    qty = fx_safe_amount(self, symbol, qty)
+    if qty <= 0:
+        raise RuntimeError("Calculated Forex lot size is below broker minimum/step.")
+    return qty
+
+
+def fx_calculate_protection_prices(self, symbol, side, actual_entry, position_qty,
+                                   position_initial_margin, sl_target_pct,
+                                   tp1_target_pct, tp2_target_pct, sl_mode, tp_mode,
+                                   leverage):
+    entry = float(actual_entry)
+    qty = float(position_qty)
+    if entry <= 0 or qty <= 0:
+        raise RuntimeError("Actual MT5 entry/lot size is invalid.")
+    # PRICE_% remains direct market-price movement.
+    def target_price(target, mode, positive=True):
+        target = float(target)
+        if target <= 0:
+            raise RuntimeError("SL/TP targets must be greater than zero.")
+        if str(mode).upper() == "PRICE_%":
+            move = entry * target / 100.0
+            return entry + move if positive else entry - move
+        if str(mode).upper() != "ROI_%":
+            raise RuntimeError(f"Unknown SL/TP mode: {mode}")
+        if position_initial_margin <= 0:
+            margin = self.exchange.calc_margin(side, symbol, qty, entry)
+        else:
+            margin = float(position_initial_margin)
+        if margin <= 0:
+            raise RuntimeError("MT5 could not calculate actual position margin for ROI target.")
+        target_pnl = margin * target / 100.0
+        signed = target_pnl if positive else -target_pnl
+        return fx_find_price_for_pnl(self, side, symbol, entry, qty, signed)
+
+    sl = target_price(sl_target_pct, sl_mode, positive=False if side == "LONG" else True)
+    tp1 = target_price(tp1_target_pct, tp_mode, positive=True if side == "LONG" else False)
+    tp2 = target_price(tp2_target_pct, tp_mode, positive=True if side == "LONG" else False)
+    sl, tp1, tp2 = [fx_safe_price(self, symbol, x) for x in (sl,tp1,tp2)]
+
+    if side == "LONG" and not (sl < entry and tp1 > entry and tp2 > tp1):
+        raise RuntimeError("Calculated LONG Forex SL/TP prices are invalid.")
+    if side == "SHORT" and not (sl > entry and tp1 < entry and tp2 < tp1):
+        raise RuntimeError("Calculated SHORT Forex SL/TP prices are invalid.")
+    return (
+        sl, tp1, tp2,
+        abs(sl-entry)/entry,
+        abs(tp1-entry)/entry,
+        abs(tp2-entry)/entry,
+    )
+
+
+def fx_fetch_position(self, symbol):
+    rows = self.exchange.fetch_positions([symbol])
+    for p in rows:
+        if p["contracts"] > 0:
+            return {
+                "id": p.get("id"),
+                "side": p["side"].upper(),
+                "qty": float(p["contracts"]),
+                "entry": float(p["entryPrice"]),
+                "leverage": float(p.get("leverage") or self.reference_leverage),
+                "initial_margin": float(p.get("initialMargin") or 0.0),
+                "raw": p,
+            }
+    return None
+
+
+def fx_wait_for_position(self, symbol, expected_side, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        p = fx_fetch_position(self, symbol)
+        if p and p["side"] == expected_side and p["qty"] > 0 and p["entry"] > 0:
+            return p
+        time.sleep(0.3)
+    return None
+
+
+def fx_open_market_position(self, symbol, signal, qty):
+    self._pending_signal_for_sizing = signal
+    # Optional broker spread guard. This is an execution safety filter and
+    # does not alter any V8 indicator or signal formula.
+    if getattr(self, "v_use_spread_filter", None) is not None and self.v_use_spread_filter.get():
+        tick = mt5.symbol_info_tick(symbol)
+        info = mt5.symbol_info(symbol)
+        if tick is None or info is None:
+            raise RuntimeError("MT5 spread check failed: symbol tick/info unavailable.")
+        spread_points = (float(tick.ask) - float(tick.bid)) / float(info.point)
+        max_spread = float(self.e_max_spread_points.get().strip())
+        self.log(f"FOREX SPREAD CHECK: {spread_points:.2f} points | Max={max_spread:.2f}")
+        if spread_points > max_spread:
+            raise RuntimeError(
+                f"Entry blocked by Forex spread filter: {spread_points:.2f} > {max_spread:.2f} points."
+            )
+    order = self.exchange.create_order(
+        symbol, "market", "buy" if signal == "BUY" else "sell", qty, None, {}
+    )
+    expected = "LONG" if signal == "BUY" else "SHORT"
+    pos = fx_wait_for_position(self, symbol, expected, timeout=10)
+    if not pos:
+        raise RuntimeError("MT5 order submitted but actual position could not be confirmed.")
+    return pos, pos["entry"]
+
+
+def fx_close_position_market(self, symbol, position_side, qty):
+    pos = fx_fetch_position(self, symbol)
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        self.exchange.create_order(
+            symbol, "market", "sell" if position_side == "LONG" else "buy",
+            fx_safe_amount(self, symbol, qty), None,
+            {"position": pos["id"] if pos else None},
+        )
+        return
+    if not pos:
+        return
+    order = self.exchange.create_order(
+        symbol, "market", "sell" if position_side == "LONG" else "buy",
+        fx_safe_amount(self, symbol, qty), None,
+        {"position": pos["id"], "deviation": 30}
+    )
+    return order
+
+
+def fx_cancel_all_open_orders(self, symbol):
+    for order in self.exchange.fetch_open_orders(symbol):
+        oid = order.get("id")
+        if oid:
+            try:
+                self.exchange.cancel_order(oid, symbol)
+            except Exception as e:
+                self.log(f"MT5 pending-order cancel warning {oid}: {e}")
+
+
+def fx_reconcile_protection_mt5(self, position):
+    """Fail-closed reconciliation of broker-side MT5 SL protection."""
+    if not position or not self.last_protected_position:
+        return True
+    protected = self.last_protected_position
+    if protected.get("side") != position.get("side"):
+        return True
+    if protected.get("hold_sl_wait_reversal"):
+        return True
+    now = time.time()
+    if now - getattr(self, "last_protection_reconcile", 0.0) < 3.0:
+        return True
+    self.last_protection_reconcile = now
+    try:
+        rows = mt5.positions_get(ticket=int(position["id"])) or []
+        if not rows:
+            rows = mt5.positions_get(symbol=self.symbol) or []
+            rows = [r for r in rows if int(getattr(r, "magic", 0)) == int(self.mt5_magic)]
+        if not rows:
+            return True
+        broker_pos = rows[0]
+        expected_sl = float(protected.get("sl") or 0.0)
+        actual_sl = float(broker_pos.sl or 0.0)
+        point = float((mt5.symbol_info(self.symbol) or {}).point if mt5.symbol_info(self.symbol) else 0.00001)
+        tolerance = max(point * 2.0, 1e-12)
+        if expected_sl <= 0:
+            raise RuntimeError("Bot protection state has no valid SL price.")
+        if actual_sl <= 0 or abs(actual_sl - expected_sl) > tolerance:
+            self.log(f"PROTECTION REPAIR: broker SL={actual_sl:.10g}, expected={expected_sl:.10g}")
+            self.exchange.modify_position_sl(self.symbol, position, expected_sl)
+            time.sleep(0.2)
+            verify = mt5.positions_get(ticket=int(broker_pos.ticket)) or []
+            verified_sl = float(verify[0].sl or 0.0) if verify else 0.0
+            if verified_sl <= 0 or abs(verified_sl - expected_sl) > tolerance:
+                raise RuntimeError("Broker-side SL repair could not be verified.")
+            self.log("PROTECTION REPAIR VERIFIED ✓")
+        return True
+    except Exception as e:
+        self.log(f"CRITICAL PROTECTION RECONCILIATION FAILURE: {e}")
+        try:
+            p = fx_fetch_position(self, self.symbol)
+            if p:
+                fx_close_position_market(self, self.symbol, p["side"], p["qty"])
+                self.log("FAIL-CLOSED: unprotected Forex position was closed.")
+        except Exception as close_error:
+            self.log(f"!!! FAIL-CLOSED CLOSE FAILED !!! {close_error}")
+            self.is_running = False
+        return False
+
+
+def fx_create_protection_orders(self, symbol, position_side, position_qty,
+                                 sl, tp1, tp2, tp_qty_mode,
+                                 tp1_close_value, tp2_close_value):
+    qty = fx_safe_amount(self, symbol, position_qty)
+    if qty <= 0:
+        raise RuntimeError("Actual MT5 position volume is invalid.")
+    hold_all_reverse = bool(self.v_hold_until_all_reverse.get())
+
+    tp1_qty = tp2_qty = 0.0
+    if not hold_all_reverse:
+        tp1_qty, tp2_qty = self.calculate_tp_close_quantities(
+            symbol, qty, tp_qty_mode, tp1_close_value, tp2_close_value
+        )
+
+    # Hold-SL WAIT is handled before this method in the unchanged V8 main loop.
+    pos = fx_fetch_position(self, symbol)
+    if not pos:
+        raise RuntimeError("MT5 position disappeared before SL installation.")
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        sl_order = self.exchange.modify_position_sl(symbol, pos, sl)
+    else:
+        sl_order = self.exchange.modify_position_sl(symbol, pos, sl)
+    self.log(f"MT5 BROKER-SIDE SL ACTIVE ✓ | SL={sl}")
+    # TP1/TP2 are bot-managed because MT5 position-level TP supports only one TP.
+    created = [("SL", sl_order)]
+    if not hold_all_reverse:
+        created.append(("TP1", {
+            "id": f"MT5-TP1-{time.time_ns()}",
+            "status": "open",
+            "filled": 0.0,
+            "price": float(tp1),
+            "qty": float(tp1_qty),
+            "info": {"managed_by_bot": True},
+        }))
+        created.append(("TP2", {
+            "id": f"MT5-TP2-{time.time_ns()}",
+            "status": "open",
+            "filled": 0.0,
+            "price": float(tp2),
+            "qty": float(tp2_qty),
+            "info": {"managed_by_bot": True},
+        }))
+    return created
+
+
+def fx_verify_protection_orders(self, symbol, created):
+    if not created:
+        return True
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        pos = self.exchange.paper_positions.get(symbol)
+        return bool(pos and float(pos.get("info", {}).get("sl", 0.0)) > 0)
+    rows = mt5.positions_get(symbol=symbol) or []
+    rows = [r for r in rows if int(r.magic) == int(self.mt5_magic)]
+    if not rows:
+        return False
+    sl_orders = [o for label,o in created if label in ("SL","BREAK-EVEN SL")]
+    if not sl_orders:
+        return True
+    requested = float(sl_orders[0].get("sl") or 0.0)
+    return float(rows[0].sl or 0.0) > 0 and abs(float(rows[0].sl) - requested) <= max(float(mt5.symbol_info(symbol).point)*2, 1e-12)
+
+
+def fx_manage_tp_be(self, position):
+    """MT5 manual TP1/TP2 + BE manager; broker SL remains the hard protection."""
+    if not position or not self.last_protected_position:
+        return
+    if self.v_hold_until_all_reverse.get():
+        return
+    protected = self.last_protected_position
+    if protected.get("side") != position.get("side"):
+        return
+    symbol = self.symbol
+    price = self._current_market_price(symbol)
+    side = position["side"]
+    tp1 = float(protected.get("tp1") or 0)
+    tp2 = float(protected.get("tp2") or 0)
+    tp1_id = protected.get("tp1_id")
+    tp2_id = protected.get("tp2_id")
+    # Track TP1/TP2 with bot state.
+    if not protected.get("tp1_hit"):
+        hit = price >= tp1 if side == "LONG" else price <= tp1
+        if hit and tp1_id:
+            tp1_qty = float(protected.get("tp1_qty") or 0)
+            current_qty = float(position.get("qty") or 0)
+            close_qty = min(tp1_qty, current_qty)
+            if close_qty > 0:
+                self.log(f"TP1 HIT ✓ | Price={price:.12g} | Closing={close_qty:g} lots")
+                fx_close_position_market(self, symbol, side, close_qty)
+                protected["tp1_hit"] = True
+                self._mark_tp1_hit_for_stats()
+                time.sleep(0.5)
+                remaining = fx_fetch_position(self, symbol)
+                if remaining and self.v_tp1_be.get():
+                    be = fx_safe_price(self, symbol, remaining["entry"])
+                    self.exchange.modify_position_sl(symbol, remaining, be)
+                    protected["sl"] = be
+                    protected["sl_id"] = f"MT5-BE-{time.time_ns()}"
+                    self.tp1_be_done = True
+                    self.log(f"BREAK-EVEN ACTIVE ✓ | Entry={remaining['entry']:.12g} | SL={be:.12g}")
+                return
+
+    # TP2 is evaluated against the remaining position.
+    if protected.get("tp1_hit") and not protected.get("tp2_hit"):
+        hit = price >= tp2 if side == "LONG" else price <= tp2
+        if hit:
+            remaining = fx_fetch_position(self, symbol)
+            if remaining:
+                self.log(f"TP2 HIT ✓ | Price={price:.12g} | Closing remaining={remaining['qty']:g} lots")
+                fx_close_position_market(self, symbol, side, remaining["qty"])
+                protected["tp2_hit"] = True
+                return
+
+    # PAPER mode must emulate the broker-side SL because no real order exists.
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        sl = float(protected.get("sl") or 0)
+        if sl:
+            hit = price <= sl if side == "LONG" else price >= sl
+            if hit:
+                self.log(f"PAPER SL HIT | Price={price:.12g} | SL={sl:.12g}")
+                fx_close_position_market(self, symbol, side, position["qty"])
+
+
+def fx_detect_exit_reason(self, protected):
+    if not protected:
+        return "UNKNOWN"
+    symbol = self.symbol
+    try:
+        price = self._current_market_price(symbol)
+    except Exception:
+        return "UNKNOWN"
+    side = protected.get("side")
+    sl = float(protected.get("sl") or 0)
+    tp1 = float(protected.get("tp1") or 0)
+    tp2 = float(protected.get("tp2") or 0)
+    if protected.get("tp2_hit"):
+        return "TP2"
+    if protected.get("tp1_hit") and not protected.get("tp2_hit"):
+        # If position is now flat after TP2 it would have been marked above.
+        return "TP1"
+    if sl > 0 and ((side == "LONG" and price <= sl) or (side == "SHORT" and price >= sl)):
+        return "SL"
+    return "UNKNOWN"
+
+
+def fx_emergency_flatten(self, reason, equity, threshold):
+    self.log(
+        f"CRITICAL MT5 CAPITAL CIRCUIT BREAKER: Equity={equity:.8f} <= "
+        f"Threshold={threshold:.8f} | {reason}"
+    )
+    self.send_telegram(
+        f"CRITICAL MT5 CAPITAL STOP: equity {equity:.4f} <= {threshold:.4f}. "
+        "All account positions will be closed and bot stopped."
+    )
+    scope = str(getattr(self, "v_emergency_scope", tk.StringVar(value="BOT_ONLY")).get()).upper()
+    account_wide = scope == "ALL_ACCOUNT"
+    self.log(f"EMERGENCY CAPITAL STOP SCOPE={scope}")
+    if isinstance(self.exchange, MT5ForexAdapter) and self.exchange.paper:
+        if account_wide:
+            self.exchange.paper_positions.clear()
+        else:
+            self.exchange.paper_positions.pop(self.symbol, None)
+        self.exchange.paper_equity = self.exchange.paper_balance
+    else:
+        rows = list(mt5.positions_get() or [])
+        if not account_wide:
+            rows = [p for p in rows if int(getattr(p, "magic", 0)) == int(self.mt5_magic) and str(getattr(p, "symbol", "")) == str(self.symbol)]
+        for p in rows:
+            try:
+                tick = mt5.symbol_info_tick(p.symbol)
+                if tick is None:
+                    continue
+                close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                price = tick.bid if p.type == mt5.POSITION_TYPE_BUY else tick.ask
+                req = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": p.symbol,
+                    "volume": float(p.volume),
+                    "type": close_type,
+                    "position": int(p.ticket),
+                    "price": float(price),
+                    "deviation": 50,
+                    "magic": int(self.mt5_magic),
+                    "comment": "UniversalForexBotV1 CAPITAL STOP",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": self.exchange._filling(p.symbol),
+                }
+                result = mt5.order_send(req)
+                self.log(
+                    f"CAPITAL STOP: {p.symbol} ticket={p.ticket} result="
+                    f"{getattr(result,'retcode',None)}"
+                )
+            except Exception as e:
+                self.log(f"CAPITAL STOP: FAILED {p.symbol} ticket={getattr(p,'ticket','?')}: {e}")
+        # Cancel pending orders in the same scope as the capital stop.
+        pending_rows = list(mt5.orders_get() or [])
+        if not account_wide:
+            pending_rows = [o for o in pending_rows if int(getattr(o, "magic", 0)) == int(self.mt5_magic) and str(getattr(o, "symbol", "")) == str(self.symbol)]
+        for o in pending_rows:
+            try:
+                result = mt5.order_send({
+                    "action": mt5.TRADE_ACTION_REMOVE,
+                    "order": int(o.ticket),
+                    "symbol": o.symbol,
+                })
+                self.log(f"CAPITAL STOP: Pending order {o.ticket} cancel={getattr(result,'retcode',None)}")
+            except Exception as e:
+                self.log(f"CAPITAL STOP: Pending cancel failed {getattr(o,'ticket','?')}: {e}")
+
+        # Verify. Do not claim flat if MT5 still reports positions.
+        remaining = list(mt5.positions_get() or [])
+        if remaining:
+            self.log(f"!!! CAPITAL STOP WARNING: {len(remaining)} MT5 positions remain open.")
+        else:
+            self.log("CAPITAL STOP COMPLETE ✓: ALL MT5 account positions are flat.")
+    self.is_running = False
+    try:
+        self.root.after(0, lambda: (
+            self.btn_start.config(state="normal"),
+            self.btn_stop.config(state="disabled")
+        ))
+    except Exception:
+        pass
+
+
+def fx_fetch_strategy_ohlcv(self, timeframe, limit):
+    return self.exchange.fetch_ohlcv(self.symbol, timeframe=timeframe, limit=limit)
+
+
+def fx_start_bot(self):
+    if self.is_running:
+        return
+    try:
+        preflight = self._validate_strategy_preflight()
+        self.save_settings()
+        self.log(
+            "STRATEGY PREFLIGHT PASS: "
+            f"Mode={preflight['signal_mode']} | MinScore={preflight['min_score']} | "
+            f"EvidenceFamilies={preflight['evidence_min_families']} | "
+            f"FamilyMin={preflight['evidence_family_min_score']:.2f}"
+        )
+        if mt5 is None:
+            raise RuntimeError("MetaTrader5 is not installed. Run: py -m pip install MetaTrader5")
+        exchange_id = "mt5_forex"
+        mode = self.v_account_mode.get().strip().upper()
+        if mode not in ("MT5_PAPER","MT5_TERMINAL","MT5_LIVE"):
+            raise ValueError("Choose MT5_PAPER, MT5_TERMINAL or MT5_LIVE.")
+        self.exchange_id = exchange_id
+        self.mt5_magic = int(self.e_magic.get().strip()) if hasattr(self, "e_magic") else 26091802
+        self.reference_leverage = float(self.e_lev.get().strip())
+        self.exchange = fx_build_exchange(
+            self, exchange_id, self.e_api_key.get().strip(),
+            self.e_api_secret.get().strip(), mode
+        )
+        self.symbol = self.normalize_symbol(self.exchange, exchange_id, self.e_symbol.get())
+        self.exchange.symbol = self.symbol
+        # Broker symbol info / volume rules are logged before any order.
+        info = mt5.symbol_info(self.symbol)
+        if info is None:
+            raise RuntimeError(f"MT5 symbol_info unavailable for {self.symbol}")
+        self.log(
+            f"FOREX SYMBOL: {self.symbol} | Digits={info.digits} | Point={info.point} | "
+            f"Contract={info.trade_contract_size} | Lots min/step/max="
+            f"{info.volume_min}/{info.volume_step}/{info.volume_max} | "
+            f"StopsLevel={info.trade_stops_level} points"
+        )
+        if self.v_use_spread_filter.get():
+            self.log(f"FOREX SPREAD FILTER: ON | Max={self.e_max_spread_points.get().strip()} points")
+        self.configure_leverage(self.symbol, self.reference_leverage)
+
+        max_trades = int(self.e_max_trades.get().strip())
+        if max_trades < 0:
+            raise ValueError("Max Trades cannot be negative.")
+        self.start_balance = self.fetch_balance_total()
+        self.total_trades = self.opened_trades = self.winning_trades = self.losing_trades = 0
+        self.trade_pnls = []
+        self.active_trade = None
+        self.session_started_at = time.time()
+        self.session_max_trades = max_trades
+        self.reentry_direction_lock = None
+        self.last_protected_position = None
+        self.tp1_be_done = False
+        self.hold_sl_threshold_hit = False
+        self.hold_sl_threshold_logged = False
+        self.last_entry_candle_ts = None
+        self.last_flat_time = 0.0
+
+        self.log(
+            f"CONNECTED: MT5 {mode} | {self.symbol} | "
+            f"Start Balance={self.start_balance:.4f} | "
+            f"Equity={self.fetch_account_equity():.4f}"
+        )
+        self.log("FOREX ENGINE: MT5-native candles + broker lot rules + MT5 P/L/margin calculations")
+        self.log("STRATEGY ENGINE: V8 indicator/entry/reversal logic preserved unchanged.")
+        self.log(
+            f"SL/TP engine: {self.v_sl_mode.get()} / {self.v_tp_mode.get()} | "
+            "Forex ROI targets use actual MT5 margin + order_calc_profit after fill."
+        )
+
+        self.is_running = True
+        self.btn_start.config(state="disabled")
+        self.btn_stop.config(state="normal")
+        self.bot_thread = threading.Thread(target=self._run_bot_logic, daemon=True)
+        self.bot_thread.start()
+    except Exception as e:
+        self.log(f"START FAILED: {e}")
+        self.is_running = False
+        try:
+            messagebox.showerror("Forex bot start failed", str(e))
+        except Exception:
+            pass
+
+
+# Spread filter: injected at the beginning of each strategy cycle without changing
+# any indicator or signal formulas. We wrap the original method only to gate entries.
+_original_run_bot_logic_v1 = UniversalFuturesBotGUI._run_bot_logic
+
+def fx_run_bot_logic(self):
+    # The V8 main loop is retained. A lightweight spread guard is enforced by
+    # monkey-patching desired order creation through a flag checked by sizing.
+    self._fx_spread_block = False
+    return _original_run_bot_logic_v1(self)
+
+# Extra fields/settings compatibility.
+_original_save_settings_v1 = UniversalFuturesBotGUI.save_settings
+def fx_save_settings(self):
+    _original_save_settings_v1(self)
+    try:
+        cfg_path = CONFIG_FILE
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["exchange"] = "mt5_forex"
+        cfg["account_mode"] = self.v_account_mode.get()
+        cfg["mt5_server"] = getattr(self, "e_mt5_server", tk.Entry()).get().strip() if hasattr(self,"e_mt5_server") else ""
+        cfg["paper_balance"] = getattr(self, "e_paper_balance", tk.Entry()).get().strip() if hasattr(self,"e_paper_balance") else "1000"
+        cfg["use_spread_filter"] = self.v_use_spread_filter.get() if hasattr(self,"v_use_spread_filter") else False
+        cfg["max_spread_points"] = self.e_max_spread_points.get().strip() if hasattr(self,"e_max_spread_points") else "30"
+        # V2 Forex guardrails
+        cfg.update({
+            "v2_auto_symbol": self.v_auto_symbol.get(),
+            "v2_use_slippage": self.v_use_slippage.get(),
+            "v2_max_slippage_points": self.e_max_slippage_points.get().strip(),
+            "v2_use_session": self.v_use_session.get(),
+            "v2_session_start": self.e_session_start.get().strip(),
+            "v2_session_end": self.e_session_end.get().strip(),
+            "v2_friday_protect": self.v_friday_protect.get(),
+            "v2_friday_cutoff": self.e_friday_cutoff.get().strip(),
+            "v2_use_daily_loss": self.v_use_daily_loss.get(),
+            "v2_daily_loss_pct": self.e_daily_loss_pct.get().strip(),
+            "v2_use_daily_profit": self.v_use_daily_profit.get(),
+            "v2_daily_profit_pct": self.e_daily_profit_pct.get().strip(),
+            "v2_use_loss_streak": self.v_use_loss_streak.get(),
+            "v2_max_loss_streak": self.e_max_loss_streak.get().strip(),
+            "v2_use_trailing": self.v_use_trailing.get(),
+            "v2_trail_activation": self.e_trail_activation.get().strip(),
+            "v2_trail_distance": self.e_trail_distance.get().strip(),
+            "v2_use_atr_sl": self.v_use_atr_sl.get(),
+            "v2_atr_sl_mult": self.e_atr_sl_mult.get().strip(),
+            "v2_use_news": self.v_use_news.get(),
+            "v2_news_minutes": self.e_news_minutes.get().strip(),
+            "v2_use_correlation": self.v_use_correlation.get(),
+            "v2_corr_threshold": self.e_corr_threshold.get().strip(),
+            "v2_corr_symbols": self.e_corr_symbols.get().strip(),
+            "v2_scanner": self.v_scanner.get(),
+            "v2_scan_symbols": self.e_scan_symbols.get().strip(),
+            "v2_reconnect": self.v_reconnect.get(),
+            "v2_position_recovery": self.v_position_recovery.get(),
+            "v2_magic": self.e_magic.get().strip(),
+        })
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception as e:
+        self.log(f"Forex config extension save warning: {e}")
+
+# Use a Forex-safe load wrapper for the extra controls while retaining every V8 strategy setting.
+_original_load_settings_v1 = UniversalFuturesBotGUI.load_settings
+def fx_load_settings(self):
+    _original_load_settings_v1(self)
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.v_exchange.set("mt5_forex")
+        self.v_account_mode.set(cfg.get("account_mode","MT5_PAPER"))
+        if hasattr(self, "e_mt5_server"):
+            self.e_mt5_server.delete(0, tk.END)
+            self.e_mt5_server.insert(0, cfg.get("mt5_server",""))
+        if hasattr(self, "e_paper_balance"):
+            self.e_paper_balance.delete(0, tk.END)
+            self.e_paper_balance.insert(0, cfg.get("paper_balance","1000"))
+        if hasattr(self, "v_use_spread_filter"):
+            self.v_use_spread_filter.set(cfg.get("use_spread_filter",False))
+        if hasattr(self, "e_max_spread_points"):
+            self.e_max_spread_points.delete(0, tk.END)
+            self.e_max_spread_points.insert(0, cfg.get("max_spread_points","30"))
+        # V2 Forex guardrails
+        self.v_auto_symbol.set(cfg.get("v2_auto_symbol", True))
+        self.v_use_slippage.set(cfg.get("v2_use_slippage", True))
+        self.e_max_slippage_points.delete(0, tk.END); self.e_max_slippage_points.insert(0, cfg.get("v2_max_slippage_points","20"))
+        self.v_use_session.set(cfg.get("v2_use_session", False))
+        self.e_session_start.delete(0, tk.END); self.e_session_start.insert(0, cfg.get("v2_session_start","07:00"))
+        self.e_session_end.delete(0, tk.END); self.e_session_end.insert(0, cfg.get("v2_session_end","20:00"))
+        self.v_friday_protect.set(cfg.get("v2_friday_protect", True))
+        self.e_friday_cutoff.delete(0, tk.END); self.e_friday_cutoff.insert(0, cfg.get("v2_friday_cutoff","18:00"))
+        self.v_use_daily_loss.set(cfg.get("v2_use_daily_loss", True))
+        self.e_daily_loss_pct.delete(0, tk.END); self.e_daily_loss_pct.insert(0, cfg.get("v2_daily_loss_pct","3.0"))
+        self.v_use_daily_profit.set(cfg.get("v2_use_daily_profit", False))
+        self.e_daily_profit_pct.delete(0, tk.END); self.e_daily_profit_pct.insert(0, cfg.get("v2_daily_profit_pct","5.0"))
+        self.v_use_loss_streak.set(cfg.get("v2_use_loss_streak", True))
+        self.e_max_loss_streak.delete(0, tk.END); self.e_max_loss_streak.insert(0, cfg.get("v2_max_loss_streak","3"))
+        self.v_use_trailing.set(cfg.get("v2_use_trailing", False))
+        self.e_trail_activation.delete(0, tk.END); self.e_trail_activation.insert(0, cfg.get("v2_trail_activation","30"))
+        self.e_trail_distance.delete(0, tk.END); self.e_trail_distance.insert(0, cfg.get("v2_trail_distance","20"))
+        self.v_use_atr_sl.set(cfg.get("v2_use_atr_sl", False))
+        self.e_atr_sl_mult.delete(0, tk.END); self.e_atr_sl_mult.insert(0, cfg.get("v2_atr_sl_mult","1.5"))
+        self.v_use_news.set(cfg.get("v2_use_news", False))
+        self.e_news_minutes.delete(0, tk.END); self.e_news_minutes.insert(0, cfg.get("v2_news_minutes","30"))
+        self.v_use_correlation.set(cfg.get("v2_use_correlation", False))
+        self.e_corr_threshold.delete(0, tk.END); self.e_corr_threshold.insert(0, cfg.get("v2_corr_threshold","0.85"))
+        self.e_corr_symbols.delete(0, tk.END); self.e_corr_symbols.insert(0, cfg.get("v2_corr_symbols","EURUSD,GBPUSD,USDCHF,USDJPY"))
+        self.v_scanner.set(cfg.get("v2_scanner", False))
+        self.e_scan_symbols.delete(0, tk.END); self.e_scan_symbols.insert(0, cfg.get("v2_scan_symbols","EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,USDCAD"))
+        self.v_reconnect.set(cfg.get("v2_reconnect", True))
+        self.v_position_recovery.set(cfg.get("v2_position_recovery", True))
+        self.e_magic.delete(0, tk.END); self.e_magic.insert(0, cfg.get("v2_magic","26091802"))
+    except Exception:
+        pass
+
+
+# ============================================================
+# V2 FOREX SAFETY / EXECUTION EXTENSIONS
+# Strategy and indicator formulas above remain unchanged.
+# These modules add broker-aware execution and optional guardrails.
+# ============================================================
+
+from datetime import datetime, timezone
+
+def _v2_bool(bot, name, default=False):
+    try:
+        return bool(getattr(bot, name).get())
+    except Exception:
+        return default
+
+def _v2_float(bot, name, default):
+    try:
+        return float(getattr(bot, name).get().strip())
+    except Exception:
+        return float(default)
+
+def _v2_time_hm(value, default=(0, 0)):
+    try:
+        h, m = [int(x) for x in str(value).strip().split(":")[:2]]
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h, m
+    except Exception:
+        pass
+    return default
+
+def fx_v2_in_session(self):
+    if not _v2_bool(self, "v_use_session", False):
+        return True
+    now = datetime.now(timezone.utc)
+    cur = now.hour * 60 + now.minute
+    sh, sm = _v2_time_hm(self.e_session_start.get(), (7, 0))
+    eh, em = _v2_time_hm(self.e_session_end.get(), (20, 0))
+    start = sh * 60 + sm
+    end = eh * 60 + em
+    if start == end:
+        return True
+    if start < end:
+        return start <= cur < end
+    return cur >= start or cur < end
+
+def fx_v2_friday_block(self):
+    if not _v2_bool(self, "v_friday_protect", True):
+        return False
+    now = datetime.now(timezone.utc)
+    if now.weekday() != 4:
+        return False
+    h, m = _v2_time_hm(self.e_friday_cutoff.get(), (18, 0))
+    return now.hour * 60 + now.minute >= h * 60 + m
+
+def fx_acquire_profile_lock(self):
+    """Prevent two copies of the same Forex bot profile from trading concurrently."""
+    if getattr(self, "profile_lock_fd", None) is not None:
+        return True
+    path = Path(self.profile_lock_file)
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, f"PID={os.getpid()}\nTIME={time.time():.3f}\nSYMBOL={self.symbol}\nMAGIC={self.mt5_magic}\n".encode())
+        self.profile_lock_fd = fd
+        return True
+    except FileExistsError:
+        try:
+            age = time.time() - path.stat().st_mtime
+            if age > 86400:
+                path.unlink(missing_ok=True)
+                return self.fx_acquire_profile_lock()
+        except Exception:
+            pass
+        raise RuntimeError(f"Another Forex bot instance appears to own the profile lock: {path}")
+
+def fx_release_profile_lock(self):
+    fd = getattr(self, "profile_lock_fd", None)
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+    self.profile_lock_fd = None
+    try:
+        Path(self.profile_lock_file).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+def fx_persist_runtime_state(self):
+    try:
+        p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) and self.symbol else None
+        protected = dict(self.last_protected_position or {})
+        state = {
+            "version": 1, "timestamp": time.time(), "symbol": self.symbol, "magic": int(getattr(self, "mt5_magic", 0)),
+            "position": p or {}, "protected": protected, "tp1_be_done": bool(getattr(self, "tp1_be_done", False)),
+            "reentry_direction_lock": getattr(self, "reentry_direction_lock", None),
+        }
+        tmp = Path(self.runtime_state_file).with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+        os.replace(tmp, self.runtime_state_file)
+    except Exception as e:
+        self.log(f"RUNTIME CHECKPOINT WARNING: {e}")
+
+def fx_load_runtime_state(self):
+    try:
+        path = Path(self.runtime_state_file)
+        if not path.exists():
+            return None
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if str(state.get("symbol")) != str(self.symbol) or int(state.get("magic", 0)) != int(self.mt5_magic):
+            return None
+        age = time.time() - float(state.get("timestamp", 0))
+        if age > 3 * 86400:
+            return None
+        return state
+    except Exception as e:
+        self.log(f"RUNTIME RECOVERY READ WARNING: {e}")
+        return None
+
+def fx_clear_runtime_state(self):
+    try:
+        Path(self.runtime_state_file).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+def fx_v2_day_start(self, equity):
+    key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if getattr(self, "v2_day_key", None) != key or getattr(self, "v2_day_start_equity", 0) <= 0:
+        self.v2_day_key = key
+        self.v2_day_start_equity = float(equity)
+        self.v2_loss_streak = 0
+        self.log(f"V2 DAILY RISK RESET | UTC={key} | Start Equity={equity:.4f}")
+
+def fx_v2_daily_status(self):
+    equity = float(self.fetch_account_equity())
+    fx_v2_day_start(self, equity)
+    base = max(float(self.v2_day_start_equity), 1e-12)
+    pct = (equity - base) / base * 100.0
+    return equity, pct
+
+def fx_v2_close_bot_position(self, reason):
+    try:
+        p = fx_fetch_position(self, self.symbol)
+        if p:
+            self.log(f"V2 RISK FLATTEN: {reason} | {p['side']} {p['qty']} {self.symbol}")
+            fx_cancel_all_open_orders(self, self.symbol)
+            fx_close_position_market(self, self.symbol, p["side"], p["qty"])
+            time.sleep(0.5)
+    except Exception as e:
+        self.log(f"V2 RISK FLATTEN FAILED: {e}")
+
+def fx_v2_news_block(self, symbol):
+    if not _v2_bool(self, "v_use_news", False):
+        return False
+    now = time.time()
+    if now - getattr(self, "v2_last_news_check", 0) > 300:
+        try:
+            url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+            r = requests.get(url, timeout=5)
+            r.raise_for_status()
+            data = r.json()
+            self.v2_news_cache = data if isinstance(data, list) else []
+            self.v2_last_news_check = now
+        except Exception as e:
+            # Fail closed when the user explicitly enabled the news safety gate.
+            # An unavailable calendar must never silently disable a safety filter.
+            self.log(f"NEWS FILTER FAIL-CLOSED: calendar unavailable; entry blocked. {e}")
+            self.v2_last_news_check = now
+            return True
+    minutes = max(0.0, _v2_float(self, "e_news_minutes", 30))
+    pair = str(symbol).upper().replace("/", "")
+    currencies = []
+    if len(pair) >= 6:
+        currencies = [pair[:3], pair[3:6]]
+    now_dt = datetime.now(timezone.utc)
+    for item in getattr(self, "v2_news_cache", []):
+        try:
+            impact = str(item.get("impact", "")).strip().lower()
+            if impact != "high":
+                continue
+            country = str(item.get("country", "")).upper()
+            if currencies and country not in currencies:
+                continue
+            raw = item.get("date") or item.get("datetime")
+            if not raw:
+                continue
+            event_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if event_dt.tzinfo is None:
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            delta = abs((event_dt.astimezone(timezone.utc) - now_dt).total_seconds()) / 60.0
+            if delta <= minutes:
+                title = item.get("title") or item.get("event") or "High impact event"
+                self.log(f"NEWS BLOCK: {title} | {country} | ±{minutes:g} min")
+                return True
+        except Exception:
+            continue
+    return False
+
+def fx_v2_correlation_block(self, symbol):
+    if not _v2_bool(self, "v_use_correlation", False):
+        return False
+    threshold = min(0.999, max(0.0, _v2_float(self, "e_corr_threshold", 0.85)))
+    symbols = [x.strip().upper() for x in self.e_corr_symbols.get().split(",") if x.strip()]
+    base_raw = str(symbol).upper().replace("/", "")
+    for raw in symbols:
+        try:
+            candidate = self.exchange.normalize(raw)
+            if candidate == symbol:
+                continue
+            existing = self.exchange.fetch_positions([candidate])
+            if not existing:
+                continue
+            a = self.exchange.fetch_ohlcv(symbol, "1h", 80)
+            b = self.exchange.fetch_ohlcv(candidate, "1h", 80)
+            da = pd.DataFrame(a, columns=["time","open","high","low","close","vol"])
+            db = pd.DataFrame(b, columns=["time","open","high","low","close","vol"])
+            n = min(len(da), len(db))
+            if n < 30:
+                continue
+            corr = da["close"].pct_change().tail(n).corr(db["close"].pct_change().tail(n))
+            if pd.notna(corr) and abs(float(corr)) >= threshold:
+                self.log(f"CORRELATION BLOCK: {candidate} position exists | 1H corr={float(corr):.3f} >= {threshold:.3f}")
+                return True
+        except Exception:
+            continue
+    return False
+
+def fx_v2_apply_atr_sl(self, symbol, side, entry, sl, qty):
+    if not _v2_bool(self, "v_use_atr_sl", False):
+        return sl
+    try:
+        mult = max(0.1, _v2_float(self, "e_atr_sl_mult", 1.5))
+        rows = self.exchange.fetch_ohlcv(symbol, self.v_tf.get(), 120)
+        d = pd.DataFrame(rows, columns=["time","open","high","low","close","vol"])
+        if len(d) < 20:
+            return sl
+        tr = pd.concat([
+            d["high"] - d["low"],
+            (d["high"] - d["close"].shift(1)).abs(),
+            (d["low"] - d["close"].shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        atr = float(calculate_rma(tr, 14).iloc[-2])
+        if not np.isfinite(atr) or atr <= 0:
+            return sl
+        candidate = entry - mult * atr if side == "LONG" else entry + mult * atr
+        candidate = fx_safe_price(self, symbol, candidate)
+        # Never make ATR stop less protective than the configured stop.
+        if side == "LONG":
+            return min(float(sl), candidate)
+        return max(float(sl), candidate)
+    except Exception as e:
+        self.log(f"ATR SL WARNING: {e}")
+        return sl
+
+def fx_v2_trailing_manage(self, position):
+    if not position or not _v2_bool(self, "v_use_trailing", False):
+        return
+    try:
+        symbol = self.symbol
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if info is None or tick is None:
+            return
+        point = float(info.point or 0.00001)
+        activation = max(0.0, _v2_float(self, "e_trail_activation", 30)) * point
+        distance = max(1.0, _v2_float(self, "e_trail_distance", 20)) * point
+        side = position["side"]
+        entry = float(position["entry"])
+        current = float(tick.bid if side == "LONG" else tick.ask)
+        favorable = current - entry if side == "LONG" else entry - current
+        if favorable < activation:
+            return
+        new_sl = current - distance if side == "LONG" else current + distance
+        new_sl = fx_safe_price(self, symbol, new_sl)
+        old_sl = float((self.last_protected_position or {}).get("sl") or 0.0)
+        improve = (new_sl > old_sl) if side == "LONG" else (new_sl < old_sl or old_sl == 0)
+        valid = (new_sl < current and new_sl > entry) if side == "LONG" else (new_sl > current and new_sl < entry)
+        if improve and valid:
+            self.exchange.modify_position_sl(symbol, position, new_sl)
+            if self.last_protected_position is not None:
+                self.last_protected_position["sl"] = new_sl
+            self.v2_trailing_last_log = time.time()
+            self.log(f"TRAILING SL UPDATED ✓ | {side} | Entry={entry:.8f} | SL={new_sl:.8f}")
+    except Exception as e:
+        self.log(f"TRAILING STOP WARNING: {e}")
+
+def fx_v2_reconnect(self):
+    try:
+        info = mt5.account_info()
+        if info is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        mt5.shutdown()
+    except Exception:
+        pass
+    try:
+        if mt5.initialize():
+            self.log("MT5 RECONNECTED ✓")
+            mt5.symbol_select(self.symbol, True)
+            return True
+    except Exception as e:
+        self.log(f"MT5 RECONNECT FAILED: {e}")
+    return False
+
+def fx_v2_scanner(self):
+    if not _v2_bool(self, "v_scanner", False):
+        return
+    if time.time() - getattr(self, "v2_last_scan", 0) < 300:
+        return
+    self.v2_last_scan = time.time()
+    rows = []
+    for raw in [x.strip() for x in self.e_scan_symbols.get().split(",") if x.strip()]:
+        try:
+            sym = self.exchange.normalize(raw)
+            o = self.exchange.fetch_ohlcv(sym, self.v_tf.get(), 80)
+            d = pd.DataFrame(o, columns=["time","open","high","low","close","vol"])
+            if len(d) < 30:
+                continue
+            d = calculate_supertrend(d, int(self.e_st_len.get()), float(self.e_st_mult.get()), self.v_st_source.get(), self.v_st_change_atr.get())
+            ema = d["close"].ewm(span=int(self.e_ema_len.get()), adjust=False).mean()
+            st = "BUY" if bool(d["trend"].iloc[-2]) else "SELL"
+            em = "BUY" if float(d["close"].iloc[-2]) > float(ema.iloc[-2]) else "SELL"
+            rows.append(f"{sym}:{st}/{em}")
+        except Exception:
+            continue
+    if rows:
+        self.log("V2 SCANNER | " + " | ".join(rows))
+
+def fx_v2_watchdog(self):
+    self.v2_watchdog_running = True
+    while self.is_running and self.v2_watchdog_running:
+        try:
+            if _v2_bool(self, "v_reconnect", True):
+                fx_v2_reconnect(self)
+            equity, day_pct = fx_v2_daily_status(self)
+
+            if _v2_bool(self, "v_use_daily_loss", True):
+                limit = abs(_v2_float(self, "e_daily_loss_pct", 3.0))
+                if day_pct <= -limit:
+                    self.log(f"DAILY LOSS LIMIT HIT: {day_pct:.2f}% <= -{limit:.2f}%")
+                    fx_v2_close_bot_position(self, "Daily loss limit")
+                    self.stop_bot()
+                    break
+
+            if _v2_bool(self, "v_use_daily_profit", False):
+                target = abs(_v2_float(self, "e_daily_profit_pct", 5.0))
+                if day_pct >= target:
+                    self.log(f"DAILY PROFIT LOCK HIT: {day_pct:.2f}% >= {target:.2f}%")
+                    fx_v2_close_bot_position(self, "Daily profit target")
+                    self.stop_bot()
+                    break
+
+            if _v2_bool(self, "v_use_loss_streak", True):
+                max_streak = max(1, int(_v2_float(self, "e_max_loss_streak", 3)))
+                if self.v2_loss_streak >= max_streak:
+                    self.log(f"CONSECUTIVE LOSS STOP: {self.v2_loss_streak} losses reached.")
+                    fx_v2_close_bot_position(self, "Consecutive loss protection")
+                    self.stop_bot()
+                    break
+
+            p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) else None
+            if p:
+                with self.v2_guard_lock:
+                    self._manage_tp1_break_even(p)
+                    self._reconcile_protection_orders(p)
+                    fx_v2_trailing_manage(self, p)
+                fx_persist_runtime_state(self)
+            else:
+                fx_clear_runtime_state(self)
+            fx_v2_scanner(self)
+        except Exception as e:
+            self.log(f"V2 WATCHDOG WARNING: {e}")
+        for _ in range(5):
+            if not self.is_running or not self.v2_watchdog_running:
+                break
+            time.sleep(1)
+
+def fx_v2_open_market_position(self, symbol, signal, qty):
+    # Entry gates are checked immediately before broker order submission.
+    if not fx_v2_in_session(self):
+        raise RuntimeError("Entry blocked: outside configured UTC trading session.")
+    if fx_v2_friday_block(self):
+        raise RuntimeError("Entry blocked: Friday protection cutoff reached.")
+    if fx_v2_news_block(self, symbol):
+        raise RuntimeError("Entry blocked: high-impact economic news window.")
+    if fx_v2_correlation_block(self, symbol):
+        raise RuntimeError("Entry blocked: correlated bot position exists.")
+    requested_tick = mt5.symbol_info_tick(symbol)
+    info = mt5.symbol_info(symbol)
+    requested_mid = None
+    if requested_tick and info:
+        requested_mid = float(requested_tick.ask if signal == "BUY" else requested_tick.bid)
+    result = _fx_v2_original_open(self, symbol, signal, qty)
+    if _v2_bool(self, "v_use_slippage", True) and requested_mid is not None:
+        actual = float(result[1])
+        deviation_points = abs(actual - requested_mid) / float(info.point or 1e-5)
+        max_points = max(0.0, _v2_float(self, "e_max_slippage_points", 20))
+        self.log(f"SLIPPAGE CHECK: {deviation_points:.2f} points | Max={max_points:.2f}")
+        if deviation_points > max_points:
+            try:
+                p = fx_fetch_position(self, symbol)
+                if p:
+                    fx_close_position_market(self, symbol, p["side"], p["qty"])
+            finally:
+                raise RuntimeError(f"Entry rejected by slippage protection: {deviation_points:.2f} > {max_points:.2f} points.")
+    return result
+
+def fx_v2_pip_size(symbol):
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"MT5 symbol_info unavailable for pip calculation: {symbol}")
+    point = float(info.point or 0.00001)
+    digits = int(info.digits)
+    return point * 10.0 if digits in (3, 5) else point
+
+def fx_v2_calculate_protection_prices(self, symbol, side, actual_entry, position_qty,
+                                      position_initial_margin, sl_target_pct, tp1_target_pct,
+                                      tp2_target_pct, sl_mode, tp_mode, leverage):
+    # V2 adds PIPS mode; V1 PRICE_% and ROI_% calculations are preserved.
+    if str(sl_mode).upper() == "PIPS" or str(tp_mode).upper() == "PIPS":
+        entry = float(actual_entry)
+        qty = float(position_qty)
+        pip = fx_v2_pip_size(symbol)
+        def px(target, mode, positive):
+            target = float(target)
+            if target <= 0:
+                raise RuntimeError("SL/TP targets must be greater than zero.")
+            if str(mode).upper() == "PIPS":
+                return entry + (pip * target if positive else -pip * target)
+            # Delegate each non-PIPS leg to the V1 engine.
+            return None
+        if str(sl_mode).upper() == "PIPS":
+            sl = px(sl_target_pct, "PIPS", side == "SHORT")
+        else:
+            base = _fx_v2_original_calc_protection(self, symbol, side, entry, qty,
+                                                    position_initial_margin, sl_target_pct,
+                                                    max(tp1_target_pct, 0.0001), max(tp2_target_pct, 0.0001),
+                                                    sl_mode, "PRICE_%", leverage)
+            sl = base[0]
+        if str(tp_mode).upper() == "PIPS":
+            tp1 = px(tp1_target_pct, "PIPS", side == "LONG")
+            tp2 = px(tp2_target_pct, "PIPS", side == "LONG")
+            if side == "SHORT":
+                tp1 = px(tp1_target_pct, "PIPS", False)
+                tp2 = px(tp2_target_pct, "PIPS", False)
+        else:
+            base = _fx_v2_original_calc_protection(self, symbol, side, entry, qty,
+                                                    position_initial_margin, max(sl_target_pct, 0.0001),
+                                                    tp1_target_pct, tp2_target_pct,
+                                                    "PRICE_%", tp_mode, leverage)
+            tp1, tp2 = base[1], base[2]
+        sl, tp1, tp2 = [fx_safe_price(self, symbol, x) for x in (sl, tp1, tp2)]
+        if side == "LONG" and not (sl < entry and tp1 > entry and tp2 > tp1):
+            raise RuntimeError("Calculated LONG Forex PIPS SL/TP prices are invalid.")
+        if side == "SHORT" and not (sl > entry and tp1 < entry and tp2 < tp1):
+            raise RuntimeError("Calculated SHORT Forex PIPS SL/TP prices are invalid.")
+        sl = fx_v2_apply_atr_sl(self, symbol, side, entry, sl, qty)
+        return sl, tp1, tp2, abs(sl-entry)/entry, abs(tp1-entry)/entry, abs(tp2-entry)/entry
+
+    vals = _fx_v2_original_calc_protection(self, symbol, side, actual_entry, position_qty,
+                                            position_initial_margin, sl_target_pct, tp1_target_pct,
+                                            tp2_target_pct, sl_mode, tp_mode, leverage)
+    sl = fx_v2_apply_atr_sl(self, symbol, side, actual_entry, vals[0], position_qty)
+    return (sl, vals[1], vals[2], abs(sl-actual_entry)/actual_entry, vals[4], vals[5])
+
+def fx_v2_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty):
+    if size_mode=="FIXED_QTY":
+        return fx_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty)
+    fraction=float(sl_price_fraction)
+    ai_active=(str(self.v_signal_mode.get()).strip().upper()=="AI_AGENT" and bool(getattr(self,"_ai_active_management",None)))
+    if ai_active:
+        self.log(f"AI SIZING AUTHORITY | Risk={float(risk_pct)*100.0:.3f}% | StopFraction={fraction:.8g} | Dynamic AI SL preserved")
+    elif _v2_bool(self,"v_use_atr_sl",False):
+        try:
+            rows=self.exchange.fetch_ohlcv(symbol,self.v_tf.get(),120)
+            d=pd.DataFrame(rows,columns=["time","open","high","low","close","vol"]); prev=d["close"].shift(1)
+            tr=pd.concat([d["high"]-d["low"],(d["high"]-prev).abs(),(d["low"]-prev).abs()],axis=1).max(axis=1)
+            fraction=(max(0.1,_v2_float(self,"e_atr_sl_mult",1.5))*float(calculate_rma(tr,14).iloc[-2]))/float(reference_price)
+        except Exception as e: self.log(f"ATR SIZING WARNING: {e}")
+    elif str(self.v_sl_mode.get()).upper()=="PIPS":
+        try: fraction=(fx_v2_pip_size(symbol)*float(self.e_sl_pct.get()))/float(reference_price)
+        except Exception: pass
+    return fx_calculate_entry_qty(self,symbol,balance,reference_price,risk_pct,fraction,size_mode,fixed_qty)
+
+def fx_v2_start_bot(self):
+    if self.is_running:
+        return
+    try:
+        self.mt5_magic = int(self.e_magic.get().strip())
+    except Exception:
+        self.mt5_magic = 26091802
+    fx_acquire_profile_lock(self)
+    try:
+        _fx_v2_original_start(self)
+    except Exception:
+        fx_release_profile_lock(self)
+        raise
+    if self.is_running:
+        try:
+            eq = self.fetch_account_equity()
+            fx_v2_day_start(self, eq)
+        except Exception as e:
+            self.log(f"V2 risk initialization warning: {e}")
+        fx_v2_recover_position(self)
+        if self.is_running:
+            self.v2_watchdog_running = True
+            self.v2_watchdog_thread = threading.Thread(target=fx_v2_watchdog, args=(self,), daemon=True)
+            self.v2_watchdog_thread.start()
+
+UniversalFuturesBotGUI.start_bot = fx_v2_start_bot
+
+# Save/load wrapper references the already extended V1 wrappers.
+_fx_v2_original_save = fx_save_settings
+_fx_v2_original_load = fx_load_settings
+
+def fx_v2_save_settings(self):
+    _fx_v2_original_save(self)
+
+def fx_v2_load_settings(self):
+    _fx_v2_original_load(self)
+
+UniversalFuturesBotGUI.save_settings = fx_v2_save_settings
+UniversalFuturesBotGUI.load_settings = fx_v2_load_settings
+
+
+# Bind overrides. No indicator/signal calculation function is modified.
+UniversalFuturesBotGUI.build_exchange = fx_build_exchange
+UniversalFuturesBotGUI.normalize_symbol = fx_normalize_symbol
+UniversalFuturesBotGUI.safe_amount = fx_safe_amount
+UniversalFuturesBotGUI.safe_price = fx_safe_price
+UniversalFuturesBotGUI.fetch_balance_total = fx_fetch_balance_total
+UniversalFuturesBotGUI.fetch_account_equity = fx_fetch_account_equity
+UniversalFuturesBotGUI.fetch_position = fx_fetch_position
+UniversalFuturesBotGUI.wait_for_position = fx_wait_for_position
+UniversalFuturesBotGUI.cancel_all_open_orders = fx_cancel_all_open_orders
+UniversalFuturesBotGUI.calculate_entry_qty = fx_calculate_entry_qty
+UniversalFuturesBotGUI.target_to_price_fraction = fx_target_to_price_fraction
+UniversalFuturesBotGUI.calculate_protection_prices = fx_calculate_protection_prices
+UniversalFuturesBotGUI._current_market_price = lambda self, symbol: float(self.exchange.fetch_ticker(symbol)["last"])
+UniversalFuturesBotGUI.create_protection_orders = fx_create_protection_orders
+UniversalFuturesBotGUI.verify_protection_orders = fx_verify_protection_orders
+UniversalFuturesBotGUI._reconcile_protection_orders = fx_reconcile_protection_mt5
+UniversalFuturesBotGUI._manage_tp1_break_even = fx_manage_tp_be
+UniversalFuturesBotGUI._detect_protection_exit_reason = fx_detect_exit_reason
+UniversalFuturesBotGUI._emergency_flatten_all_positions = fx_emergency_flatten
+UniversalFuturesBotGUI.open_market_position = fx_open_market_position
+UniversalFuturesBotGUI.close_position_market = fx_close_position_market
+UniversalFuturesBotGUI.configure_leverage = fx_configure_leverage
+UniversalFuturesBotGUI._fetch_strategy_ohlcv = fx_fetch_strategy_ohlcv
+UniversalFuturesBotGUI.start_bot = fx_start_bot
+UniversalFuturesBotGUI.save_settings = fx_save_settings
+UniversalFuturesBotGUI.load_settings = fx_load_settings
+
+
+
+
+# V7.1 audit repair of legacy V2 override references that were missing in the
+# supplied Forex base build. These aliases preserve the intended wrapper chain.
+_fx_v2_original_open = fx_open_market_position
+_fx_v2_original_calc_protection = fx_calculate_protection_prices
+_fx_v2_original_start = fx_start_bot
+
+def fx_v2_normalize_symbol(self, exchange, exchange_id, raw_symbol):
+    return fx_normalize_symbol(self, exchange, exchange_id, raw_symbol)
+
+def fx_v2_recover_position(self):
+    if not _v2_bool(self, "v_position_recovery", True):
+        return None
+    try:
+        p=fx_fetch_position(self,self.symbol) if getattr(self,"exchange",None) and self.symbol else None
+        if p:
+            self.log(f"V2 POSITION RECOVERY: {p['side']} {p['qty']} {self.symbol} | Entry={p['entry']}")
+            try:self._reconcile_protection_orders(p)
+            except Exception as exc:self.log(f"V2 RECOVERY PROTECTION WARNING: {exc}")
+        return p
+    except Exception as exc:
+        self.log(f"V2 POSITION RECOVERY WARNING: {exc}")
+        return None
+
+def fx_v2_finalize_performance(self, reason="CLOSED", balance=None):
+    # Preserve the normal accounting and add the V2 loss-streak state used by
+    # the watchdog. The V7.1 master SQLite history wrapper is applied later.
+    before = getattr(self, "active_trade", None)
+    start_balance = float(before.get("balance_start", 0.0)) if before else None
+    try:
+        if balance is None and before is not None:
+            balance = self.fetch_balance_total()
+        pnl = None
+        if before is not None and balance is not None:
+            pnl=float(balance)-start_balance
+        trade = self.active_trade
+        if trade:
+            self.trade_pnls.append(float(pnl or 0.0))
+            self.total_trades += 1
+            if (pnl or 0.0) > 0:
+                self.winning_trades += 1
+            elif (pnl or 0.0) < 0:
+                self.losing_trades += 1
+            self.log(f"TRADE CLOSED ✓ | Result={'WIN' if (pnl or 0.0)>0 else 'LOSS' if (pnl or 0.0)<0 else 'BREAKEVEN'} | PnL=${float(pnl or 0.0):.4f} | Reason={reason} | Completed={self.total_trades}")
+            self.active_trade=None
+        result=None
+        if pnl is not None:
+            self.v2_loss_streak = int(getattr(self,"v2_loss_streak",0) or 0) + 1 if pnl < 0 else 0
+        return result
+    except Exception:
+        return None
+
+# Re-bind V2 overrides after the legacy V1 binding block.
+UniversalFuturesBotGUI.open_market_position = fx_v2_open_market_position
+UniversalFuturesBotGUI.calculate_entry_qty = fx_v2_calculate_entry_qty
+UniversalFuturesBotGUI.normalize_symbol = fx_v2_normalize_symbol
+UniversalFuturesBotGUI.calculate_protection_prices = fx_v2_calculate_protection_prices
+UniversalFuturesBotGUI._finalize_performance_trade = fx_v2_finalize_performance
+UniversalFuturesBotGUI.start_bot = fx_v2_start_bot
+UniversalFuturesBotGUI.save_settings = fx_v2_save_settings
+UniversalFuturesBotGUI.load_settings = fx_v2_load_settings
+
+# Stop watchdog cleanly when the user presses STOP.
+_fx_v2_original_stop = UniversalFuturesBotGUI.stop_bot
+def fx_v2_stop_bot(self):
+    self.v2_watchdog_running = False
+    result = _fx_v2_original_stop(self)
+    try:
+        p = fx_fetch_position(self, self.symbol) if getattr(self, "exchange", None) and self.symbol else None
+        if not p:
+            fx_clear_runtime_state(self)
+    except Exception:
+        pass
+    fx_release_profile_lock(self)
+    return result
+UniversalFuturesBotGUI.stop_bot = fx_v2_stop_bot
+
+# -------------------- MAIN ----------------------------------
+
+# ============================================================
+# V8.3.4 FOREX-ONLY FINAL OVERRIDES
+# ============================================================
+_original_v833_build_exchange = UniversalFuturesBotGUI.build_exchange
+def v833_forex_build_exchange(self, exchange_id, api_key, api_secret, account_mode):
+    if str(exchange_id).strip().lower() not in ("mt5_forex","mt5","forex"):
+        raise RuntimeError("V8.3.3 FOREX-ONLY BOT: Crypto/futures exchanges are disabled. Use MT5 Forex.")
+    return fx_build_exchange(self, "mt5_forex", api_key, api_secret, account_mode)
+UniversalFuturesBotGUI.build_exchange = v833_forex_build_exchange
+# Keep the existing V2 MT5 execution, recovery, session/news/correlation/trailing layers.
+
+
+# ============================================================
+# V8.4.2-FOREX-AI-AGENT-R6.5 FINAL OVERRIDES
+# ============================================================
+GUI = UniversalFuturesBotGUI
+_prev_init = GUI.__init__
+_prev_save = GUI.save_settings
+_prev_load = GUI.load_settings
+_prev_pre = GUI._validate_strategy_preflight
+_prev_prot = GUI.calculate_protection_prices
+_prev_start = GUI.start_bot
+_prev_finalize = GUI._finalize_performance_trade
+
+
+def get_completed_atr(self, symbol, limit=160):
+    rows=self.exchange.fetch_ohlcv(symbol,self.v_tf.get(),limit)
+    d=pd.DataFrame(rows,columns=["time","open","high","low","close","vol"])
+    if len(d)<30: raise RuntimeError("Not enough candles for completed-candle ATR.")
+    prev=d["close"].shift(1)
+    tr=pd.concat([d["high"]-d["low"],(d["high"]-prev).abs(),(d["low"]-prev).abs()],axis=1).max(axis=1)
+    atr=float(calculate_rma(tr,int(self.e_adx_len.get() or 14)).iloc[-2])
+    if not np.isfinite(atr) or atr<=0: raise RuntimeError("Completed-candle ATR is invalid.")
+    return atr
+
+
+def _r65_load_ai(self, cfg):
+    for w,k,default in [
+        (self.e_ai_min_families,"ai_min_families",3),(self.e_ai_min_edge,"ai_min_edge",0.20),(self.e_ai_family_confidence,"ai_family_confidence",0.55),(self.e_ai_max_conflicts,"ai_max_conflicts",1),
+        (self.e_min_reverse_families,"min_reverse_families",2),(self.e_max_open_trades,"max_open_trades",1)]:
+        w.delete(0,tk.END); w.insert(0,cfg.get(k,default))
+    self.v_ai_require_trend.set(cfg.get("ai_require_trend",True)); self.v_ai_require_structure.set(cfg.get("ai_require_structure",True))
+    self.v_reverse_exit_mode.set(cfg.get("reverse_exit_mode","MIN_FAMILIES"))
+    self.v_grid_mode.set(cfg.get("grid_mode","OFF"))
+    self.v_liq_entry_mode.set(cfg.get("liq_entry_mode","FRESH_BREAK"))
+    self.e_div_min_count.delete(0,tk.END); self.e_div_min_count.insert(0,cfg.get("div_min_count","1"))
+    self.v_div_entry_mode.set(cfg.get("div_entry_mode","FRESH"))
+    self.e_atr_tp1_mult.delete(0,tk.END); self.e_atr_tp1_mult.insert(0,cfg.get("atr_tp1_mult","1.2"))
+    self.e_atr_tp2_mult.delete(0,tk.END); self.e_atr_tp2_mult.insert(0,cfg.get("atr_tp2_mult","2.2"))
+    self.ai_agent_preset_name=cfg.get("ai_agent_preset_name","CURRENT_SETTINGS")
+    self.ai_agent_preset_applied=bool(cfg.get("ai_agent_preset_applied",False))
+
+
+def r65_load(self):
+    """Additive migration: preserve existing saved values; fill only missing fields."""
+    try:
+        with open(CONFIG_FILE,encoding="utf-8") as f: cfg=json.load(f)
+        if not isinstance(cfg,dict): cfg={}
+    except Exception: cfg={}
+    try: schema=int(cfg.get("config_schema_version",0) or 0)
+    except Exception: schema=0
+    if schema<CONFIG_SCHEMA_VERSION:
+        missing=[]
+        for k,v in AI_AGENT_PRESET.items():
+            if k not in cfg:
+                cfg[k]=v
+                missing.append(k)
+        cfg.setdefault("ai_agent_preset_name","CURRENT_SETTINGS")
+        cfg.setdefault("ai_agent_preset_applied",False)
+        cfg["config_schema_version"]=CONFIG_SCHEMA_VERSION
+        cfg["runtime_schema_version"]=RUNTIME_SCHEMA_VERSION
+        cfg["app_version"]=APP_VERSION
+        try:
+            with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
+            self.log(f"CONFIG MIGRATION R6.5: schema {schema} -> {CONFIG_SCHEMA_VERSION}; initialized {len(missing)} missing fields; existing saved values preserved.")
+        except Exception as e: self.log(f"CONFIG MIGRATION SAVE WARNING: {e}")
+    _prev_load(self)
+    try:
+        with open(CONFIG_FILE,encoding="utf-8") as f: final_cfg=json.load(f)
+    except Exception: final_cfg=cfg
+    _r65_load_ai(self,final_cfg)
+    self._settings_dirty=False
+    return None
+
+def r65_save(self):
+    _prev_save(self)
+    try:
+        with open(CONFIG_FILE,encoding="utf-8") as f: cfg=json.load(f)
+        cfg.update({
+            "config_schema_version":CONFIG_SCHEMA_VERSION,"runtime_schema_version":RUNTIME_SCHEMA_VERSION,"app_version":APP_VERSION,
+            "ai_agent_preset_name":self.ai_agent_preset_name,"ai_agent_preset_applied":self.ai_agent_preset_applied,
+            "ai_min_families":self.e_ai_min_families.get(),"ai_min_edge":self.e_ai_min_edge.get(),"ai_family_confidence":self.e_ai_family_confidence.get(),"ai_max_conflicts":self.e_ai_max_conflicts.get(),
+            "ai_require_trend":self.v_ai_require_trend.get(),"ai_require_structure":self.v_ai_require_structure.get(),
+            "ai_dynamic_management_enabled":True,"ai_min_risk_pct":AI_AGENT_MIN_RISK_PCT,"ai_max_risk_pct":AI_AGENT_MAX_RISK_PCT,
+            "ai_min_atr_sl_mult":AI_AGENT_MIN_ATR_SL_MULT,"ai_max_atr_sl_mult":AI_AGENT_MAX_ATR_SL_MULT,
+            "ai_min_tp1_r_mult":AI_AGENT_MIN_TP1_R_MULT,"ai_max_tp1_r_mult":AI_AGENT_MAX_TP1_R_MULT,
+            "ai_min_tp2_r_mult":AI_AGENT_MIN_TP2_R_MULT,"ai_max_tp2_r_mult":AI_AGENT_MAX_TP2_R_MULT,
+            "reverse_exit_mode":self.v_reverse_exit_mode.get(),"min_reverse_families":self.e_min_reverse_families.get(),
+            "grid_mode":self.v_grid_mode.get(),"liq_entry_mode":self.v_liq_entry_mode.get(),"div_min_count":self.e_div_min_count.get(),"div_entry_mode":self.v_div_entry_mode.get(),"max_open_trades":self.e_max_open_trades.get(),"atr_tp1_mult":self.e_atr_tp1_mult.get(),"atr_tp2_mult":self.e_atr_tp2_mult.get(),
+        })
+        with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(cfg,f,indent=4)
+    except Exception as e: self.log(f"R6.5 AI config save warning: {e}")
+
+
+def r65_pre(self):
+    out=_prev_pre(self)
+    mode=self._r65_validate_ai()
+    if mode=="AI_AGENT": self.log(f"AI AGENT PREFLIGHT: Families={self.e_ai_min_families.get()} | Edge={self.e_ai_min_edge.get()} | Confidence={self.e_ai_family_confidence.get()} | MaxConflicts={self.e_ai_max_conflicts.get()} | Trend={'ON' if self.v_ai_require_trend.get() else 'OFF'} | Structure={'ON' if self.v_ai_require_structure.get() else 'OFF'}")
+    return out
+
+
+def _r65_validate_ai(self):
+    ai_min_families=int(self.e_ai_min_families.get()); ai_min_edge=float(self.e_ai_min_edge.get()); conf=float(self.e_ai_family_confidence.get()); maxc=int(self.e_ai_max_conflicts.get())
+    if not 1<=ai_min_families<=4: raise ValueError("AI Agent Minimum Families must be 1..4.")
+    if not 0<ai_min_edge<1: raise ValueError("AI Agent Edge must be >0 and <1.")
+    if not 0<conf<=1: raise ValueError("AI Agent Family Confidence must be >0 and <=1.")
+    if not 0<=maxc<=4: raise ValueError("AI Agent Max Conflicts must be 0..4.")
+    if self.v_reverse_exit_mode.get() not in REVERSAL_EXIT_MODES: raise ValueError("Reverse Exit Rule must be ALL_ACTIVE or MIN_FAMILIES.")
+    mr=int(self.e_min_reverse_families.get())
+    if not 1<=mr<=4: raise ValueError("Minimum Reverse Families must be 1..4.")
+    try:
+        max_open=int(self.e_max_open_trades.get().strip())
+    except Exception:
+        raise ValueError("Max Open Trades must be a whole number.")
+    if max_open != 1:
+        self.e_max_open_trades.delete(0,tk.END); self.e_max_open_trades.insert(0,"1")
+        self.log(f"AI AGENT SAFETY: Max Open Trades normalized from {max_open} to 1 for MT5 single-position contract.")
+    return self.v_signal_mode.get().strip().upper()
+
+
+def r65_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev,**kwargs):
+    mgr=getattr(self,"_ai_active_management",None)
+    if self.v_signal_mode.get().strip().upper()=="AI_AGENT" and mgr and AI_AGENT_DYNAMIC_MANAGEMENT_ENABLED and not bool(self.v_hold_until_all_reverse.get()):
+        atr=float(mgr["atr_value"]); sd=atr*float(mgr["atr_sl_mult"]); d1=sd*float(mgr["tp1_r"]); d2=sd*float(mgr["tp2_r"])
+        if side=="LONG": sl,tp1,tp2=entry-sd,entry+d1,entry+d2
+        else: sl,tp1,tp2=entry+sd,entry-d1,entry-d2
+        sl,tp1,tp2=[fx_safe_price(self,symbol,v) for v in (sl,tp1,tp2)]
+        if side=="LONG" and not(sl<entry<tp1<tp2): raise RuntimeError("AI R6.5 LONG protection ordering invalid.")
+        if side=="SHORT" and not(sl>entry>tp1>tp2): raise RuntimeError("AI R6.5 SHORT protection ordering invalid.")
+        self.log(f"AI EFFECTIVE RISK | Risk={mgr['risk_pct']:.3f}% | SL={mgr['atr_sl_mult']:.3f} ATR | TP1={mgr['tp1_r']:.3f}R | TP2={mgr['tp2_r']:.3f}R | ActualEntry={entry:.12g} | ActualQty={qty:g}")
+        return sl,tp1,tp2,sd/entry,d1/entry,d2/entry
+    return _prev_prot(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev,**kwargs)
+
+
+def r65_start(self):
+    self._r65_validate_ai()
+    _prev_start(self)
+    if self.is_running and self.v_signal_mode.get().strip().upper()=="AI_AGENT":
+        self.log(f"V8.4.2 FOREX AI-AGENT R6.5-HOTFIX1 | Preset={self.ai_agent_preset_name} | Risk=0.20–0.50% | SL=1.50–2.40 ATR | TP1=1.00–1.50R | TP2=2.00–3.00R")
+
+
+def r65_finalize(self,reason="UNKNOWN",balance=None):
+    out=_prev_finalize(self,reason=reason,balance=balance); self._ai_active_management=None; return out
+
+def r65_init(self,root):
+    # R6.5-HOTFIX1: initialize every R6.5 contract variable BEFORE _prev_init().
+    # IMPORTANT: the extra controls are children of a dedicated LabelFrame.
+    # Creating the Entry widgets with parent=root and then gridding them into
+    # that LabelFrame mixes Tk geometry managers on the same parent and causes:
+    #   TclError: cannot use geometry manager "grid" inside ".!toplevel":
+    #   pack is already managing its content windows
+    # Keep the variables available before _prev_init(), but give the widgets
+    # the correct parent frame from the start.
+    self.v_grid_mode=tk.StringVar(root,value="OFF")
+    self.v_liq_entry_mode=tk.StringVar(root,value="FRESH_BREAK")
+    self.v_div_entry_mode=tk.StringVar(root,value="FRESH")
+
+    self._r65_extra_frame=tk.LabelFrame(root,text=" R6.5 AI-Agent Controls — Forex / MT5 ")
+    self._r65_extra_frame.pack(side="bottom",fill="x",padx=8,pady=4)
+    fr=self._r65_extra_frame
+    self.e_div_min_count=tk.Entry(fr); self.e_div_min_count.insert(0,"1")
+    self.e_atr_tp1_mult=tk.Entry(fr); self.e_atr_tp1_mult.insert(0,"1.2")
+    self.e_atr_tp2_mult=tk.Entry(fr); self.e_atr_tp2_mult.insert(0,"2.2")
+    tk.Label(fr,text="Liquidity Entry:").grid(row=0,column=0,sticky="e")
+    ttk.OptionMenu(fr,self.v_liq_entry_mode,"FRESH_BREAK","FRESH_BREAK","CURRENT_TREND").grid(row=0,column=1,padx=4,sticky="w")
+    tk.Label(fr,text="Divergence Entry:").grid(row=0,column=2,sticky="e")
+    ttk.OptionMenu(fr,self.v_div_entry_mode,"FRESH","FRESH","CURRENT_STATE").grid(row=0,column=3,padx=4,sticky="w")
+    tk.Label(fr,text="Min Div:").grid(row=0,column=4,sticky="e")
+    self.e_div_min_count.grid(row=0,column=5,padx=4,sticky="w")
+    tk.Label(fr,text="AI TP1 R:").grid(row=0,column=6,sticky="e")
+    self.e_atr_tp1_mult.grid(row=0,column=7,padx=4,sticky="w")
+    tk.Label(fr,text="AI TP2 R:").grid(row=0,column=8,sticky="e")
+    self.e_atr_tp2_mult.grid(row=0,column=9,padx=4,sticky="w")
+    tk.Label(fr,text="Grid: OFF (Forex execution disabled)",fg="#555555").grid(row=1,column=0,columnspan=10,sticky="w")
+
+    _prev_init(self,root)
+    self._ai_active_management=None
+GUI.__init__=r65_init
+GUI.save_settings=r65_save
+GUI.load_settings=r65_load
+GUI._validate_strategy_preflight=r65_pre
+GUI.calculate_protection_prices=r65_prot
+GUI.start_bot=r65_start
+GUI._finalize_performance_trade=r65_finalize
+
+
+
+# ============================================================
+# V7.1 FOREX PORT LAYER
+# This layer is deliberately MT5-native. It ports the V7.1 engine,
+# configuration, lifecycle, capital, scanner and trade-history contracts
+# without importing any crypto/futures execution path.
+# ============================================================
+
+def _fx71_config_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    s = str(value).strip().lower()
+    if s in {"1","true","yes","on","enabled"}: return True
+    if s in {"0","false","no","off","disabled"}: return False
+    return bool(default)
+
+def _fx71_json_read(path, default=None):
+    try:
+        p = Path(path)
+        if not p.exists(): return default
+        with p.open("r", encoding="utf-8") as f: return json.load(f)
+    except Exception: return default
+
+_FX71_JSON_LOCK = threading.RLock()
+def _fx71_json_write(path, data):
+    p = Path(path); p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
+    with _FX71_JSON_LOCK:
+        tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        os.replace(tmp, p)
+    return str(p)
+
+def _fx71_attr_value(bot, name):
+    obj = getattr(bot, name, None)
+    if obj is None: return None
+    try: return obj.get()
+    except Exception: return obj
+
+def _fx71_set_attr_value(bot, name, value):
+    obj = getattr(bot, name, None)
+    if obj is None: return False
+    try:
+        obj.set(value); return True
+    except Exception:
+        try:
+            obj.delete(0, tk.END); obj.insert(0, str(value)); return True
+        except Exception: return False
+
+def _fx71_ensure_vars(self):
+    # Existing Forex variables remain authoritative. These are only the V7.1
+    # additions that the Forex base did not expose.
+    defs_bool = {
+        "v_ai_require_mtf": AI_AGENT_REQUIRE_MTF,
+        "v_ai_soft_regime": AI_AGENT_SOFT_REGIME_ENABLED,
+        "v_ai_2f_fallback_enabled": AI_AGENT_2F_FALLBACK_ENABLED,
+        "v_ai_2f_require_structure": AI_AGENT_2F_REQUIRE_STRUCTURE,
+        "v_ai_2f_require_independent": AI_AGENT_2F_REQUIRE_INDEPENDENT,
+        "v_ai_adaptive_atr_enabled": AI_AGENT_ADAPTIVE_ATR_ENABLED,
+        "v_ai_shadow_mode": AI_AGENT_SHADOW_MODE,
+        "v_cost_gate_enabled": DEFAULT_COST_GATE_ENABLED,
+        "v_execution_quality_profile": EXECUTION_DEFAULT_PROFILE,
+        "v_fibonacci_protection_enabled": DEFAULT_FIBONACCI_PROTECTION_ENABLED,
+        "v_risk_sizing_enabled": DEFAULT_RISK_SIZING_ENABLED,
+        "v_trading_capital_enabled": DEFAULT_TRADING_CAPITAL_ENABLED,
+        "v_live_scanner_enabled": SCANNER_DEFAULT_ENABLED,
+        "v_scanner_mode": SCANNER_DEFAULT_MODE,
+        "v_scanner_qty_mode": SCANNER_DEFAULT_QTY_MODE,
+        "v_scanner_leverage_mode": SCANNER_DEFAULT_LEVERAGE_MODE,
+        "v_grid_mode": "OFF",
+        "v_grid_trend_filter": True,
+        "v_grid_recenter": True,
+    }
+    defs_str = {
+        "e_ai_min_participation": str(AI_AGENT_MIN_FAMILY_PARTICIPATION),
+        "e_ai_soft_edge": str(AI_AGENT_SOFT_EDGE),
+        "e_ai_soft_min_families": str(AI_AGENT_SOFT_MIN_FAMILIES),
+        "e_ai_soft_max_regime_misses": str(AI_AGENT_SOFT_MAX_REGIME_MISSES),
+        "e_ai_2f_min_edge": str(AI_AGENT_2F_MIN_EDGE),
+        "e_ai_2f_min_family_confidence": str(AI_AGENT_2F_MIN_FAMILY_CONFIDENCE),
+        "e_ai_2f_min_participation": str(AI_AGENT_2F_MIN_PARTICIPATION),
+        "e_ai_adaptive_atr_floor_pct": str(AI_AGENT_ADAPTIVE_ATR_FLOOR_PCT),
+        "e_ai_adaptive_atr_quantile": str(AI_AGENT_ADAPTIVE_ATR_QUANTILE),
+        "e_taker_fee_pct": str(DEFAULT_TAKER_FEE_PCT),
+        "e_max_entry_spread_pct": str(DEFAULT_MAX_ENTRY_SPREAD_PCT),
+        "e_max_entry_slippage_pct": str(DEFAULT_MAX_ENTRY_SLIPPAGE_PCT),
+        "e_max_entry_candle_drift_pct": str(DEFAULT_MAX_ENTRY_CANDLE_DRIFT_PCT),
+        "e_min_orderbook_depth_mult": str(DEFAULT_MIN_ORDERBOOK_DEPTH_MULT),
+        "e_fib_lookback": str(DEFAULT_FIBONACCI_LOOKBACK),
+        "e_fib_sl_level": str(DEFAULT_FIBONACCI_SL_LEVEL),
+        "e_fib_tp1_level": str(DEFAULT_FIBONACCI_TP1_LEVEL),
+        "e_fib_tp2_level": str(DEFAULT_FIBONACCI_TP2_LEVEL),
+        "e_trading_capital": str(DEFAULT_TRADING_CAPITAL_USDT),
+        "e_scanner_interval": str(SCANNER_DEFAULT_INTERVAL_SEC),
+        "e_scanner_max_positions": str(SCANNER_DEFAULT_MAX_POSITIONS),
+        "e_scanner_max_symbols": str(SCANNER_DEFAULT_MAX_SYMBOLS),
+        "e_scanner_shortlist": str(SCANNER_DEFAULT_SHORTLIST),
+        "e_scanner_cooldown_sec": str(SCANNER_DEFAULT_COOLDOWN_SEC),
+        "e_scanner_fixed_qty": "0.01",
+        "e_scanner_manual_leverage": "5",
+        "e_scanner_min_volume": str(SCANNER_DEFAULT_MIN_QUOTE_VOLUME),
+        "e_bot_id": "BOT-01",
+    }
+    # V7.1-compatible AI/protection values already partly exist in Forex.
+    if not hasattr(self, "e_ai_adaptive_atr_floor_pct"): pass
+    for n,d in defs_bool.items():
+        if not hasattr(self,n): setattr(self,n,tk.BooleanVar(value=d) if n.startswith("v_") and n not in {"v_execution_quality_profile","v_scanner_mode","v_scanner_qty_mode","v_scanner_leverage_mode","v_grid_mode"} else tk.StringVar(value=d))
+    for n,d in defs_str.items():
+        if not hasattr(self,n):
+            setattr(self,n,tk.Entry(self.root)); getattr(self,n).insert(0,d)
+    if not hasattr(self,"v_execution_quality_profile"): self.v_execution_quality_profile=tk.StringVar(value=EXECUTION_DEFAULT_PROFILE)
+    if not hasattr(self,"v_scanner_mode"): self.v_scanner_mode=tk.StringVar(value=SCANNER_DEFAULT_MODE)
+    if not hasattr(self,"v_scanner_qty_mode"): self.v_scanner_qty_mode=tk.StringVar(value=SCANNER_DEFAULT_QTY_MODE)
+    if not hasattr(self,"v_scanner_leverage_mode"): self.v_scanner_leverage_mode=tk.StringVar(value=SCANNER_DEFAULT_LEVERAGE_MODE)
+    if not hasattr(self,"v_grid_mode"): self.v_grid_mode=tk.StringVar(value="OFF")
+    if not hasattr(self,"v_bot_id"): self.v_bot_id=tk.StringVar(value=getattr(self,"bot_profile_id","BOT-01"))
+    if not hasattr(self,"bot_profile_id"): self.bot_profile_id="BOT-01"
+    if not hasattr(self,"hub"): self.hub=None
+    if not hasattr(self,"scanner_parent_profile"): self.scanner_parent_profile=""
+    if not hasattr(self,"scanner_child_role"): self.scanner_child_role=""
+    if not hasattr(self,"scanner_preflight_only"): self.scanner_preflight_only=False
+    if not hasattr(self,"_scanner_transient_profile"): self._scanner_transient_profile=False
+    if not hasattr(self,"_scanner_preflight_result"): self._scanner_preflight_result=None
+    if not hasattr(self,"_scanner_stop_event"): self._scanner_stop_event=threading.Event()
+    if not hasattr(self,"_scanner_children"): self._scanner_children={}
+    if not hasattr(self,"_settings_dirty"): self._settings_dirty=True
+
+def _fx71_add_advanced_ui(self):
+    if getattr(self,"_fx71_advanced_ui_built",False): return
+    parent=getattr(self,"scroll_frame",self.root)
+    f=tk.LabelFrame(parent,text=" V7.1 Advanced AI / Execution / Capital / Scanner ")
+    f.pack(fill="x",padx=10,pady=5)
+    self._fx71_advanced_frame=f
+    def entry(row,label,var,col):
+        tk.Label(f,text=label).grid(row=row,column=col,sticky="e",padx=3,pady=2)
+        w=getattr(self,var)
+        if getattr(w,"master",None) is not f:
+            try: oldv=w.get()
+            except Exception: oldv=""
+            w=tk.Entry(f,width=9); w.insert(0,str(oldv)); setattr(self,var,w)
+        w.grid(row=row,column=col+1,sticky="w",padx=3,pady=2)
+    def check(row,label,var,col=0,span=1):
+        ttk.Checkbutton(f,text=label,variable=getattr(self,var)).grid(row=row,column=col,columnspan=span,sticky="w",padx=4,pady=2)
+
+    check(0,"AI Require MTF","v_ai_require_mtf",0)
+    check(0,"AI Soft Regime","v_ai_soft_regime",2)
+    check(0,"AI 2F Fallback","v_ai_2f_fallback_enabled",4)
+    check(0,"AI Shadow","v_ai_shadow_mode",6)
+    entry(1,"AI Participation","e_ai_min_participation",0)
+    entry(1,"Soft Edge","e_ai_soft_edge",2)
+    entry(1,"Soft Families","e_ai_soft_min_families",4)
+    entry(1,"Soft Misses","e_ai_soft_max_regime_misses",6)
+    entry(2,"2F Edge","e_ai_2f_min_edge",0)
+    entry(2,"2F Confidence","e_ai_2f_min_family_confidence",2)
+    entry(2,"2F Participation","e_ai_2f_min_participation",4)
+    check(2,"2F Structure","v_ai_2f_require_structure",6)
+    check(3,"2F Independent","v_ai_2f_require_independent",0)
+    check(3,"Adaptive ATR","v_ai_adaptive_atr_enabled",2)
+    entry(3,"ATR Floor %","e_ai_adaptive_atr_floor_pct",4)
+    entry(3,"ATR Quantile","e_ai_adaptive_atr_quantile",6)
+    tk.Label(f,text="Execution Profile:").grid(row=4,column=0,sticky="e",padx=3)
+    ttk.OptionMenu(f,self.v_execution_quality_profile,EXECUTION_DEFAULT_PROFILE,*EXECUTION_QUALITY_PROFILES.keys()).grid(row=4,column=1,sticky="w")
+    check(4,"Cost Gate","v_cost_gate_enabled",2)
+    entry(5,"Taker Fee %","e_taker_fee_pct",0)
+    entry(5,"Max Spread %","e_max_entry_spread_pct",2)
+    entry(5,"Max Slip %","e_max_entry_slippage_pct",4)
+    entry(5,"Max Drift %","e_max_entry_candle_drift_pct",6)
+    check(6,"Fibonacci Protection","v_fibonacci_protection_enabled",0,2)
+    entry(6,"Fib Lookback","e_fib_lookback",4)
+    entry(6,"Fib SL %","e_fib_sl_level",6)
+    entry(7,"Fib TP1 %","e_fib_tp1_level",0)
+    entry(7,"Fib TP2 %","e_fib_tp2_level",2)
+    check(7,"Risk Sizing","v_risk_sizing_enabled",4)
+    check(7,"Trading Capital","v_trading_capital_enabled",6)
+    entry(8,"Capital USD","e_trading_capital",0)
+    check(8,"Live Pair Scanner","v_live_scanner_enabled",2,2)
+    tk.Label(f,text="Mode:").grid(row=8,column=4,sticky="e")
+    ttk.OptionMenu(f,self.v_scanner_mode,SCANNER_DEFAULT_MODE,*SCANNER_SUPPORTED_MODES).grid(row=8,column=5,sticky="w")
+    tk.Label(f,text="Qty:").grid(row=8,column=6,sticky="e")
+    ttk.OptionMenu(f,self.v_scanner_qty_mode,SCANNER_DEFAULT_QTY_MODE,*SCANNER_SUPPORTED_QTY_MODES).grid(row=8,column=7,sticky="w")
+    tk.Label(f,text="Scanner interval / positions / universe / shortlist:").grid(row=9,column=0,columnspan=2,sticky="w",padx=4)
+    entry(9,"Interval sec","e_scanner_interval",2)
+    entry(9,"Max positions","e_scanner_max_positions",4)
+    entry(9,"Universe cap","e_scanner_max_symbols",6)
+    entry(10,"Shortlist","e_scanner_shortlist",0)
+    entry(10,"Cooldown sec","e_scanner_cooldown_sec",2)
+    entry(10,"Fixed lot","e_scanner_fixed_qty",4)
+    entry(10,"Manual leverage","e_scanner_manual_leverage",6)
+    tk.Label(f,text="Forex scanner is MT5-native: symbols_get(), completed-candle OHLCV/ATR/momentum, broker spread, then the normal Forex engine for promotion.").grid(row=11,column=0,columnspan=8,sticky="w",padx=4,pady=3)
+    self._fx71_advanced_ui_built=True
+
+
+
+    # V7.1 compatibility aliases. Where Forex already has a native control,
+    # both names point to the same Tk variable/widget; crypto-only grid controls
+    # remain configuration-only and execution stays disabled in Forex.
+    aliases = {
+        "e_div_cci_len":"e_div_cci","e_div_mom_len":"e_div_mom",
+        "e_liq_length":"e_liq_len","e_sr_volume_ma":"e_sr_vol_ma",
+        "e_trendline_buffer":"e_trend_buffer","e_trendline_length":"e_trend_len",
+        "e_trendline_min_distance":"e_trend_min_dist","e_trendline_retest":"e_trend_retest",
+        "v_sr_entry_mode":"v_sr_entry","v_sr_vote_mode":"v_sr_vote",
+        "v_trendline_entry_mode":"v_trend_entry","v_use_liq_swings":"v_use_liq_swing",
+    }
+    for alias,base_name in aliases.items():
+        if hasattr(self,base_name): setattr(self,alias,getattr(self,base_name))
+    compat_entries = {
+        "e_fallback_sl_roi":"30.0","e_grid_cooldown":"0","e_grid_levels":"3","e_grid_max_dd":"5.0",
+        "e_grid_max_exposure":"0.0","e_grid_order_size":"0.0","e_grid_recenter":"0.0","e_grid_spacing":"0.0",
+        "e_grid_score_min":"0.0","e_grid_size_increase":"0.0","e_grid_sl":"0.0","e_grid_spacing":"0.0","e_grid_tp":"0.0",
+        "e_liq_buffer":"3.0","e_roi_sl":"30.0","e_roi_tp1":"60.0","e_roi_tp2":"120.0","e_scanner_cooldown":"15.0",
+    }
+    for n,d in compat_entries.items():
+        if not hasattr(self,n):
+            setattr(self,n,tk.Entry(self.root));getattr(self,n).insert(0,d)
+    compat_bools = {
+        "v_div_use_cci":True,"v_div_use_cmf":True,"v_div_use_macd":True,"v_div_use_macd_hist":True,
+        "v_div_use_mfi":True,"v_div_use_momentum":True,"v_div_use_obv":True,"v_div_use_rsi":True,
+        "v_div_use_stoch":True,"v_div_use_vwmacd":True,"v_emergency_enabled":True,"v_fallback_sl_enabled":True,
+        "v_legacy_protection_enabled":False,"v_max_dd_enabled":True,"v_roi_sl_enabled":True,
+        "v_simple_atr_sl_enabled":True,"v_simple_atr_tp_enabled":True,"v_sl_enabled":True,
+        "v_tp1_enabled":True,"v_tp2_enabled":True,"v_tp_enabled":True,
+    }
+    for n,d in compat_bools.items():
+        if not hasattr(self,n): setattr(self,n,tk.BooleanVar(value=d))
+
+def _fx71_profile_dir(self, profile=None):
+    pid=str(profile or getattr(self,"bot_profile_id","BOT-01")).strip().upper()
+    return PROFILE_DIR / re.sub(r"[^A-Z0-9._-]+","_",pid)
+
+def _fx71_profile_config_path(self, profile=None):
+    return _fx71_profile_dir(self,profile)/"config.json"
+
+def _fx71_profile_runtime_path(self, profile=None):
+    return _fx71_profile_dir(self,profile)/"runtime_state.json"
+
+def _fx71_apply_config(self,cfg):
+    if not isinstance(cfg,dict): return
+    # Generic key -> V7.1 GUI variable mapping, then Forex-specific keys.
+    for key,val in cfg.items():
+        for prefix in ("v_","e_"):
+            if _fx71_set_attr_value(self,prefix+key,val): break
+    if "bot_id" in cfg:
+        self.bot_profile_id=str(cfg["bot_id"]).strip().upper()
+        try:self.v_bot_id.set(self.bot_profile_id)
+        except Exception:pass
+    for k in ("scanner_parent_profile","scanner_child_role","scanner_preflight_only"):
+        if k in cfg: setattr(self,k,cfg[k])
+    if cfg.get("exchange") in ("mt5","forex","mt5_forex",""):
+        try:self.v_exchange.set("mt5_forex")
+        except Exception:pass
+
+def _fx71_collect_config(self):
+    cfg={"config_schema_version":CONFIG_SCHEMA_VERSION,"app_version":APP_VERSION,
+         "bot_id":str(getattr(self,"bot_profile_id","BOT-01")),"exchange":"mt5_forex"}
+    # Persist every V7.1 variable without replacing Forex-native names.
+    for name,obj in vars(self).items():
+        if not (name.startswith("v_") or name.startswith("e_")): continue
+        key=name[2:]
+        try: cfg[key]=obj.get()
+        except Exception: pass
+    # Explicit Forex aliases and lifecycle fields.
+    cfg.update({
+        "account_mode":_fx71_attr_value(self,"v_account_mode") or "MT5_PAPER",
+        "symbol":_fx71_attr_value(self,"e_symbol") or "EURUSD",
+        "timeframe":_fx71_attr_value(self,"v_tf") or "15m",
+        "leverage":_fx71_attr_value(self,"e_lev") or "5",
+        "scanner_parent_profile":getattr(self,"scanner_parent_profile",""),
+        "scanner_child_role":getattr(self,"scanner_child_role",""),
+        "scanner_preflight_only":bool(getattr(self,"scanner_preflight_only",False)),
+    })
+    return cfg
+
+def _fx71_save_profile_config(self):
+    p=_fx71_profile_dir(self); p.mkdir(parents=True,exist_ok=True)
+    cfg=_fx71_collect_config(self)
+    _fx71_json_write(_fx71_profile_config_path(self),cfg)
+    return cfg
+
+def _fx71_load_profile_config(self, profile=None):
+    cfg=_fx71_json_read(_fx71_profile_config_path(self,profile),None)
+    if isinstance(cfg,dict):
+        _fx71_apply_config(self,cfg)
+        return cfg
+    return None
+
+def _fx71_init_master_db(self):
+    Path(MASTER_DB_FILE).parent.mkdir(parents=True,exist_ok=True)
+    with sqlite3.connect(MASTER_DB_FILE) as con:
+        con.execute("""CREATE TABLE IF NOT EXISTS trades(
+            trade_id TEXT PRIMARY KEY, profile TEXT, engine_bot_id TEXT, parent_profile TEXT,
+            exchange TEXT, symbol TEXT, side TEXT, entry_time REAL, exit_time REAL,
+            entry REAL, exit REAL, qty REAL, pnl REAL, reason TEXT, leverage REAL,
+            entry_order_id TEXT, sl_order_id TEXT, tp1_order_id TEXT, tp2_order_id TEXT,
+            be_order_id TEXT, exit_order_id TEXT, tp1_qty REAL, tp1_price REAL, tp1_time REAL,
+            tp2_qty REAL, tp2_price REAL, tp2_time REAL, exit_qty REAL, duration REAL, result TEXT)""")
+        con.commit()
+
+def _fx71_db_trade_open(self, side, entry, qty, balance):
+    self._fx71_trade_id=uuid.uuid4().hex
+    self._fx71_trade_db_open={"trade_id":self._fx71_trade_id,"profile":getattr(self,"scanner_parent_profile","") or getattr(self,"bot_profile_id","BOT-01"),
+                              "engine_bot_id":getattr(self,"bot_profile_id","BOT-01"),"parent_profile":getattr(self,"scanner_parent_profile",""),
+                              "exchange":"mt5_forex","symbol":getattr(self,"symbol",""),"side":side,
+                              "entry_time":time.time(),"entry":float(entry),"qty":float(qty),"balance_start":float(balance),
+                              "entry_order_id":str((getattr(self,"active_trade",{}) or {}).get("entry_order_id") or "")}
+    with sqlite3.connect(MASTER_DB_FILE) as con:
+        con.execute("INSERT OR REPLACE INTO trades(trade_id,profile,engine_bot_id,parent_profile,exchange,symbol,side,entry_time,entry,qty,reason,result) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (self._fx71_trade_id,self._fx71_trade_db_open["profile"],self._fx71_trade_db_open["engine_bot_id"],self._fx71_trade_db_open["parent_profile"],
+                     "mt5_forex",getattr(self,"symbol",""),side,time.time(),float(entry),float(qty),"OPEN","OPEN"))
+        con.commit()
+
+def _fx71_db_trade_close(self, reason="CLOSED", balance=None):
+    rec=getattr(self,"_fx71_trade_db_open",None)
+    if not rec:return
+    try:
+        if balance is None: balance=float(self.fetch_balance_total())
+        pnl=float(balance)-float(rec["balance_start"])
+        exit_price=0.0
+        p=None
+        try:p=fx_fetch_position(self,self.symbol)
+        except Exception:pass
+        if not p: exit_price=float((getattr(self,"last_protected_position",{}) or {}).get("last_exit_price") or 0.0)
+        result="WIN" if pnl>0 else "LOSS" if pnl<0 else "BREAKEVEN"
+        now=time.time(); duration=max(0.0,now-float(rec["entry_time"]))
+        with sqlite3.connect(MASTER_DB_FILE) as con:
+            con.execute("""UPDATE trades SET exit_time=?,exit=?,pnl=?,reason=?,exit_order_id=?,exit_qty=?,duration=?,result=? WHERE trade_id=?""",
+                        (now,exit_price,pnl,str(reason),str(getattr(self,"_last_exit_order_id","") or ""),
+                         float(rec["qty"]),duration,result,rec["trade_id"]))
+            con.commit()
+    except Exception as exc:
+        try:self.log(f"V7.1 TRADE HISTORY WARNING: {exc}")
+        except Exception:pass
+    finally:self._fx71_trade_db_open=None
+
+def _fx71_refresh_trade_history(self):
+    if not hasattr(self,"_trade_history_tree"): return
+    profile=str(getattr(self,"_trade_history_profile_var",tk.StringVar(value="ALL")).get() or "ALL")
+    with sqlite3.connect(MASTER_DB_FILE) as con:
+        if profile=="ALL":
+            rows=con.execute("SELECT result,profile,engine_bot_id,symbol,side,entry_time,exit_time,entry,exit,qty,pnl,reason,leverage,duration,trade_id FROM trades WHERE result!='OPEN' ORDER BY exit_time DESC LIMIT 500").fetchall()
+        else:
+            rows=con.execute("SELECT result,profile,engine_bot_id,symbol,side,entry_time,exit_time,entry,exit,qty,pnl,reason,leverage,duration,trade_id FROM trades WHERE result!='OPEN' AND profile=? ORDER BY exit_time DESC LIMIT 500",(profile,)).fetchall()
+    tree=self._trade_history_tree
+    for iid in tree.get_children(): tree.delete(iid)
+    for idx,row in enumerate(rows):
+        vals=list(row)
+        for j in (5,6):
+            if vals[j]: vals[j]=datetime.fromtimestamp(float(vals[j]),tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        tree.insert("", "end", iid=f"h{idx}", values=vals)
+
+def _fx71_build_trade_history_ui(self):
+    if getattr(self,"_fx71_history_built",False):return
+    # In standalone mode put a compact history frame below the existing controls.
+    parent=getattr(self,"scroll_frame",self.root)
+    f=tk.LabelFrame(parent,text=" V7.1 COMPLETED TRADE HISTORY ")
+    f.pack(fill="both",expand=False,padx=10,pady=5)
+    top=tk.Frame(f);top.pack(fill="x")
+    self._trade_history_profile_var=tk.StringVar(value="ALL")
+    ttk.Button(top,text="REFRESH",command=self._refresh_trade_history).pack(side="left",padx=3)
+    ttk.Button(top,text="ALL PROFILES",command=lambda:self._trade_history_profile_var.set("ALL") or self._refresh_trade_history()).pack(side="left",padx=3)
+    cols=("result","profile","engine","symbol","side","entry_time","exit_time","entry","exit","qty","pnl","reason","lev","duration","trade_id")
+    self._trade_history_tree=ttk.Treeview(f,columns=cols,show="headings",height=6)
+    for c in cols:self._trade_history_tree.heading(c,text=c.upper());self._trade_history_tree.column(c,width=105,anchor="center")
+    self._trade_history_tree.pack(fill="x",padx=3,pady=3)
+    self._fx71_history_built=True
+    _fx71_init_master_db(self)
+
+def _fx71_refresh_runtime(self):
+    return
+
+def _fx71_effective_capital(self):
+    account=float(self.fetch_account_equity() or 0.0)
+    hub=getattr(self,"hub",None)
+    if hub is None:return account
+    snap=hub._global_capital_authority_for_bot(self)
+    if not snap.get("enabled"):return account
+    return min(account,float(snap.get("available_for_bot",snap.get("effective",account))))
+
+def _fx71_wrap_entry_qty(original):
+    def wrapped(self,symbol,balance,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty):
+        effective=float(balance)
+        try:
+            effective=min(effective,float(_fx71_effective_capital(self)))
+        except Exception:pass
+        return original(self,symbol,effective,reference_price,risk_pct,sl_price_fraction,size_mode,fixed_qty)
+    return wrapped
+
+def _fx71_execution_quality_gate(self,symbol,side,reference_price):
+    profile=str(_fx71_attr_value(self,"v_execution_quality_profile") or EXECUTION_DEFAULT_PROFILE).upper()
+    lim=EXECUTION_QUALITY_PROFILES.get(profile,EXECUTION_QUALITY_PROFILES[EXECUTION_DEFAULT_PROFILE])
+    tick=mt5.symbol_info_tick(symbol); info=mt5.symbol_info(symbol)
+    if tick is None or info is None: raise RuntimeError("MT5 execution-quality telemetry unavailable.")
+    px=float(tick.ask if side=="BUY" else tick.bid); bid=float(tick.bid); ask=float(tick.ask)
+    if px<=0 or bid<=0 or ask<=0: raise RuntimeError("MT5 execution-quality price telemetry invalid.")
+    spread_pct=(ask-bid)/max(px,1e-12)*100.0
+    if spread_pct>float(lim["max_spread_pct"]): raise RuntimeError(f"EXECUTION QUALITY BLOCK: spread={spread_pct:.4f}% > {lim['max_spread_pct']:.4f}%")
+    drift=abs(px-float(reference_price))/max(float(reference_price),1e-12)*100.0
+    if drift>float(lim["max_drift_pct"]): raise RuntimeError(f"EXECUTION QUALITY BLOCK: candle-price drift={drift:.4f}% > {lim['max_drift_pct']:.4f}%")
+    return {"spread_pct":spread_pct,"drift_pct":drift,"price":px,"profile":profile}
+
+def _fx71_fib_prices(self,symbol,side,entry):
+    look=max(10,int(float(_fx71_attr_value(self,"e_fib_lookback") or DEFAULT_FIBONACCI_LOOKBACK)))
+    rows=self.exchange.fetch_ohlcv(symbol,self.v_tf.get(),look+5)
+    d=pd.DataFrame(rows,columns=["time","open","high","low","close","vol"])
+    d=d.iloc[:-1].copy()
+    if len(d)<10: raise RuntimeError("Not enough completed candles for Fibonacci protection.")
+    hi=float(d["high"].max()); lo=float(d["low"].min()); span=hi-lo
+    if span<=0: raise RuntimeError("Invalid Fibonacci swing range.")
+    slv=float(_fx71_attr_value(self,"e_fib_sl_level") or 78.6)/100.0
+    tp1v=float(_fx71_attr_value(self,"e_fib_tp1_level") or 127.2)/100.0
+    tp2v=float(_fx71_attr_value(self,"e_fib_tp2_level") or 161.8)/100.0
+    # Direction is inferred from the latest completed candle relative to the range.
+    bullish=float(d["close"].iloc[-1])>=float(d["open"].iloc[-1])
+    if side=="LONG":
+        sl=hi-span*slv; tp1=lo+span*tp1v; tp2=lo+span*tp2v
+    else:
+        sl=lo+span*slv; tp1=hi-span*tp1v; tp2=hi-span*tp2v
+    sl,tp1,tp2=[self.safe_price(symbol,x) for x in (sl,tp1,tp2)]
+    if side=="LONG" and not (sl<entry<tp1<tp2): raise RuntimeError("FIBONACCI LONG protection is unsafe/invalid.")
+    if side=="SHORT" and not (sl>entry>tp1>tp2): raise RuntimeError("FIBONACCI SHORT protection is unsafe/invalid.")
+    return sl,tp1,tp2,abs(sl-entry)/entry,abs(tp1-entry)/entry,abs(tp2-entry)/entry
+
+def _fx71_wrap_protection(original):
+    def wrapped(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev):
+        if _fx71_config_bool(_fx71_attr_value(self,"v_fibonacci_protection_enabled"),False):
+            return _fx71_fib_prices(self,symbol,side,entry)
+        return original(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev)
+    return wrapped
+
+# -------------------- profile-aware GUI wrappers --------------------
+def _fx71_build_ui_wrapper(original):
+    def wrapped(self,*args,**kwargs):
+        result=original(self,*args,**kwargs)
+        _fx71_ensure_vars(self)
+        _fx71_add_advanced_ui(self)
+        _fx71_build_trade_history_ui(self)
+        return result
+    return wrapped
+
+def _fx71_save_wrapper(original):
+    def wrapped(self,*args,**kwargs):
+        _fx71_ensure_vars(self)
+        try:
+            result=original(self,*args,**kwargs)
+        except RuntimeError as exc:
+            # V7.1 save-settings contract: preserve the hard running-context lock,
+            # but never surface it as an uncaught Tk callback traceback.
+            msg=str(exc)
+            self.log(f"CONFIG CHANGE BLOCKED | {msg}")
+            try: messagebox.showwarning("Configuration Change Blocked",msg,parent=self.root)
+            except Exception: pass
+            return False
+        except Exception as exc:
+            self.log(f"CONFIG SAVE BLOCKED | {type(exc).__name__}: {exc}")
+            return False
+        try:
+            cfg=_fx71_collect_config(self)
+            # Standalone remains backward compatible; Hub profiles get isolated files.
+            if getattr(self,"hub",None) is not None:
+                _fx71_save_profile_config(self)
+            else:
+                # Keep the legacy global file synchronized with V7.1 fields.
+                existing=_fx71_json_read(CONFIG_FILE,{}) or {}
+                existing.update(cfg); _fx71_json_write(CONFIG_FILE,existing)
+            self._settings_dirty=False
+        except Exception as exc:
+            self.log(f"V7.1 CONFIG EXTENSION SAVE WARNING: {exc}")
+        return result
+    return wrapped
+
+def _fx71_load_wrapper(original):
+    def wrapped(self,*args,**kwargs):
+        _fx71_ensure_vars(self)
+        try: result=original(self,*args,**kwargs)
+        except Exception as exc:
+            self.log(f"BASE CONFIG LOAD WARNING: {exc}"); result=None
+        try:
+            cfg=None
+            if getattr(self,"hub",None) is not None:
+                cfg=_fx71_load_profile_config(self)
+            if cfg is None:
+                cfg=_fx71_json_read(CONFIG_FILE,{}) or {}
+                _fx71_apply_config(self,cfg)
+            self.bot_profile_id=str(cfg.get("bot_id",getattr(self,"bot_profile_id","BOT-01"))).strip().upper()
+            self.v_bot_id.set(self.bot_profile_id)
+        except Exception as exc:
+            self.log(f"V7.1 CONFIG MIGRATION WARNING: {exc}")
+        return result
+    return wrapped
+
+def _fx71_begin_wrapper(original):
+    def wrapped(self,side,entry,qty,balance):
+        result=original(self,side,entry,qty,balance)
+        try:
+            self.active_trade["entry_order_id"]=str(getattr(self,"_last_entry_order_id","") or "")
+            _fx71_db_trade_open(self,side,entry,qty,balance)
+        except Exception as exc:
+            self.log(f"V7.1 TRADE HISTORY OPEN WARNING: {exc}")
+        return result
+    return wrapped
+
+def _fx71_finalize_wrapper(original):
+    def wrapped(self,reason="CLOSED",balance=None):
+        try:_fx71_db_trade_close(self,reason,balance)
+        except Exception:pass
+        return original(self,reason,balance)
+    return wrapped
+
+
+# -------------------- Forex live scanner / Hub --------------------
+class MultiBotHub:
+    """V7.1 Multi-Bot Hub adapted for MT5 Forex profiles.
+
+    One Python process, one Tk hub, hidden child editors, isolated profile
+    configuration, bounded scanner concurrency, and shared capital authority.
+    """
+
+    def __init__(self,root):
+        self.root=root
+        self.root.title("Universal Forex Bot V7.1.2 — Low Memory Multi-Bot Hub / MT5")
+        try:self.root.geometry("1450x900")
+        except Exception:pass
+        self.bots={}
+        self._profile_ids=[]
+        self._closing=False
+        self._engine_ui_queue=queue.Queue()
+        self._scanner_lock=threading.RLock()
+        self._scanner_external_lock=threading.RLock()
+        self._scanner_external_preflights={}
+        self._scanner_shared_cache={}
+        self._capital_enabled=GLOBAL_CAPITAL_AUTHORITY_ENABLED_DEFAULT
+        self._capital_mode=GLOBAL_CAPITAL_AUTHORITY_MODE_DEFAULT
+        self._capital_pool=GLOBAL_CAPITAL_POOL_DEFAULT_USDT
+        self._capital_allocations={}
+        self._capital_entry_reservations={}
+        self._load_global_capital_authority()
+        self._init_hub_db()
+        self._build_hub_ui()
+        self._discover_profiles()
+        self.root.after(100,self._drain_engine_ui_callbacks)
+        self.root.after(500,self._refresh_status)
+
+    def _init_hub_db(self):
+        Path(MASTER_DB_FILE).parent.mkdir(parents=True,exist_ok=True)
+        with sqlite3.connect(MASTER_DB_FILE) as con:
+            con.execute("""CREATE TABLE IF NOT EXISTS trades(
+                trade_id TEXT PRIMARY KEY, profile TEXT, engine_bot_id TEXT, parent_profile TEXT,
+                exchange TEXT, symbol TEXT, side TEXT, entry_time REAL, exit_time REAL,
+                entry REAL, exit REAL, qty REAL, pnl REAL, reason TEXT, leverage REAL,
+                entry_order_id TEXT, sl_order_id TEXT, tp1_order_id TEXT, tp2_order_id TEXT,
+                be_order_id TEXT, exit_order_id TEXT, tp1_qty REAL, tp1_price REAL, tp1_time REAL,
+                tp2_qty REAL, tp2_price REAL, tp2_time REAL, exit_qty REAL, duration REAL, result TEXT)""")
+
+    def _build_hub_ui(self):
+        top=tk.Frame(self.root);top.pack(fill="x",padx=8,pady=8)
+        tk.Label(top,text="V7.1 FOREX MULTI-BOT HUB",font=("Arial",16,"bold")).pack(side="left")
+        self.memory_label=tk.Label(top,text="RESOURCE GOVERNOR ON");self.memory_label.pack(side="right",padx=8)
+        controls=tk.Frame(self.root);controls.pack(fill="x",padx=8,pady=4)
+        self.profile_var=tk.StringVar()
+        self.profile_combo=ttk.Combobox(controls,textvariable=self.profile_var,state="readonly",width=18)
+        self.profile_combo.pack(side="left",padx=3)
+        for text,cmd in [("ADD BOT",self.add_profile),("EDIT",self.edit_selected),("DELETE",self.delete_selected),
+                         ("START",self.start_selected),("STOP",self.stop_selected),("START ALL",self.start_all),("STOP ALL",self.stop_all),
+                         ("CAPITAL AUTHORITY",self._open_global_capital_dialog),("REFRESH HISTORY",self._refresh_trade_history)]:
+            ttk.Button(controls,text=text,command=cmd).pack(side="left",padx=3)
+        self.notebook=ttk.Notebook(self.root);self.notebook.pack(fill="both",expand=True,padx=8,pady=4)
+        self.overview=ttk.Frame(self.notebook);self.notebook.add(self.overview,text="OVERVIEW")
+        cols=("profile","status","symbol","tf","lev","scanner","position","pnl")
+        self.tree=ttk.Treeview(self.overview,columns=cols,show="headings")
+        for c in cols:self.tree.heading(c,text=c.upper());self.tree.column(c,width=140,anchor="center")
+        self.tree.pack(fill="both",expand=True,padx=5,pady=5)
+        self.trade_history=ttk.Frame(self.notebook);self.notebook.add(self.trade_history,text="TRADE HISTORY")
+        ht=tk.Frame(self.trade_history);ht.pack(fill="x",padx=5,pady=5)
+        self._trade_history_profile_var=tk.StringVar(value="ALL")
+        self._trade_history_profile_combo=ttk.Combobox(ht,textvariable=self._trade_history_profile_var,state="readonly",width=18)
+        self._trade_history_profile_combo.pack(side="left")
+        self._trade_history_profile_combo.bind("<<ComboboxSelected>>",lambda e:self._refresh_trade_history())
+        ttk.Button(ht,text="REFRESH",command=self._refresh_trade_history).pack(side="left",padx=3)
+        cols2=("result","profile","engine","symbol","side","entry_time","exit_time","entry","exit","qty","pnl","reason","lev","duration","trade_id")
+        self._trade_history_tree=ttk.Treeview(self.trade_history,columns=cols2,show="headings")
+        for c in cols2:self._trade_history_tree.heading(c,text=c.upper());self._trade_history_tree.column(c,width=105,anchor="center")
+        self._trade_history_tree.pack(fill="both",expand=True,padx=5,pady=5)
+
+    def _discover_profiles(self):
+        PROFILE_DIR.mkdir(parents=True,exist_ok=True)
+        _fx71_hub_purge_stale_scanner_profiles(self)
+        paths=sorted(PROFILE_DIR.glob("*/config.json"))
+        ids=[]
+        if not paths:
+            # Migrate the legacy single-profile configuration without changing it.
+            bot_id="BOT-01"
+            ids=[bot_id]
+            cfg=_fx71_json_read(CONFIG_FILE,{}) or {}
+            cfg.setdefault("bot_id",bot_id);cfg["config_schema_version"]=CONFIG_SCHEMA_VERSION
+            _fx71_json_write(_fx71_profile_config_path(types.SimpleNamespace(bot_profile_id=bot_id)),cfg)
+        else:
+            ids=[p.parent.name.upper() for p in paths if not p.parent.name.upper().startswith("SCANNER-")]
+        self._profile_ids=ids[:]
+        self.profile_combo["values"]=ids
+        if ids and not self.profile_var.get():self.profile_var.set(ids[0])
+        self._hub_log(f"PROFILES DISCOVERED (LAZY) | count={len(ids)} | loaded_engines={len(self.bots)} | memory_safe_startup=ON")
+
+    def _ensure_bot(self,profile,load=True):
+        pid=str(profile).strip().upper()
+        if pid in self.bots:return self.bots[pid]
+        win=tk.Toplevel(self.root);win.withdraw()
+        bot=UniversalFuturesBotGUI(win)
+        bot.bot_profile_id=pid
+        bot.hub=self
+        try:bot.v_bot_id.set(pid)
+        except Exception:pass
+        if load:
+            try:bot.load_settings()
+            except Exception as exc:self._hub_log(f"PROFILE LOAD WARNING | {pid} | {exc}")
+        self.bots[pid]=bot
+        return bot
+
+    def _hub_log(self,msg):
+        try:
+            stamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            Path(HUB_LOG_ROOT).mkdir(parents=True,exist_ok=True)
+            with open(HUB_LOG_ROOT/"hub.log","a",encoding="utf-8") as f:f.write(f"[{stamp}] {msg}\n")
+        except Exception:pass
+
+    def _queue_engine_ui_callback(self,bot,callback):
+        try:self._engine_ui_queue.put_nowait((bot,callback,time.monotonic()))
+        except Exception:pass
+
+    def _drain_engine_ui_callbacks(self):
+        start=time.monotonic();count=0
+        while count<HUB_UI_CALLBACK_MAX_PER_TICK:
+            try:bot,cb,enq=self._engine_ui_queue.get_nowait()
+            except queue.Empty:break
+            t=time.monotonic()
+            try:cb()
+            except Exception as exc:self._hub_log(f"UI CALLBACK ERROR | {type(exc).__name__}: {exc}")
+            elapsed=(time.monotonic()-t)*1000
+            if elapsed>=HUB_UI_SLOW_CALLBACK_WARN_MS:self._hub_log(f"HUB UI SLOW CALLBACK | {elapsed:.1f}ms")
+            count+=1
+            if (time.monotonic()-start)*1000>=HUB_UI_CALLBACK_BUDGET_MS:break
+        if not self._closing:
+            try:self.root.after(15,self._drain_engine_ui_callbacks)
+            except Exception:pass
+
+    def _scanner_shared_cache_get(self,kind,key,ttl):
+        rec=self._scanner_shared_cache.get((kind,key))
+        if not rec:return None
+        if time.time()-rec[0]>float(ttl):return None
+        return rec[1]
+
+    def _scanner_shared_cache_put(self,kind,key,value):
+        self._scanner_shared_cache[(kind,key)]=(time.time(),value)
+
+    def _load_global_capital_authority(self):
+        cfg=_fx71_json_read(GLOBAL_CAPITAL_CONFIG_FILE,{}) or {}
+        self._capital_enabled=_fx71_config_bool(cfg.get("enabled"),False)
+        self._capital_mode=str(cfg.get("mode",GLOBAL_CAPITAL_AUTHORITY_MODE_DEFAULT)).upper()
+        self._capital_pool=str(cfg.get("pool",GLOBAL_CAPITAL_POOL_DEFAULT_USDT))
+        self._capital_allocations=dict(cfg.get("allocations") or {})
+
+    def _save_global_capital_authority(self):
+        _fx71_json_write(GLOBAL_CAPITAL_CONFIG_FILE,{"enabled":bool(self._capital_enabled),"mode":self._capital_mode,
+                                                      "pool":str(self._capital_pool),"allocations":self._capital_allocations})
+
+    def _global_capital_snapshot(self,profile,actual):
+        enabled=bool(self._capital_enabled)
+        mode=str(self._capital_mode).upper()
+        account=float(actual or 0.0)
+        if not enabled or mode=="ACCOUNT":
+            return {"enabled":False,"mode":"ACCOUNT","effective":account,"available_for_bot":account,"used_other_bots":0.0}
+        if mode=="GLOBAL_SHARED":
+            cap=float(self._capital_pool or 0.0)
+            if cap<=0:raise RuntimeError("GLOBAL_SHARED capital pool must be greater than zero.")
+            return {"enabled":True,"mode":mode,"effective":min(account,cap),"available_for_bot":min(account,cap),"used_other_bots":0.0}
+        alloc=float(self._capital_allocations.get(str(profile).upper(),0.0) or 0.0)
+        if alloc<=0:raise RuntimeError(f"INDIVIDUAL capital allocation missing/invalid for {profile}.")
+        return {"enabled":True,"mode":"INDIVIDUAL","effective":min(account,alloc),"available_for_bot":min(account,alloc),"used_other_bots":0.0}
+
+    def _global_capital_usage(self,exclude_profile=""):
+        now=time.time();used=0.0
+        for k,v in list(self._capital_entry_reservations.items()):
+            if now-float(v.get("ts",0))>15:self._capital_entry_reservations.pop(k,None);continue
+            if str(v.get("profile","")).upper()!=str(exclude_profile).upper():used+=float(v.get("capital",0.0))
+        for pid,bot in self.bots.items():
+            if pid.upper()==str(exclude_profile).upper():continue
+            if bool(getattr(bot,"is_running",False)):
+                try:
+                    p=fx_fetch_position(bot,bot.symbol) if bot.symbol else None
+                    if p: used+=float(bot.fetch_account_equity() or 0.0)*0.0 + abs(float(p.get("initial_margin") or 0.0))
+                except Exception:pass
+        return used
+
+    def _global_capital_authority_for_bot(self,bot):
+        actual=float(getattr(bot,"start_balance",0.0) or 0.0)
+        if actual<=0:
+            try:actual=float(bot.fetch_account_equity())
+            except Exception:actual=0.0
+        profile=str(getattr(bot,"bot_profile_id","") or "").upper()
+        if profile.startswith(SCANNER_CHILD_PREFIX):
+            profile=str(getattr(bot,"scanner_parent_profile","") or profile).upper()
+        snap=self._global_capital_snapshot(profile,actual)
+        if snap["enabled"] and snap["mode"]=="GLOBAL_SHARED":
+            used=self._global_capital_usage(exclude_profile=profile)
+            snap["used_other_bots"]=used
+            snap["available_for_bot"]=max(0.0,snap["effective"]-used)
+        return snap
+
+    def _open_global_capital_dialog(self):
+        w=tk.Toplevel(self.root);w.title("V7.1 Global Capital Authority");w.geometry("620x500")
+        en=tk.BooleanVar(value=self._capital_enabled);mode=tk.StringVar(value=self._capital_mode)
+        pool=tk.StringVar(value=str(self._capital_pool))
+        ttk.Checkbutton(w,text="Enable Global Capital Authority",variable=en).pack(anchor="w",padx=12,pady=8)
+        ttk.Label(w,text="Mode:").pack(anchor="w",padx=12)
+        ttk.OptionMenu(w,mode,self._capital_mode,"ACCOUNT","GLOBAL_SHARED","INDIVIDUAL").pack(anchor="w",padx=12)
+        ttk.Label(w,text="GLOBAL_SHARED Pool (USD):").pack(anchor="w",padx=12,pady=(8,0))
+        ttk.Entry(w,textvariable=pool,width=18).pack(anchor="w",padx=12)
+        ttk.Label(w,text="INDIVIDUAL allocations: one BOT-ID=amount per line").pack(anchor="w",padx=12,pady=(8,0))
+        txt=tk.Text(w,height=10,width=55);txt.pack(fill="both",expand=True,padx=12,pady=5)
+        for k,v in self._capital_allocations.items():txt.insert("end",f"{k}={v}\n")
+        def save():
+            self._capital_enabled=bool(en.get());self._capital_mode=str(mode.get()).upper();self._capital_pool=pool.get().strip()
+            alloc={}
+            for line in txt.get("1.0","end").splitlines():
+                if "=" in line:
+                    k,val=line.split("=",1)
+                    try:alloc[k.strip().upper()]=float(val.strip())
+                    except:pass
+            self._capital_allocations=alloc;self._save_global_capital_authority();w.destroy();self._hub_log("GLOBAL CAPITAL AUTHORITY SAVED")
+        ttk.Button(w,text="SAVE",command=save).pack(pady=8)
+
+    def _resource_snapshot(self):
+        """V7.1 hardened resource telemetry. RSS is diagnostic on Windows;
+        AvailableRAM/concurrency remain the admission authority."""
+        rss = None
+        total = avail = None
+        try:
+            if os.name == "nt":
+                class _PMC(ctypes.Structure):
+                    _fields_ = [
+                        ("cb", ctypes.c_uint32), ("PageFaultCount", ctypes.c_uint32),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+                    ]
+                psapi = ctypes.WinDLL("psapi", use_last_error=True)
+                fn = psapi.GetProcessMemoryInfo
+                fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(_PMC), ctypes.c_uint32]
+                fn.restype = ctypes.c_int
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                k32.GetCurrentProcess.restype = ctypes.c_void_p
+                handle = k32.GetCurrentProcess()
+                counters = _PMC()
+                counters.cb = ctypes.sizeof(_PMC)
+                if fn(handle, ctypes.byref(counters), counters.cb):
+                    rss = float(counters.WorkingSetSize) / (1024.0 * 1024.0)
+                status = ctypes.Structure
+                class _MEMSTAT(ctypes.Structure):
+                    _fields_ = [
+                        ("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                    ]
+                ms = _MEMSTAT(); ms.dwLength = ctypes.sizeof(_MEMSTAT)
+                g = k32.GlobalMemoryStatusEx
+                g.argtypes = [ctypes.POINTER(_MEMSTAT)]; g.restype = ctypes.c_int
+                if g(ctypes.byref(ms)):
+                    total = float(ms.ullTotalPhys) / (1024.0*1024.0)
+                    avail = float(ms.ullAvailPhys) / (1024.0*1024.0)
+            else:
+                vals={}
+                for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                    if ":" in line:
+                        k,v=line.split(":",1); vals[k]=float(v.strip().split()[0])/1024.0
+                total=vals.get("MemTotal"); avail=vals.get("MemAvailable")
+                try:
+                    for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+                        if line.startswith("VmRSS:"):
+                            rss=float(line.split()[1])/1024.0; break
+                except Exception: pass
+        except Exception as exc:
+            self._hub_log(f"RESOURCE TELEMETRY WARNING | {type(exc).__name__}: {exc}")
+        active=sum(1 for b in self.bots.values() if getattr(b,"is_running",False))
+        scanner_preflights=sum(1 for b in self.bots.values() if getattr(b,"scanner_preflight_only",False) and getattr(b,"is_running",False))
+        try:
+            with self._scanner_external_lock:
+                external=sum(1 for rec in self._scanner_external_preflights.values()
+                             if rec.get("process") is not None and rec["process"].poll() is None)
+            active += external; scanner_preflights += external
+        except Exception: pass
+        return {"rss_mb":rss,"total_mb":total,"available_mb":avail,
+                "active_engines":active,"scanner_preflights":scanner_preflights}
+
+    def _resource_admission(self,scanner_preflight=False):
+        snap=self._resource_snapshot()
+        if os.name=="nt":
+            avail=snap["available_mb"]
+            if avail is None:return False,"AVAILABLE_RAM_TELEMETRY_UNAVAILABLE"
+            if snap["active_engines"]>=MULTIBOT_WINDOWS_MAX_ACTIVE_ENGINES:return False,"ACTIVE_ENGINE_CAPACITY"
+            if scanner_preflight and snap["scanner_preflights"]>=self._max_scanner_preflights(avail):return False,"SCANNER_PREFLIGHT_CAPACITY"
+            if avail-MULTIBOT_WINDOWS_ENGINE_RESERVE_MB<MULTIBOT_WINDOWS_MIN_AVAILABLE_MB:return False,"AVAILABLE_RAM"
+        return True,"ALLOW"
+
+    def _max_scanner_preflights(self,avail):
+        if avail>=MULTIBOT_WINDOWS_PREFLIGHT_HIGH_RAM_MB:return MULTIBOT_WINDOWS_MAX_PREFLIGHTS_HIGH
+        if avail>=MULTIBOT_WINDOWS_PREFLIGHT_MID_RAM_MB:return MULTIBOT_WINDOWS_MAX_PREFLIGHTS_MID
+        if avail>=MULTIBOT_WINDOWS_PREFLIGHT_LOW_RAM_MB:return MULTIBOT_WINDOWS_MAX_PREFLIGHTS_LOW
+        return 0
+
+    def _refresh_status(self):
+        try:
+            vals=[]
+            for pid in self._profile_ids:
+                bot=self.bots.get(pid)
+                if bot is None:
+                    cfg=_fx71_json_read(PROFILE_DIR/pid/"config.json",{}) or {}
+                    vals.append((pid,"STOPPED",str(cfg.get("symbol",cfg.get("e_symbol","")) or ""),
+                                 str(cfg.get("timeframe",cfg.get("v_tf","")) or ""),str(cfg.get("leverage",cfg.get("e_lev","")) or ""),"OFF","UNLOADED",0.0))
+                    continue
+                pos=""
+                try:
+                    p=fx_fetch_position(bot,bot.symbol) if bot.symbol and bot.exchange else None
+                    pos=f"{p['side']} {p['qty']}" if p else "FLAT"
+                except Exception:pos="?"
+                vals.append((pid,"RUNNING" if bot.is_running else "STOPPED",getattr(bot,"symbol","") or _fx71_attr_value(bot,"e_symbol") or "",
+                             _fx71_attr_value(bot,"v_tf") or "",_fx71_attr_value(bot,"e_lev") or "",
+                             "ON" if getattr(bot,"_scanner_running",False) else "OFF",pos,float(getattr(bot,"net_pnl",0.0) or 0.0)))
+            for iid in self.tree.get_children():self.tree.delete(iid)
+            for row in vals:self.tree.insert("", "end", iid=row[0], values=row)
+            snap=self._resource_snapshot()
+            self.memory_label.config(text=f"Engines {snap['active_engines']} | Available {snap['available_mb']:.0f}MB" if snap['available_mb'] is not None else f"Engines {snap['active_engines']}")
+            self._refresh_trade_history()
+        except Exception:pass
+        if not self._closing:
+            try:self.root.after(1000,self._refresh_status)
+            except Exception:pass
+
+    def _refresh_trade_history(self):
+        try:
+            profile=str(self._trade_history_profile_var.get() or "ALL")
+            with sqlite3.connect(MASTER_DB_FILE) as con:
+                if profile=="ALL":
+                    rows=con.execute("SELECT result,profile,engine_bot_id,symbol,side,entry_time,exit_time,entry,exit,qty,pnl,reason,leverage,duration,trade_id FROM trades WHERE result!='OPEN' ORDER BY exit_time DESC LIMIT 500").fetchall()
+                else:
+                    rows=con.execute("SELECT result,profile,engine_bot_id,symbol,side,entry_time,exit_time,entry,exit,qty,pnl,reason,leverage,duration,trade_id FROM trades WHERE result!='OPEN' AND profile=? ORDER BY exit_time DESC LIMIT 500",(profile,)).fetchall()
+            for iid in self._trade_history_tree.get_children():self._trade_history_tree.delete(iid)
+            for i,row in enumerate(rows):
+                r=list(row)
+                for j in (5,6):
+                    if r[j]:r[j]=datetime.fromtimestamp(float(r[j]),tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                self._trade_history_tree.insert("", "end",iid=f"t{i}",values=r)
+            profiles=["ALL"]+sorted(set(self._profile_ids) | set(self.bots.keys()))
+            self._trade_history_profile_combo["values"]=profiles
+        except Exception:pass
+
+    def _selected_profile(self):
+        return str(self.profile_var.get() or "").strip().upper()
+
+    def add_profile(self):
+        pid=simpledialog.askstring("Add Forex Bot","Profile ID:",parent=self.root)
+        if not pid:return
+        pid=re.sub(r"[^A-Za-z0-9._-]+","_",pid.strip().upper())
+        if not pid.startswith("BOT-"):pid="BOT-"+pid
+        if pid in self._profile_ids or pid in self.bots:return
+        bot=self._ensure_bot(pid,load=False);bot.bot_profile_id=pid;bot.v_bot_id.set(pid);_fx71_save_profile_config(bot)
+        try: bot.root.destroy()
+        except Exception: pass
+        self.bots.pop(pid,None)
+        self._discover_profiles()
+
+    def edit_selected(self):
+        pid=self._selected_profile()
+        if not pid:return
+        bot=self._ensure_bot(pid,load=True)
+        bot.root.deiconify();bot.root.lift()
+
+    def delete_selected(self):
+        pid=self._selected_profile()
+        if not pid:return
+        bot=self.bots.get(pid)
+        if bot and bot.is_running:return
+        base=bot if bot is not None else types.SimpleNamespace(bot_profile_id=pid)
+        if bot:
+            self.bots.pop(pid,None)
+            try:bot.root.destroy()
+            except Exception:pass
+        shutil.rmtree(_fx71_profile_dir(base,pid),ignore_errors=True)
+        self._discover_profiles()
+
+    def start_profile(self,pid):
+        allowed,reason=self._resource_admission(scanner_preflight=False)
+        if not allowed:
+            self._hub_log(f"START BLOCKED BEFORE ENGINE LOAD | {pid} | reason={reason}")
+            return False
+        bot=self._ensure_bot(pid)
+        # Re-check after the engine UI is materialized; the engine itself consumes RAM.
+        allowed,reason=self._resource_admission(scanner_preflight=False)
+        if not allowed:
+            self._hub_log(f"START BLOCKED AFTER ENGINE LOAD | {pid} | reason={reason}")
+            return False
+        bot.start_bot();return True
+
+    def stop_profile(self,pid):
+        bot=self.bots.get(pid)
+        if bot:
+            try:
+                bot.stop_bot()
+                # V7.1.2 memory policy: stopped engines are unloaded from RAM.
+                # Their configuration is persisted in the profile JSON and is rebuilt on demand.
+                if not getattr(bot,"is_running",False):
+                    try: bot.root.destroy()
+                    except Exception: pass
+                    self.bots.pop(pid,None)
+                    self._hub_log(f"ENGINE UNLOADED AFTER STOP | {pid}")
+            except Exception as exc:self._hub_log(f"STOP WARNING | {pid} | {exc}")
+
+    def start_selected(self):
+        pid=self._selected_profile()
+        if pid:self.start_profile(pid)
+
+    def stop_selected(self):
+        pid=self._selected_profile()
+        if pid:self.stop_profile(pid)
+
+    def start_all(self):
+        for pid in list(self._profile_ids):self.start_profile(pid)
+
+    def stop_all(self):
+        for pid in list(self._profile_ids):self.stop_profile(pid)
+
+    def edit_profile(self):self.edit_selected()
+    def delete_profile(self):self.delete_selected()
+    def on_close(self):
+        self._closing=True
+        for pid in list(self.bots):self.stop_profile(pid)
+        try:self.root.after(250,self._finish_close)
+        except Exception:self._finish_close()
+
+    def _finish_close(self):
+        for bot in list(self.bots.values()):
+            try:bot.root.destroy()
+            except Exception:pass
+        self.bots.clear()
+        try:self.root.destroy()
+        except Exception:pass
+
+# -------------------- Forex scanner implementation --------------------
+def _fx71_scanner_runtime_config(self):
+    _fx71_ensure_vars(self)
+    mode=str(self.v_scanner_mode.get()).upper()
+    qty=str(self.v_scanner_qty_mode.get()).upper()
+    levmode=str(self.v_scanner_leverage_mode.get()).upper()
+    if mode not in SCANNER_SUPPORTED_MODES:raise ValueError("Invalid Forex scanner mode.")
+    interval=max(5.0,float(self.e_scanner_interval.get()))
+    maxpos=max(1,int(float(self.e_scanner_max_positions.get())))
+    maxsym=max(1,int(float(self.e_scanner_max_symbols.get())))
+    shortlist=max(1,int(float(self.e_scanner_shortlist.get())))
+    return {"enabled":bool(self.v_live_scanner_enabled.get()),"mode":mode,"qty_mode":qty,"leverage_mode":levmode,
+            "interval":interval,"max_positions":maxpos,"max_symbols":maxsym,"shortlist":shortlist,
+            "cooldown_sec":max(0.0,float(self.e_scanner_cooldown_sec.get())),
+            "fixed_qty":max(0.0,float(self.e_scanner_fixed_qty.get())),
+            "manual_leverage":max(1,int(float(self.e_scanner_manual_leverage.get())))}
+
+def _fx71_mt5_universe(self,max_symbols=120):
+    if mt5 is None:raise RuntimeError("MetaTrader5 package is not installed.")
+    cached=self.hub._scanner_shared_cache_get("universe","mt5",SCANNER_SHARED_UNIVERSE_TTL_SEC) if getattr(self,"hub",None) else None
+    if cached is not None:return cached
+    symbols=mt5.symbols_get() or []
+    rows=[]
+    for s in symbols:
+        name=str(getattr(s,"name","") or "").upper()
+        path=str(getattr(s,"path","") or "").upper()
+        if not name:continue
+        # Forex-native universe: major/minor FX roots, not crypto/metals/stocks.
+        compact=name.replace("/","")
+        if not re.search(r"(USD|EUR|GBP|JPY|CHF|AUD|NZD|CAD|SGD|NOK|SEK|DKK|HKD)",compact):continue
+        if len(re.sub(r"[^A-Z]","",compact))<6:continue
+        rows.append(name)
+    rows=sorted(set(rows))
+    if getattr(self,"hub",None):self.hub._scanner_shared_cache_put("universe","mt5",rows)
+    return rows[:max_symbols*3]
+
+def _fx71_mt5_rank(self,universe,cfg):
+    candidates=[]
+    tf=self.v_tf.get()
+    for symbol in universe:
+        if not self.is_running or getattr(self,"_scanner_stop_event",threading.Event()).is_set():break
+        try:
+            mt5.symbol_select(symbol,True)
+            tick=mt5.symbol_info_tick(symbol);info=mt5.symbol_info(symbol)
+            if not tick or not info or float(tick.bid)<=0 or float(tick.ask)<=0:continue
+            mid=(float(tick.bid)+float(tick.ask))/2
+            spread_pct=(float(tick.ask)-float(tick.bid))/mid*100
+            if spread_pct>float(_fx71_attr_value(self,"e_max_entry_spread_pct") or DEFAULT_MAX_ENTRY_SPREAD_PCT):continue
+            key=f"mt5|{tf}|{symbol}"
+            raw=self.hub._scanner_shared_cache_get("ohlcv",key,SCANNER_SHARED_OHLCV_TTL_SEC) if getattr(self,"hub",None) else None
+            if raw is None:
+                ex=self.exchange
+                if ex is None:continue
+                raw=ex.fetch_ohlcv(symbol,tf,81)
+                if getattr(self,"hub",None):self.hub._scanner_shared_cache_put("ohlcv",key,raw)
+            if len(raw)<36:continue
+            arr=np.asarray(raw[:-1],dtype=float)
+            closes=arr[:,4]; highs=arr[:,2]; lows=arr[:,3]
+            prev=closes[:-1]
+            tr=np.maximum(highs[1:]-lows[1:],np.maximum(abs(highs[1:]-prev),abs(lows[1:]-prev)))
+            atr=float(np.nanmean(tr[-20:])) if len(tr)>=20 else 0
+            if atr<=0:continue
+            atr_pct=atr/mid*100
+            look=min(20,len(closes)-1)
+            mom=abs(closes[-1]/closes[-1-look]-1)*100 if closes[-1-look]>0 else 0
+            direction="BUY" if closes[-1]>closes[-1-look] else "SELL" if closes[-1]<closes[-1-look] else "NONE"
+            score=min(5,atr_pct)*0.55+min(5,mom)*0.45
+            candidates.append({"symbol":symbol,"last":mid,"spread_pct":spread_pct,"atr":atr,"atr_pct":atr_pct,"momentum_pct":mom,
+                               "direction":direction,"closed_candle_ts":int(arr[-1,0]),"score":float(score)})
+        except Exception:continue
+    candidates.sort(key=lambda x:(x["score"],-x["spread_pct"]),reverse=True)
+    return candidates[:cfg["shortlist"]]
+
+def _fx71_scanner_child_config(self,symbol,cfg,child_id):
+    base=_fx71_collect_config(self)
+    base.update({"bot_id":child_id,"symbol":symbol,"exchange":"mt5_forex","live_scanner_enabled":False,
+                 "scanner_parent_profile":getattr(self,"bot_profile_id","BOT-01"),"scanner_child_role":"PREFLIGHT_WORKER",
+                 "scanner_preflight_only":True,"config_schema_version":CONFIG_SCHEMA_VERSION})
+    p=_fx71_profile_dir(self,child_id);p.mkdir(parents=True,exist_ok=True)
+    _fx71_json_write(p/"config.json",base)
+    try:(p/"runtime_state.json").unlink(missing_ok=True)
+    except Exception:pass
+
+def _fx71_scanner_external_spawn(self,child_id,symbol,candidate,cfg):
+    if os.name!="nt" or not SCANNER_WINDOWS_EXTERNAL_PREFLIGHT_ENABLED:return False
+    p=_fx71_profile_dir(self,child_id);p.mkdir(parents=True,exist_ok=True)
+    result=p/"scanner_preflight_result.json";request=p/"scanner_preflight_request.json"
+    _fx71_json_write(request,{"child_id":child_id,"symbol":symbol,"candidate":candidate,"created_at":time.time(),
+                              "parent_profile":getattr(self,"bot_profile_id","BOT-01")})
+    stdout=p/"scanner_preflight_worker.stdout.log";stderr=p/"scanner_preflight_worker.stderr.log"
+    out=err=None
+    try:
+        out=open(stdout,"a",encoding="utf-8",errors="replace");err=open(stderr,"a",encoding="utf-8",errors="replace")
+        args=[sys.executable,str(Path(__file__).resolve()),"--forex-scanner-preflight-worker",child_id,str(result),str(request)]
+        kw={"stdin":subprocess.DEVNULL,"stdout":out,"stderr":err,"cwd":str(Path(__file__).resolve().parent),
+            "env":dict(os.environ,PYTHONUNBUFFERED="1"),"close_fds":True}
+        if os.name=="nt":kw["creationflags"]=getattr(subprocess,"CREATE_NO_WINDOW",0x08000000)
+        proc=subprocess.Popen(args,**kw)
+        rec={"process":proc,"child_id":child_id,"symbol":symbol,"result_path":str(result),"request_path":str(request),
+             "stdout_path":str(stdout),"stderr_path":str(stderr),"started_at":time.time(),"candidate":candidate,"cfg":cfg}
+        out.close();err.close()
+        with self.hub._scanner_external_lock:self.hub._scanner_external_preflights[child_id]=rec
+        self.log(f"SCANNER PREFLIGHT EXTERNAL START: {symbol} | Child={child_id} | PID={proc.pid} | TkStartup=OFFLOADED")
+        self.root.after(SCANNER_EXTERNAL_PREFLIGHT_POLL_MS,lambda:self._fx71_poll_external_preflight(child_id))
+        return True
+    except Exception as exc:
+        try:
+            if out:out.close()
+            if err:err.close()
+        except Exception:pass
+        self.log(f"SCANNER PREFLIGHT EXTERNAL SPAWN BLOCKED: {symbol} | {type(exc).__name__}: {exc}")
+        return False
+
+def _fx71_poll_external_preflight(self,child_id):
+    with self.hub._scanner_external_lock:rec=self.hub._scanner_external_preflights.get(child_id)
+    if not rec:return
+    result=_fx71_json_read(rec["result_path"],None)
+    proc=rec["process"]
+    if result is None:
+        if proc.poll() is not None:
+            diag=""
+            for k in ("stdout_path","stderr_path"):
+                try:
+                    txt=Path(rec[k]).read_text(encoding="utf-8",errors="replace")
+                    diag+=txt[-2500:]
+                except Exception:pass
+            self.log(f"SCANNER PREFLIGHT REJECT: {rec['symbol']} | reason=SCANNER_CHILD_START_EXCEPTION | detail=external worker exited returncode={proc.returncode} | {diag[-2000:]}")
+            self.hub._scanner_external_preflights.pop(child_id,None)
+            shutil.rmtree(_fx71_profile_dir(self,child_id),ignore_errors=True)
+            self.root.after(0,self._fx71_start_next_scanner)
+            return
+        if time.time()-rec["started_at"]>SCANNER_PREFLIGHT_TIMEOUT_SEC:
+            try:proc.terminate()
+            except Exception:pass
+            self.hub._scanner_external_preflights.pop(child_id,None)
+            self.log(f"SCANNER PREFLIGHT REJECT: {rec['symbol']} | reason=PREFLIGHT_TIMEOUT")
+            shutil.rmtree(_fx71_profile_dir(self,child_id),ignore_errors=True)
+            self.root.after(0,self._fx71_start_next_scanner);return
+        self.root.after(SCANNER_EXTERNAL_PREFLIGHT_POLL_MS,lambda:self._fx71_poll_external_preflight(child_id));return
+    try:proc.terminate()
+    except Exception:pass
+    self.hub._scanner_external_preflights.pop(child_id,None)
+    symbol=rec["symbol"]
+    if not bool(result.get("qualified")):
+        self.log(f"SCANNER PREFLIGHT REJECT: {symbol} | reason={result.get('reason','AI_OR_STRATEGY_SIGNAL_BLOCKED')} | detail={result.get('detail','')} | external-worker=YES")
+        shutil.rmtree(_fx71_profile_dir(self,child_id),ignore_errors=True)
+        self.root.after(0,self._fx71_start_next_scanner);return
+    # Promotion is a normal MT5 engine start; all real order/protection gates re-run.
+    bot=self.hub._ensure_bot(child_id)
+    bot.hub=self.hub;bot.scanner_parent_profile=self.bot_profile_id;bot.scanner_child_role="ACTIVE_TRADE";bot.scanner_preflight_only=False
+    bot.load_settings()
+    bot.e_symbol.delete(0,tk.END);bot.e_symbol.insert(0,symbol)
+    self.log(f"SCANNER PREFLIGHT PASS: {symbol} | side={result.get('side','NONE')} | promoting ACTIVE_TRADE child={child_id}")
+    bot.start_bot()
+    self.root.after(250,self._fx71_start_next_scanner)
+
+def _fx71_start_next_scanner(self):
+    if not getattr(self,"_scanner_running",False) or not self.is_running:return
+    cfg=_fx71_scanner_runtime_config(self)
+    if cfg["mode"]!="AUTO_TRADE":return
+    active=[b for b in self.hub.bots.values() if str(getattr(b,"scanner_child_role","")).upper()=="ACTIVE_TRADE" and b.is_running and getattr(b,"scanner_parent_profile","")==self.bot_profile_id]
+    if len(active)>=cfg["max_positions"]:return
+    if not getattr(self,"_scanner_queue",None):return
+    cand=self._scanner_queue.pop(0);symbol=cand["symbol"]
+    child_id=f"{SCANNER_CHILD_PREFIX}{self.bot_profile_id}-{re.sub(r'[^A-Z0-9]+','_',symbol)}-{int(time.time()*1000)%1000000:06d}"
+    if not self.hub._resource_admission(scanner_preflight=True)[0]:return
+    self._fx71_scanner_child_config(symbol,cfg,child_id)
+    if self._fx71_scanner_external_spawn(child_id,symbol,cand,cfg):return
+    # In-process fallback: run a short hidden preflight child. Parent remains responsive
+    # because the child is already a separate engine object and no parent UI callback blocks.
+    bot=self.hub._ensure_bot(child_id);bot.hub=self.hub;bot.scanner_parent_profile=self.bot_profile_id
+    bot.scanner_preflight_only=True;bot.scanner_child_role="PREFLIGHT_WORKER";bot.load_settings()
+    bot.start_bot()
+
+def _fx71_run_live_pair_scanner(self):
+    try:
+        cfg=_fx71_scanner_runtime_config(self)
+        self._scanner_running=True
+        self.log(f"LIVE PAIR SCANNER STARTED | MT5 | Mode={cfg['mode']} | Interval={cfg['interval']:g}s | MaxPositions={cfg['max_positions']} | Shortlist={cfg['shortlist']}")
+        while self.is_running and not self._scanner_stop_event.is_set():
+            try:
+                universe=_fx71_mt5_universe(self,cfg["max_symbols"])
+                ranked=_fx71_mt5_rank(self,universe,cfg)
+                self._scanner_queue=list(ranked)
+                self.log(f"SCANNER UNIVERSE: {len(universe)} | SHORTLIST: {len(ranked)}")
+                if ranked and cfg["mode"]=="AUTO_TRADE":
+                    self.root.after(0,self._fx71_start_next_scanner)
+            except Exception as exc:self.log(f"SCANNER CYCLE ERROR: {type(exc).__name__}: {exc}")
+            self._scanner_stop_event.wait(cfg["interval"])
+    finally:
+        self._scanner_running=False
+        self._scanner_stop_event.set()
+        self.log("SCANNER STOPPED | Parent has no exchange position; scanner children remain subject to normal MT5 cleanup.")
+
+# -------------------- start/stop and execution wrappers --------------------
+def _fx71_start_wrapper(original):
+    def wrapped(self,*args,**kwargs):
+        _fx71_ensure_vars(self)
+        if self.is_running:return
+        if bool(_fx71_attr_value(self,"v_live_scanner_enabled")) and not getattr(self,"scanner_child_role",""):
+            self.bot_profile_id=str(_fx71_attr_value(self,"v_bot_id") or getattr(self,"bot_profile_id","BOT-01")).upper()
+            self._scanner_stop_event=threading.Event();self._scanner_queue=[]
+            # Scanner parent still owns a read-only MT5 market-data adapter; it does
+            # not own a trade symbol/position. Active trade children use their own
+            # normal MT5 engines.
+            if getattr(self,"exchange",None) is None:
+                self.exchange=self.build_exchange("mt5_forex",_fx71_attr_value(self,"e_api_key") or "",_fx71_attr_value(self,"e_api_secret") or "",_fx71_attr_value(self,"v_account_mode") or "MT5_TERMINAL")
+                self.exchange_id="mt5_forex"
+            self.is_running=True;self._scanner_running=True
+            try:self.btn_start.config(state="disabled");self.btn_stop.config(state="normal")
+            except Exception:pass
+            self._scanner_thread=threading.Thread(target=_fx71_run_live_pair_scanner,args=(self,),daemon=True)
+            self._scanner_thread.start()
+            self.log("BOT STARTED IN LIVE-PAIR-SCANNER MODE | Parent owns no exchange symbol.")
+            return True
+        return original(self,*args,**kwargs)
+    return wrapped
+
+def _fx71_stop_wrapper(original):
+    def wrapped(self,*args,**kwargs):
+        if getattr(self,"_scanner_running",False):
+            try:self._scanner_stop_event.set()
+            except Exception:pass
+        result=original(self,*args,**kwargs)
+        return result
+    return wrapped
+
+# External worker: one normal GUI engine in a separate process, with the normal
+# entry line replaced by a fail-closed preflight result writer.
+def _fx71_external_worker(child_id,result_path,request_path):
+    root=None;bot=None
+    try:
+        req=_fx71_json_read(request_path,{}) or {}
+        root=tk.Tk();root.withdraw()
+        bot=UniversalFuturesBotGUI(root);bot.bot_profile_id=child_id;bot.scanner_preflight_only=True;bot.scanner_child_role="PREFLIGHT_WORKER";bot.hub=None
+        bot.load_settings()
+        _fx71_apply_config(bot, _fx71_json_read(_fx71_profile_config_path(bot,child_id),{}) or {})
+        symbol=str(req.get("symbol") or _fx71_attr_value(bot,"e_symbol") or "").upper()
+        bot.e_symbol.delete(0,tk.END);bot.e_symbol.insert(0,symbol)
+        bot.scanner_preflight_only=True
+        # Start the normal worker. The patched run-loop detects preflight mode
+        # immediately before order submission and writes the qualification result.
+        bot.start_bot()
+        deadline=time.time()+SCANNER_EXTERNAL_PREFLIGHT_RESULT_WAIT_SEC
+        while time.time()<deadline:
+            if isinstance(getattr(bot,"_scanner_preflight_result",None),dict):
+                break
+            if not bot.is_running:break
+            root.update()
+            time.sleep(0.05)
+        result=getattr(bot,"_scanner_preflight_result",None)
+        if not isinstance(result,dict):
+            result={"qualified":False,"reason":"SCANNER_CHILD_START_EXCEPTION","detail":"preflight engine ended without result"}
+        _fx71_json_write(result_path,result)
+        try:bot.stop_bot()
+        except Exception:pass
+    except Exception as exc:
+        _fx71_json_write(result_path,{"qualified":False,"reason":"SCANNER_CHILD_START_EXCEPTION","detail":f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"})
+        raise
+    finally:
+        try:
+            if bot and bot.is_running:bot.stop_bot()
+        except Exception:pass
+        try:
+            if root:root.destroy()
+        except Exception:pass
+
+def _fx71_preflight_patch_run_logic(original):
+    # We do not replace the Forex strategy loop. Instead we install a guard at
+    # the order boundary so every existing Forex pre-entry calculation remains
+    # authoritative and the preflight can never submit an MT5 order.
+    return original
+
+
+
+def _fx71_hub_purge_stale_scanner_profiles(self):
+    try:
+        PROFILE_DIR.mkdir(parents=True,exist_ok=True)
+        for d in PROFILE_DIR.glob(f"{SCANNER_CHILD_PREFIX}*/"):
+            cfg=_fx71_json_read(d/"config.json",{}) or {}
+            role=str(cfg.get("scanner_child_role","")).upper()
+            if role=="PREFLIGHT_WORKER":
+                shutil.rmtree(d,ignore_errors=True)
+                self._hub_log(f"SCANNER PREFLIGHT PROFILE PURGED | {d.name}")
+    except Exception as exc:
+        self._hub_log(f"SCANNER PROFILE RECONCILIATION WARNING | {exc}")
+
+def _fx71_kill_latch_path(self):
+    return _fx71_profile_dir(self)/"kill_switch_latch.json"
+
+def _fx71_kill_switch_latched(self):
+    return _fx71_json_read(_fx71_kill_latch_path(self),{}).get("latched",False)
+
+def _fx71_activate_kill_switch(self,reason="manual"):
+    try:
+        _fx71_json_write(_fx71_kill_latch_path(self),{"schema":KILL_LATCH_SCHEMA_VERSION,"latched":True,"reason":str(reason),"timestamp":time.time()})
+        self.log(f"KILL SWITCH LATCHED | reason={reason}")
+        try:
+            p=fx_fetch_position(self,self.symbol) if self.exchange and self.symbol else None
+            if p:
+                fx_cancel_all_open_orders(self,self.symbol);fx_close_position_market(self,self.symbol,p["side"],p["qty"])
+        except Exception as exc:self.log(f"KILL SWITCH FLATTEN WARNING | {exc}")
+    except Exception as exc:self.log(f"KILL SWITCH LATCH WARNING | {exc}")
+
+def _fx71_clear_kill_switch(self):
+    try:Path(_fx71_kill_latch_path(self)).unlink(missing_ok=True)
+    except Exception:pass
+
+def _fx71_check_kill_switch_start(self):
+    if KILL_SWITCH_REQUIRED and _fx71_kill_switch_latched(self):
+        raise RuntimeError("KILL SWITCH LATCHED: clear the profile kill-switch latch before starting.")
+
+def _fx71_scanner_reconcile_startup(self):
+    if getattr(self,"hub",None) is not None:
+        self.hub._fx71_hub_purge_stale_scanner_profiles()
+
+
+
+def _fx71_wrap_create_protection(original):
+    def wrapped(self,*args,**kwargs):
+        created=original(self,*args,**kwargs)
+        try:
+            ids={str(label).upper():str((order or {}).get("id") or "") for label,order in (created or [])}
+            if getattr(self,"_fx71_trade_db_open",None) is not None:
+                self._fx71_trade_db_open.update({
+                    "sl_order_id":ids.get("SL",""),"tp1_order_id":ids.get("TP1",""),"tp2_order_id":ids.get("TP2","")
+                })
+                with sqlite3.connect(MASTER_DB_FILE) as con:
+                    con.execute("UPDATE trades SET sl_order_id=?,tp1_order_id=?,tp2_order_id=? WHERE trade_id=?",
+                                (ids.get("SL",""),ids.get("TP1",""),ids.get("TP2",""),self._fx71_trade_db_open["trade_id"]))
+                    con.commit()
+        except Exception as exc:
+            self.log(f"V7.1 PROTECTION HISTORY WARNING: {exc}")
+        return created
+    return wrapped
+
+def _fx71_wrap_tp_be(original):
+    def wrapped(self,*args,**kwargs):
+        result=original(self,*args,**kwargs)
+        try:
+            protected=getattr(self,"last_protected_position",{}) or {}
+            be_id=str(protected.get("be_id") or protected.get("be_order_id") or "")
+            if be_id and getattr(self,"_fx71_trade_db_open",None) is not None:
+                with sqlite3.connect(MASTER_DB_FILE) as con:
+                    con.execute("UPDATE trades SET be_order_id=? WHERE trade_id=?",(be_id,self._fx71_trade_db_open["trade_id"]))
+                    con.commit()
+        except Exception:pass
+        return result
+    return wrapped
+
+def _fx71_wrap_close(original):
+    def wrapped(self,*args,**kwargs):
+        result=original(self,*args,**kwargs)
+        try:
+            oid=str((result or {}).get("id") or (result or {}).get("order") or "")
+            self._last_exit_order_id=oid
+            if getattr(self,"last_protected_position",None) is not None and result:
+                px=(result or {}).get("average") or (result or {}).get("price") or (result or {}).get("avgPrice")
+                if px is not None:self.last_protected_position["last_exit_price"]=float(px)
+        except Exception:pass
+        return result
+    return wrapped
+
+# -------------------- Bind V7.1 Forex extensions --------------------
+MultiBotHub._fx71_hub_purge_stale_scanner_profiles = _fx71_hub_purge_stale_scanner_profiles
+UniversalFuturesBotGUI._kill_switch_latch_path = _fx71_kill_latch_path
+UniversalFuturesBotGUI._kill_switch_latched = _fx71_kill_switch_latched
+UniversalFuturesBotGUI._activate_kill_switch = _fx71_activate_kill_switch
+UniversalFuturesBotGUI._clear_kill_switch = _fx71_clear_kill_switch
+UniversalFuturesBotGUI._check_kill_switch_start = _fx71_check_kill_switch_start
+
+_FX71_ORIG_BUILD_UI = UniversalFuturesBotGUI._build_ui
+_FX71_ORIG_SAVE = UniversalFuturesBotGUI.save_settings
+_FX71_ORIG_LOAD = UniversalFuturesBotGUI.load_settings
+_FX71_ORIG_START = UniversalFuturesBotGUI.start_bot
+_FX71_ORIG_STOP = UniversalFuturesBotGUI.stop_bot
+_FX71_ORIG_BEGIN = UniversalFuturesBotGUI._begin_performance_trade
+_FX71_ORIG_FINALIZE = UniversalFuturesBotGUI._finalize_performance_trade
+_FX71_ORIG_QTY = UniversalFuturesBotGUI.calculate_entry_qty
+_FX71_ORIG_PROTECTION = UniversalFuturesBotGUI.calculate_protection_prices
+
+UniversalFuturesBotGUI._build_ui = _fx71_build_ui_wrapper(_FX71_ORIG_BUILD_UI)
+UniversalFuturesBotGUI.save_settings = _fx71_save_wrapper(_FX71_ORIG_SAVE)
+UniversalFuturesBotGUI.load_settings = _fx71_load_wrapper(_FX71_ORIG_LOAD)
+UniversalFuturesBotGUI.start_bot = _fx71_start_wrapper(_FX71_ORIG_START)
+UniversalFuturesBotGUI.stop_bot = _fx71_stop_wrapper(_FX71_ORIG_STOP)
+UniversalFuturesBotGUI._begin_performance_trade = _fx71_begin_wrapper(_FX71_ORIG_BEGIN)
+UniversalFuturesBotGUI._finalize_performance_trade = _fx71_finalize_wrapper(_FX71_ORIG_FINALIZE)
+UniversalFuturesBotGUI.calculate_entry_qty = _fx71_wrap_entry_qty(_FX71_ORIG_QTY)
+UniversalFuturesBotGUI.calculate_protection_prices = _fx71_wrap_protection(_FX71_ORIG_PROTECTION)
+UniversalFuturesBotGUI._fx71_execution_quality_gate = _fx71_execution_quality_gate
+UniversalFuturesBotGUI._refresh_trade_history = _fx71_refresh_trade_history
+UniversalFuturesBotGUI._runtime_gui_value = lambda self,key,default=None: _fx71_attr_value(self,key) if _fx71_attr_value(self,key) is not None else default
+UniversalFuturesBotGUI._safe_runtime_bool = lambda self,key,default=False: _fx71_config_bool(self._runtime_gui_value(key,default),default)
+UniversalFuturesBotGUI._safe_runtime_float = lambda self,key,default=0.0: float(self._runtime_gui_value(key,default) or default)
+UniversalFuturesBotGUI._safe_runtime_int = lambda self,key,default=0: int(float(self._runtime_gui_value(key,default) or default))
+UniversalFuturesBotGUI._safe_runtime_text = lambda self,key,default="": str(self._runtime_gui_value(key,default) or default)
+
+UniversalFuturesBotGUI._scanner_runtime_config = _fx71_scanner_runtime_config
+UniversalFuturesBotGUI._scanner_market_universe = _fx71_mt5_universe
+UniversalFuturesBotGUI._scanner_fast_rank = _fx71_mt5_rank
+UniversalFuturesBotGUI._scanner_child_config = _fx71_scanner_child_config
+UniversalFuturesBotGUI._scanner_windows_external_preflight_enabled = lambda self: os.name=="nt" and SCANNER_WINDOWS_EXTERNAL_PREFLIGHT_ENABLED
+UniversalFuturesBotGUI._scanner_external_preflight_spawn = _fx71_scanner_external_spawn
+UniversalFuturesBotGUI._scanner_poll_external_preflight_ui = _fx71_poll_external_preflight
+UniversalFuturesBotGUI._run_live_pair_scanner = _fx71_run_live_pair_scanner
+# Backward-compatible internal V7.1 method bindings used by scanner/open wrappers.
+# These exact names are referenced from callbacks/lambdas; keep them bound to
+# the module-level implementations so they cannot become AttributeError at runtime.
+UniversalFuturesBotGUI._fx71_execution_quality_gate = _fx71_execution_quality_gate
+UniversalFuturesBotGUI._fx71_poll_external_preflight = _fx71_poll_external_preflight
+UniversalFuturesBotGUI._fx71_start_next_scanner = _fx71_start_next_scanner
+UniversalFuturesBotGUI._fx71_scanner_child_config = _fx71_scanner_child_config
+UniversalFuturesBotGUI._fx71_scanner_external_spawn = _fx71_scanner_external_spawn
+
+# Latest V7.1 source-level save contract: preserve the hard running-context lock
+# but normalize Forex symbols before comparing where possible.
+def _fx71_live_save_guard(self):
+    if not self.is_running:return True
+    current_profile=str(getattr(self,"bot_profile_id","BOT-01")).strip().upper()
+    requested_profile=str(_fx71_attr_value(self,"v_bot_id") or current_profile).strip().upper()
+    if requested_profile!=current_profile:
+        raise RuntimeError("Profile ID cannot be changed while the bot is running. Stop the bot first.")
+    current_symbol=str(getattr(self,"symbol","") or "").strip().upper()
+    requested=str(_fx71_attr_value(self,"e_symbol") or "").strip().upper()
+    if current_symbol and requested:
+        try:
+            if getattr(self,"exchange",None) is not None:
+                requested=self.normalize_symbol(self.exchange,"mt5_forex",requested)
+        except Exception:
+            pass
+        if requested!=current_symbol:
+            raise RuntimeError(f"Symbol cannot be changed while the bot is running ({current_symbol} is active; requested {requested}). Stop the bot first.")
+    return True
+
+# Apply guard only as an additional validation layer; the wrapped base save still
+# performs all legacy Forex config serialization.
+_FX71_PRE_GUARD_SAVE = UniversalFuturesBotGUI.save_settings
+def _fx71_save_with_guard(self,*args,**kwargs):
+    try:_fx71_live_save_guard(self)
+    except RuntimeError as exc:
+        self.log(f"CONFIG CHANGE BLOCKED | {exc}")
+        try:messagebox.showwarning("Configuration Change Blocked",str(exc),parent=self.root)
+        except Exception:pass
+        return False
+    return _FX71_PRE_GUARD_SAVE(self,*args,**kwargs)
+UniversalFuturesBotGUI.save_settings = _fx71_save_with_guard
+
+
+def _fx71_cost_gate_prices(self, entry, sl, tp1):
+    if not _fx71_config_bool(_fx71_attr_value(self,"v_cost_gate_enabled"),DEFAULT_COST_GATE_ENABLED):
+        return True
+    fee_frac=2.0*float(_fx71_attr_value(self,"e_taker_fee_pct") or DEFAULT_TAKER_FEE_PCT)/100.0
+    stop_frac=abs(float(sl)-float(entry))/max(abs(float(entry)),1e-12)
+    tp1_frac=abs(float(tp1)-float(entry))/max(abs(float(entry)),1e-12)
+    if stop_frac+1e-12 < COST_GATE_MIN_STOP_TO_FEE*fee_frac:
+        raise RuntimeError(f"COST GATE: stop distance {stop_frac*100:.4f}% < {COST_GATE_MIN_STOP_TO_FEE:g}x round-trip fee {fee_frac*100:.4f}%.")
+    r=tp1_frac/max(stop_frac,1e-12)
+    net_tp1=tp1_frac-fee_frac
+    if r < COST_GATE_MIN_NET_TP1_R or net_tp1 <= 0:
+        raise RuntimeError(f"COST GATE: TP1 net R={net_tp1/max(stop_frac,1e-12):.3f} < {COST_GATE_MIN_NET_TP1_R:.2f}.")
+    return True
+
+def _fx71_wrap_protection_with_cost(original):
+    def wrapped(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev):
+        vals=original(self,symbol,side,entry,qty,margin,slp,tp1p,tp2p,slmode,tpmode,lev)
+        _fx71_cost_gate_prices(self,entry,vals[0],vals[1])
+        return vals
+    return wrapped
+
+def _fx71_open_wrapper(original):
+    def wrapped(self,symbol,signal,qty):
+        self._fx71_execution_quality_gate(symbol,signal,float(self._current_market_price(symbol)))
+        hub=getattr(self,"hub",None)
+        reservation_key=f"{getattr(self,'bot_profile_id','BOT-01')}:{symbol}"
+        reserved=False
+        if hub is not None:
+            snap=hub._global_capital_authority_for_bot(self)
+            if snap.get("enabled"):
+                cap=float(snap.get("available_for_bot",0.0))
+                if cap<=0: raise RuntimeError("GLOBAL CAPITAL RESERVATION FAILED: no capital available for this profile.")
+                with hub._scanner_lock:
+                    hub._capital_entry_reservations[reservation_key]={"ts":time.time(),"profile":getattr(self,"bot_profile_id","BOT-01"),"capital":cap}
+                    reserved=True
+        try:
+            result=original(self,symbol,signal,qty)
+            try:self._last_entry_order_id=str((result[0] or {}).get("id") or (result[0] or {}).get("order") or "")
+            except Exception:pass
+            return result
+        except Exception:
+            if reserved:
+                with hub._scanner_lock:hub._capital_entry_reservations.pop(reservation_key,None)
+            raise
+    return wrapped
+
+
+_FX71_PRE_PROTECTION = UniversalFuturesBotGUI.calculate_protection_prices
+UniversalFuturesBotGUI.calculate_protection_prices = _fx71_wrap_protection_with_cost(
+    _FX71_PRE_PROTECTION
+)
+_FX71_PRE_CREATE_PROTECTION = UniversalFuturesBotGUI.create_protection_orders
+UniversalFuturesBotGUI.create_protection_orders = _fx71_wrap_create_protection(_FX71_PRE_CREATE_PROTECTION)
+_FX71_PRE_TP_BE = UniversalFuturesBotGUI._manage_tp1_break_even
+UniversalFuturesBotGUI._manage_tp1_break_even = _fx71_wrap_tp_be(_FX71_PRE_TP_BE)
+_FX71_PRE_CLOSE = UniversalFuturesBotGUI.close_position_market
+UniversalFuturesBotGUI.close_position_market = _fx71_wrap_close(_FX71_PRE_CLOSE)
+
+_FX71_PRE_OPEN = UniversalFuturesBotGUI.open_market_position
+UniversalFuturesBotGUI.open_market_position = _fx71_open_wrapper(_FX71_PRE_OPEN)
+
+# -------------------- main / worker dispatch --------------------
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--forex-scanner-preflight-worker":
+        if len(sys.argv) != 5:
+            raise SystemExit("Usage: --forex-scanner-preflight-worker CHILD_ID RESULT_PATH REQUEST_PATH")
+        _fx71_external_worker(sys.argv[2], sys.argv[3], sys.argv[4])
+    else:
+        root=tk.Tk()
+        app=MultiBotHub(root)
+        root.mainloop()
