@@ -67,7 +67,7 @@ def test_council_never_returns_both_directions():
     SE, _ = load_strategy_engine()
     families = tuple(SE.EVIDENCE_FAMILIES.values())
     indicators = [x for group in families for x in group] + ["ADX", "ATR"]
-    for _ in range(3000):
+    random.seed(713)\n    for _ in range(3000):
         modules = []
         for name in indicators:
             r = random.random()
