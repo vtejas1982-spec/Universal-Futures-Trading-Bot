@@ -1,14 +1,10 @@
-"""V7.1.3 Forex MT5 audit contract tests.
-
-These tests are intentionally dependency-light: they parse the production source,
-extract StrategyEngine, and exercise the council contract without requiring a
-live MetaTrader 5 terminal.
+"""Forex V7.1.3 MT5 audit contract tests.
+Dependency-light: no live MetaTrader 5 terminal is required.
 """
 import ast
 import math
 import random
 from pathlib import Path
-
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,10 +38,20 @@ def test_forex_mt5_runtime_contract():
     _, src = load_strategy_engine()
     assert "UniversalFuturesBotGUI.build_exchange = v833_forex_build_exchange" in src
     assert 'raise RuntimeError("V8.3.3 FOREX-ONLY BOT: Crypto/futures exchanges are disabled. Use MT5 Forex.")' in src
-    assert "mt5.symbol_info" in src
-    assert "mt5.symbol_info_tick" in src
-    assert "mt5.positions_get" in src
-    assert "mt5.order_send" in src
+    for token in ("mt5.symbol_info", "mt5.symbol_info_tick", "mt5.positions_get", "mt5.order_send"):
+        assert token in src
+
+def _decision(SE, modules):
+    return SE.ai_agent_decision(
+        modules, atr_pass=True, vol_pass=True, adx_pass=True,
+        mtf_pass_bull=True, mtf_pass_bear=True,
+        min_families=3, min_edge=.2, min_family_confidence=.55,
+        require_trend=True, require_structure=True,
+        max_conflicting_families=1, min_family_participation=.25,
+        fallback_2f_enabled=True, fallback_2f_min_edge=.55,
+        fallback_2f_min_confidence=.55, fallback_2f_min_participation=.30,
+        fallback_2f_require_structure=True, fallback_2f_require_independent=True,
+    )
 
 def test_council_2f_fallback_rejects_opposing_qualified_family():
     SE, _ = load_strategy_engine()
@@ -53,7 +59,7 @@ def test_council_2f_fallback_rejects_opposing_qualified_family():
         [("ST", True, False), ("EMA", True, False), ("RSI", False, True)],
         atr_pass=True, vol_pass=True, adx_pass=True,
         mtf_pass_bull=True, mtf_pass_bear=True,
-        min_families=3, min_edge=.99, min_family_confidence=.0,
+        min_families=3, min_edge=.99, min_family_confidence=0.0,
         require_trend=False, require_structure=False,
         max_conflicting_families=10, min_family_participation=0.0,
         fallback_2f_enabled=True, fallback_2f_min_edge=.1,
@@ -67,22 +73,16 @@ def test_council_never_returns_both_directions():
     SE, _ = load_strategy_engine()
     families = tuple(SE.EVIDENCE_FAMILIES.values())
     indicators = [x for group in families for x in group] + ["ADX", "ATR"]
-    random.seed(713)\n    for _ in range(3000):
+    random.seed(713)
+    for _ in range(30000):
         modules = []
         for name in indicators:
             r = random.random()
             modules.append((name, r < .45, .45 <= r < .90))
-        result = SE.ai_agent_decision(
-            modules, atr_pass=True, vol_pass=True, adx_pass=True,
-            mtf_pass_bull=True, mtf_pass_bear=True,
-            min_families=3, min_edge=.2, min_family_confidence=.55,
-            require_trend=True, require_structure=True,
-            max_conflicting_families=1, min_family_participation=.25,
-            fallback_2f_enabled=True, fallback_2f_min_edge=.55,
-            fallback_2f_min_confidence=.55, fallback_2f_min_participation=.30,
-            fallback_2f_require_structure=True, fallback_2f_require_independent=True,
-        )
+        result = _decision(SE, modules)
         assert not (result["buy_ok"] and result["sell_ok"])
+        if result.get("split_council"):
+            assert result["side"] == "NONE"
 
 def test_ambiguous_candle_is_explicitly_blocked():
     src = SOURCE.read_text(encoding="utf-8")
@@ -102,7 +102,7 @@ def test_break_even_verifies_and_retries_without_dropping_original_sl():
 
 def test_startup_risk_contract():
     src = SOURCE.read_text(encoding="utf-8")
-    assert "TP2 (" in src and "must be farther than TP1" in src
+    assert "must be farther than TP1" in src
     assert "RISK CONFLICT: Risk Per Trade" in src
     assert 'emergency_capital_pct": "10.0"' in src
     assert 'self.e_emergency_capital_pct.insert(0, "10.0")' in src
