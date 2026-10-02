@@ -1,73 +1,72 @@
-# Forex MT5 V7.1.3 — Full Repository Audit
+# Forex MT5 V7.1.3 — Full GitHub Repository Audit
 Date: 2026-10-02
 
-## Scope
-Audited the GitHub repository `vtejas1982-spec/Universal-Futures-Trading-Bot` and the supplied Forex sources:
-- `UniversalForexBot_MT5_V7_1_3_AUDITED.py`
-- `UniversalForexBot_MT5_V7.1.2_LOW_MEMORY(1).py`
+## Repository
+- Repository: `vtejas1982-spec/Universal-Futures-Trading-Bot`
+- Default branch: `main`
+- Connected GitHub account has admin/maintain/push access.
+- This is the only repository exposed by the connected GitHub account that matches the current project. No separate older Forex repository is visible.
 
-The Forex production source remains MT5/Forex-native. Crypto/futures execution code is not used as the runtime broker layer.
+## Sources audited
+- `UniversalForexBot_MT5.py` — canonical Forex production filename.
+- `UniversalForexBot_MT5_V7_1_3_AUDITED.py` — supplied V7.1.3 artifact.
+- `UniversalForexBot_MT5_V7.1.2_LOW_MEMORY.py` — low-memory reference.
+- `UniversalForexBot_MT5_BACKTESTER.py`
+- `tests/test_forex_v713_audit.py`
+- Forex documentation under `docs/`.
 
-## Release synchronization
-- Canonical production file: `UniversalForexBot_MT5.py`
-- V7.1.3 audited artifact: `UniversalForexBot_MT5_V7_1_3_AUDITED.py`
-- V7.1.2 low-memory reference: `UniversalForexBot_MT5_V7.1.2_LOW_MEMORY.py`
-- Config schema: 71
-- Runtime schema: 71
-- V7.1.3 supplied-file SHA-256: `b113440cc1e75d15ee167f0938d2e0c0b9be061341c21a6cd2576c298bb42baf`\n- GitHub production blob SHA: `51ae16e4c7365dd54b23428d805f062ba2ba1852`\n- GitHub V7.1.2 reference blob SHA: `3f546a129bdb64bf1fc50b149b8d7a675fb6bada`
+## Supplied-file SHA-256
+- V7.1.3 audited: `b113440cc1e75d15ee167f0938d2e0c0b9be061341c21a6cd2576c298bb42baf`
+- V7.1.2 low-memory: `da94960caf0e2eccdb280816efd5236a61254f5ad5f608ebcd4cd9d1afdf76c9`
 
-## Source-level validation
-- AST parse: PASS
-- Python `py_compile`: PASS
+## Static validation
+- V7.1.3 AST parse: PASS
+- V7.1.3 py_compile: PASS
 - V7.1.2 AST parse: PASS
-- V7.1.2 `py_compile`: PASS
-- No duplicate top-level assignment names detected.
-- StrategyEngine, UniversalFuturesBotGUI, MT5ForexAdapter and MultiBotHub are present.
-- Forex-only exchange override is present and rejects non-MT5 exchange IDs.
-- MT5-native symbol/tick/position/order APIs are present.
+- V7.1.2 py_compile: PASS
+- StrategyEngine extraction/smoke: PASS
+- Randomized council regression: 30,000 cases, 0 simultaneous BUY+SELL results.
+- Opposing-qualified-family 2F fallback regression: PASS; fallback refused to fire against an opposing qualified family.
 
-## AI council / signal safety
-Verified in V7.1.3:
-- 2-family fallback refuses to fire when an opposing qualified family is present.
-- BUY+SELL council split is represented by `split_council` and forces no trade.
-- Ambiguous BUY+SELL signal is explicitly blocked with `AMBIGUOUS_CANDLE`.
-- A 30,000-case randomized council run produced 0 simultaneous BUY/SELL outcomes.
-- A 30,000-case randomized fallback check produced 0 opposing-qualified-family fallback violations.
+## Safety contracts verified
+- BUY+SELL ambiguity is explicitly blocked with `AMBIGUOUS_CANDLE`.
+- AI council exposes `split_council` and blocks split outcomes.
+- MT5-native `symbol_info`, `symbol_info_tick`, `positions_get`, and `order_send` paths are present.
+- Broker volume min/max/step handling and step-safe rounding are present.
+- Minimum-size TP split has a whole-position-at-TP1 path.
+- Break-even modifies and verifies broker SL and retries once; original SL is retained if verification fails.
+- Startup risk validation checks TP ordering and risk against daily-drawdown/emergency thresholds.
+- Low-memory resource guard, active-engine limits, scanner preflight limits, kill-switch latch, profile state, and capital-authority state are present.
 
-## Execution / protection
-Verified:
-- MT5 broker-side SL is installed on the actual position.
-- TP1/TP2 are bot-managed for Forex/MT5; the broker-side SL remains the hard protection.
-- Minimum-lot TP split failure is handled before leaving the position unprotected; a minimum-size position is configured to close as a whole at TP1.
-- Break-even modification retries once and verifies the broker SL. If verification fails, the original broker SL remains active.
-- MT5 lot sizing uses broker volume_min/volume_max/volume_step and step-safe rounding.
-- Startup validation checks SL/TP ordering and risk-vs-drawdown/emergency thresholds.
+## Repository hygiene finding
+The shipped Forex source still contains a legacy CCXT/futures implementation block. The active Forex path is overridden later by MT5-native bindings and explicitly rejects non-MT5 exchange selection, so this finding is about dead-code hygiene and maintenance rather than evidence that the active Forex runtime currently uses CCXT.
 
-## Low-memory / lifecycle
-The V7.1.2 low-memory source retains the lazy-profile/resource-guard architecture. The V7.1.3 source also retains:
-- Windows available-RAM/RSS resource guard
-- active-engine limits
-- scanner preflight limits
-- kill-switch latch
-- profile and capital-authority state
-- Hub callback budget controls.
+Residual examples include:
+- compatibility import of `ccxt`;
+- legacy futures exchange builder/symbol lookup;
+- legacy BYBIT/BINANCE account-mode branches;
+- legacy `self.exchange.fetch_ticker(...)` market-price path.
 
-## Repository hygiene findings
-The repository previously contained historical regression tests that referenced retired source files that are not present in the repository. Those obsolete Forex tests were removed from the active test suite and replaced by `tests/test_forex_v713_audit.py`.
+This should be removed in a dedicated cleanup release after regression testing, not blindly deleted during a version synchronization.
 
-Historical Crypto/V8 documents remain as history/reference material; they are not treated as the current Forex production source.
+## Repository synchronization
+- The canonical production filename is already V7.1.3-compatible in the repository.
+- The V7.1.3 audited artifact is already present.
+- The V7.1.2 low-memory reference is already present.
+- The Forex V7.1.3 contract test was hardened to run 30,000 randomized council cases and explicitly verify split-council no-trade behavior.
+- The audit document is synchronized with these findings.
 
 ## Runtime limitation
-A live MetaTrader 5 terminal/broker session was not available in this audit environment. Therefore:
-- no live order was sent;
-- broker-specific execution/filling behavior was not claimed as live-verified;
-- paper/stub/static tests do not substitute for Demo validation.
+No live MetaTrader 5 terminal/broker session is available in this audit environment. No live order/fill/slippage/filling-mode behavior is claimed as verified. Demo validation remains required before live deployment.
+
+## Old-repository request
+The active repository must not be deleted: it contains the current Crypto and Forex project history and is the only matching repository visible to the connected account. A separate old repository could not be identified safely, so no destructive repository deletion was performed.
 
 ## Final status
-**Source synchronization: PASS**
-**Static audit: PASS**
-**Council regression contract: PASS**
-**MT5 execution safety contract: PASS**
-**Live MT5 terminal validation: PENDING**
-
-Do not treat this report as proof of profitability or live-broker correctness. Demo validation remains required before live deployment.
+- Source integrity: PASS
+- Council safety contract: PASS
+- MT5 contract presence: PASS
+- Low-memory architecture presence: PASS
+- Test contract: UPDATED
+- Repository hygiene: ACTION REQUIRED — remove dead CCXT/futures block in a controlled cleanup release
+- Live MT5 validation: PENDING
